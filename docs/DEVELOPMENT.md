@@ -217,7 +217,7 @@ the codebase:
   (e.g. `renderList()`, `renderSheetBody()`), then wiring up event listeners
   afterward.
 - **Constants up top.** Tunables live as `const`s at the top of `app.js`:
-  `TILE_CACHE`, `DL_ZOOMS`, `PAD`, `FT`, plus the `TILE_SOURCES` map (the two
+  `TILE_CACHE`, `DL_ZOOMS`, `padFor(z)`, `FT`, plus the `TILE_SOURCES` map (the two
   basemaps — `usgs` and `gsi`) and the `trailSource(trail)` helper that picks one
   per trail. Reuse them rather than hard-coding values.
 - **CSS custom properties** drive theming in `app.css` (`:root { --bg-0, --blue,

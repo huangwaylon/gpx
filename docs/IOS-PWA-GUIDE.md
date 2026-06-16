@@ -434,16 +434,20 @@ A **single global** button in the list header — **"Save maps"** (`#dl-all`, si
 
 ```js
 const DL_ZOOMS = [10, 11, 12, 13, 14, 15, 16];   // 7 zoom levels
-const PAD      = 0.01;                             // bbox padding in degrees
+// Zoom-aware context buffer (degrees) added around each track per zoom: wider at
+// overview zooms, tighter near max detail (z16 tiles are tiny, so a wide frame is costly).
+const padFor = z => z <= 12 ? 0.05 : z <= 14 ? 0.03 : 0.015;
 
-// Padded bbox of one trail, parsed from its precached GPX (falls back to a small
-// box around trail.center if no track points parse).
-async function gpxBox(trail){ /* …parse trkpt min/max lat/lon, pad by PAD… */ }
+// Raw bbox of one trail, parsed from its precached GPX (falls back to a small
+// box around trail.center if no track points parse). Padding is applied later, per zoom.
+async function gpxBox(trail){ /* …parse trkpt min/max lat/lon… */ }
 
 // Every tile URL for one box across DL_ZOOMS, built from that trail's URL template.
+// Each zoom expands the box by its own padFor(z) before computing the tile range.
 function tileURLsFor(box, urlTpl){
   const urls = [];
-  DL_ZOOMS.forEach(z => { const r = tRange(box, z);
+  DL_ZOOMS.forEach(z => { const p = padFor(z);
+    const r = tRange({ n:box.n+p, s:box.s-p, e:box.e+p, w:box.w-p }, z);
     for (let x=r.x0; x<=r.x1; x++) for (let y=r.y0; y<=r.y1; y++)
       urls.push(urlTpl.replace('{z}',z).replace('{y}',y).replace('{x}',x)); });
   return urls;

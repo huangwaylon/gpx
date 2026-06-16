@@ -6,7 +6,11 @@
 
 const TILE_CACHE = 'wa-trails-tiles-v1';
 const DL_ZOOMS   = [10, 11, 12, 13, 14, 15, 16];
-const PAD        = 0.01;          // bbox padding in degrees for tile download
+// Zoom-aware bbox padding (degrees, ~111 km per °) added around each track when caching
+// offline tiles. Generous at overview zooms — where you pan to take in the surrounding
+// terrain — and tighter near max detail, since z16 tiles are tiny and a wide z16 frame
+// costs a lot of tiles for context you rarely zoom that far in to read.
+const padFor = z => z <= 12 ? 0.05 : z <= 14 ? 0.03 : 0.015;
 const FT         = 3.28084;
 
 // Map tile sources. Each trail picks one via its `tiles` field (default = usgs).
@@ -512,8 +516,9 @@ function ll2t(lat,lon,z){ const n=1<<z; const x=Math.floor(n*(lon+180)/360);
   const r=lat*Math.PI/180; const y=Math.floor(n*(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2);
   return {x,y}; }
 
-// Padded bounding box of a trail, computed from its GPX track points
-// (the GPX is already precached by the service worker, so this works offline too).
+// Raw bounding box of a trail, computed from its GPX track points (the GPX is already
+// precached by the service worker, so this works offline too). Per-zoom padding is added
+// later in tileURLsFor() via padFor().
 async function gpxBox(trail){
   let n=-90,s=90,e=-180,w=180;
   try{
@@ -525,13 +530,15 @@ async function gpxBox(trail){
     if(n<s) throw 0;                              // no track points parsed
   }catch(_){ const [cy,cx]=trail.center;          // fall back to a small box around center
     n=cy+0.02; s=cy-0.02; e=cx+0.02; w=cx-0.02; }
-  return { n:n+PAD, s:s-PAD, e:e+PAD, w:w-PAD };
+  return { n, s, e, w };
 }
 
 // Every tile URL for one box across DL_ZOOMS, built from that trail's tile template.
+// Each zoom expands the box by its own padFor(z), so overview zooms cache wider context.
 function tileURLsFor(box, urlTpl){
   const urls=[];
-  DL_ZOOMS.forEach(z=>{ const r=tRange(box,z);
+  DL_ZOOMS.forEach(z=>{ const p=padFor(z);
+    const r=tRange({ n:box.n+p, s:box.s-p, e:box.e+p, w:box.w-p }, z);
     for(let x=r.x0;x<=r.x1;x++) for(let y=r.y0;y<=r.y1;y++)
       urls.push(urlTpl.replace('{z}',z).replace('{y}',y).replace('{x}',x)); });
   return urls;

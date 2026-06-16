@@ -757,17 +757,22 @@ The download converts a lat/lon box to **XYZ tile ranges** at each zoom:
 
 ### Per-trail bounding box — `gpxBox()`
 
-**`gpxBox(trail)`** (`app.js:517-529`) is **async**: it fetches the trail's GPX (served from the
+**`gpxBox(trail)`** (`app.js`) is **async**: it fetches the trail's GPX (served from the
 SW precache, so it works offline too), parses it, and computes the min/max lat/lon over all
 `<trkpt>` elements. If parsing yields no track points it **falls back** to `trail.center ±
-0.02°`. Either way it pads the box by **`PAD = 0.01°`** on all sides (`app.js:9`). This replaces
+0.02°`. It returns the **raw** box; the surrounding context buffer is added later, per zoom,
+by `tileURLsFor()` via **`padFor(z)`** (`app.js`) — **0.05°** at z≤12, **0.03°** at z13–14,
+**0.015°** at z15–16. Padding is heaviest at overview zooms (where you pan to see surrounding
+terrain) and lightest near max detail, where tiny z16 tiles make a wide frame expensive for
+little benefit. This replaces
 the old `trailBox()`/`countTiles()`/`tileURLs()` trio, which depended on the *currently open*
 trail's live `trackPts`; `gpxBox()` works for any trail without it being open.
 
 ### Expanding a box to URLs — `tileURLsFor()`
 
-**`tileURLsFor(box, urlTpl)`** (`app.js:532-538`) expands a box into every concrete tile URL
-across `DL_ZOOMS`, substituting tokens **by name** into the given template
+**`tileURLsFor(box, urlTpl)`** (`app.js`) expands a box into every concrete tile URL
+across `DL_ZOOMS`, **expanding the box by `padFor(z)` for each zoom**, then substituting tokens
+**by name** into the given template
 (`urlTpl.replace('{z}',z).replace('{y}',y).replace('{x}',x)`). Because it substitutes by name,
 the same routine builds both the USGS `{z}/{y}/{x}` and the GSI `{z}/{x}/{y}` URLs correctly
 (§7).
@@ -839,8 +844,9 @@ Two trivial DOM helpers are also defined globally: **`$`** (`querySelector`) and
 `trRoute` / `trDogs` / `trWpt` / `trSeason` and the unit formatters `fmtDist` / `fmtGain` /
 `fmtTime` / `fmtElevRange` are documented in §1a.
 
-Module-level **constants** (`app.js:7-27`): `TILE_CACHE` (`'wa-trails-tiles-v1'`), `DL_ZOOMS`,
-`PAD` (0.01°), `FT` (3.28084), and the per-trail basemap table **`TILE_SOURCES`** with its
+Module-level **constants** (`app.js`): `TILE_CACHE` (`'wa-trails-tiles-v1'`), `DL_ZOOMS`,
+the zoom-aware padding helper `padFor(z)` (0.05° / 0.03° / 0.015°), `FT` (3.28084), and the
+per-trail basemap table **`TILE_SOURCES`** with its
 resolver **`trailSource()`** (§7) — these replace the old single `TILE_URL` constant.
 
 ---
