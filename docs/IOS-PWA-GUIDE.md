@@ -1,6 +1,6 @@
-# iOS Safari PWA Constraints — Washington Trails
+# iOS Safari PWA Constraints — Ume-chan's Trails (梅ちゃんのトレイル)
 
-A platform-constraints reference for **Washington Trails**, an offline-capable hiking PWA targeting **iPhone Safari**, served as a static site on **GitHub Pages**.
+A platform-constraints reference for **Ume-chan's Trails** (梅ちゃんのトレイル), an offline-capable hiking PWA targeting **iPhone Safari**, served as a static site on **GitHub Pages**. The app is bilingual — **Japanese by default with an English toggle** (see *Internationalization (i18n)* below and `docs/I18N.md`).
 
 The app must keep working **with no cell signal on the trail** after being installed to the Home Screen. Stack: plain HTML / CSS / JS + Leaflet 1.9.4 + USGS National Map topo tiles + a classic service worker.
 
@@ -17,13 +17,13 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | **Service workers** | Supported in Safari tabs + Home-Screen PWAs since iOS 11.1. **Not** available in WKWebView / in-app browsers. | Registers `./sw.js` (classic SW) on `load`. Offline breaks inside in-app browsers — **recommend "Open in Safari"** (GAP: not detected/surfaced in-app). |
 | **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** via a manual "Download map for offline" button — never background prefetch. |
 | **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
-| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v2`) and map tiles (`wa-trails-tiles-v1`). No IndexedDB. |
+| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v3`) and map tiles (`wa-trails-tiles-v1`). No IndexedDB. |
 | **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded. | GPS only works screen-on, foreground. App re-acquires Wake Lock on `visibilitychange`. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
 | **`navigator.wakeLock` (standalone)** | Broken in standalone on iOS 16.4–18.3; works in standalone only from **18.4+**. | Calls `wakeLock.request('screen')`, re-acquires on visibility change. **GAP: no video-loop fallback.** Advise raising Auto-Lock. |
-| **`beforeinstallprompt`** | **Never fires** on iOS. | Manual install banner; standalone detected via `navigator.standalone \|\| matchMedia('(display-mode:standalone)')`; dismissal persisted in `localStorage`. |
-| **7-day storage eviction** | iOS evicts **all** script-writable storage after 7 days of no interaction. `persist()` does **not** help. | `refreshCacheStatus()` re-checks a sample tile per trail on startup and updates the badge. **GAP: no auto re-prompt** when tiles are gone. |
-| **Manifest features** | `display:standalone` works; `fullscreen`/`minimal-ui` → standalone; `shortcuts`/`categories`/`screenshots` ignored; `id` needs iOS 17+. | Manifest uses `display:standalone` + `id:"/wa-trails"`. Relies on Apple meta tags for capability. |
+| **`beforeinstallprompt`** | **Never fires** on iOS. | Installation is left to the user (Safari **Share → Add to Home Screen**); the app shows **no in-app install banner or prompt** and performs **no standalone detection**. |
+| **7-day storage eviction** | iOS evicts **all** script-writable storage after 7 days of no interaction. `persist()` does **not** help. | `refreshCacheStatus()` re-checks a sample tile per trail on startup and updates the badge. Affects `localStorage` too (e.g. the `lang` preference resets to JA default). **GAP: no auto re-prompt** when tiles are gone. |
+| **Manifest features** | `display:standalone` works; `fullscreen`/`minimal-ui` → standalone; `shortcuts`/`categories`/`screenshots` ignored; `id` needs iOS 17+. | Manifest uses `display:standalone` + `id:"/ume-trails"` and a Japanese `name`. Relies on Apple meta tags for capability; ships **both** `mobile-web-app-capable` and `apple-mobile-web-app-capable`. |
 | **Splash screen** | Auto-generated from `background_color` + icon; no manifest control. | Sets `background_color:#0f172a`; accepts the auto splash. |
 | **`navigator.connection`** | Network Information API unsupported. | App relies on cache-first SW + `navigator.onLine` semantics (see Other quirks). |
 | **Input font-size < 16px** | iOS auto-zooms the page on focus of < 16px controls. | App has **no text inputs**, so the trap is effectively N/A — see note. |
@@ -72,13 +72,13 @@ The app uses the Cache API for **everything** persistent and uses **no IndexedDB
 
 | Cache name (constant) | Contents | Population strategy |
 |---|---|---|
-| **`wa-trails-app-v2`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
+| **`wa-trails-app-v3`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
 | **`wa-trails-tiles-v1`** (`TILE_V` in `sw.js`, `TILE_CACHE` in `app.js`) | USGS topo map tiles | Filled cache-first on `fetch`, and bulk-filled by the user-initiated tile download. |
 
 `sw.js` declarations:
 
 ```js
-const APP_V  = 'wa-trails-app-v2';
+const APP_V  = 'wa-trails-app-v3';
 const TILE_V = 'wa-trails-tiles-v1';
 ```
 
@@ -180,39 +180,16 @@ await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.dele
 ### iOS behavior
 - **There is no `beforeinstallprompt` event on iOS** and no programmatic install. Installation is **manual**: the user taps **Share → Add to Home Screen**. The app cannot trigger or even reliably detect availability of this flow — it can only *instruct* the user.
 - **iOS 16.4+** additionally allows "Add to Home Screen" from third-party browsers (Chrome/Edge/Firefox), not just Safari. Before 16.4, only Safari could install.
-- After install, the launched web app reports standalone via the legacy `navigator.standalone` boolean and/or the standard `display-mode: standalone` media query.
+- After install, a launched web app *can* be detected as standalone via the legacy `navigator.standalone` boolean and/or the standard `display-mode: standalone` media query — though this app no longer does so (see below).
 
 ### How this app handles it
-- A **manual install banner** lives in `index.html` and is shown/hidden by `checkInstall()`. The banner text spells out the manual gesture:
-
-  ```html
-  <div id="install" hidden>
-    <span>📲 Install: <strong>Share → Add to Home Screen</strong></span>
-    <button class="x" id="install-x" aria-label="Dismiss">✕</button>
-  </div>
-  ```
-
-- **Standalone detection** uses both the Apple-legacy flag and the standard media query, so it works across iOS versions:
-
-  ```js
-  function checkInstall(){
-    const standalone = window.navigator.standalone || matchMedia('(display-mode:standalone)').matches;
-    if (!standalone && !localStorage.installDismiss) $('#install').hidden = false;
-  }
-  ```
-
-  The banner is shown **only** when the app is *not* already installed **and** the user hasn't dismissed it before.
-
-- **Dismiss persistence.** Dismissing the banner writes a flag to `localStorage`, so it stays dismissed across visits:
-
-  ```js
-  $('#install-x').addEventListener('click', () => {
-    $('#install').hidden = true;
-    localStorage.installDismiss = '1';
-  });
-  ```
-
-  > Caveat tied to the eviction rule below: `localStorage` is itself script-writable storage and can be cleared after 7 days of non-use, so a long-dormant user may see the install banner again. For a dismissal flag this is benign.
+- **No in-app install UI.** By product decision the app shows **no install banner or prompt at all**. Installation is left entirely to the user via Safari's native **Share → Add to Home Screen** gesture. The previous `#install` banner element, the `checkInstall()` function, and the `installDismiss` `localStorage` flag have all been **removed**.
+- **No standalone detection.** Because there is no in-app install affordance to show or hide, the app **does not detect standalone mode at all** anymore — it neither reads `navigator.standalone` nor queries `matchMedia('(display-mode:standalone)')`. The `beforeinstallprompt` fact above is unchanged (it still never fires on iOS); the app simply no longer attempts any install-related UI around it.
+  > For reference, the standard cross-version standalone check, were it ever needed again, is:
+  > ```js
+  > const standalone = window.navigator.standalone || matchMedia('(display-mode:standalone)').matches;
+  > ```
+- **Manual gesture is the whole flow.** There is nothing for the app to do here on iOS beyond shipping correct Apple meta tags (see *Web App Manifest specifics on iOS*) so that, once the user adds it to the Home Screen, it launches in standalone with the right icon and title (`梅ちゃんのトレイル`).
 
 ---
 
@@ -225,6 +202,7 @@ await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.dele
 
 ### How this app handles it
 - **Implication:** **downloaded map tiles can simply vanish after a week of not opening the app** — exactly the scenario where a user downloads a trail on Sunday and hikes it the *next* weekend. The app must not assume cached tiles are still present.
+- **`localStorage` is evicted too.** The 7-day rule covers *all* script-writable storage, including `localStorage`. The only thing the app keeps there is the **language preference** (`localStorage.lang`), so after 7 days of non-use that preference can reset and the app falls back to its **Japanese default** on next launch — the same eviction mechanism that drops the tile cache also drops the saved language. This is benign (the user just re-toggles to English), but worth knowing when reasoning about "why did my settings reset." See *Internationalization (i18n)* and `docs/I18N.md`.
 - The app **verifies cache state on every startup** rather than trusting it. `refreshCacheStatus()` runs during boot and, for each trail, checks whether a **representative sample tile** (the trail's center tile at zoom 14) is still in the tile cache. The result drives the offline badge in the list and the download button's "✓ saved" state:
 
   ```js
@@ -274,9 +252,9 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
 
 ```json
 {
-  "name": "Washington Trails",
-  "short_name": "WA Trails",
-  "id": "/wa-trails",
+  "name": "梅ちゃんのトレイル",
+  "short_name": "梅ちゃん",
+  "id": "/ume-trails",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -290,7 +268,8 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
 ```
 
 - `display:standalone` → real standalone launch on iOS.
-- `id:"/wa-trails"` → used on iOS 17+, harmlessly ignored earlier.
+- `id:"/ume-trails"` → used on iOS 17+, harmlessly ignored earlier.
+- `name`/`short_name` are Japanese (`梅ちゃんのトレイル` / `梅ちゃん`) — iOS uses these for the install sheet / app identity; the Home-Screen icon label itself comes from `apple-mobile-web-app-title` (below).
 - No `shortcuts`/`categories`/`screenshots` are declared (they'd be ignored anyway).
 - `background_color:#0f172a` is what iOS uses to paint the **auto-generated splash**.
 
@@ -298,9 +277,10 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
 
 | Tag (as written in `index.html`) | Value | Purpose |
 |---|---|---|
-| `<meta name="apple-mobile-web-app-capable">` | `yes` | Launch in standalone (no Safari chrome) when added to Home Screen. |
+| `<meta name="mobile-web-app-capable">` | `yes` | **Standard** (spec) capability tag; silences the Safari deprecation warning and aligns with the cross-browser spec. |
+| `<meta name="apple-mobile-web-app-capable">` | `yes` | Apple-legacy form, kept for older iOS. Launch in standalone (no Safari chrome) when added to Home Screen. |
 | `<meta name="apple-mobile-web-app-status-bar-style">` | `black-translucent` | Status bar style; **translucent → content draws under the status bar**, which is why safe-area insets matter (below). |
-| `<meta name="apple-mobile-web-app-title">` | `WA Trails` | Home-Screen icon label. |
+| `<meta name="apple-mobile-web-app-title">` | `梅ちゃんのトレイル` | Home-Screen icon label. |
 | `<link rel="apple-touch-icon">` | `icon.svg` | Home-Screen icon. |
 | `<meta name="theme-color">` | `#0f172a` | UI tinting (also a standard tag). |
 | `<link rel="manifest">` | `manifest.json` | Standard manifest link. |
@@ -308,21 +288,21 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
 Exact source:
 
 ```html
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="WA Trails">
+<meta name="apple-mobile-web-app-title" content="梅ちゃんのトレイル">
 <meta name="theme-color" content="#0f172a">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.svg">
 ```
 
 - **No `apple-touch-startup-image`** is set, so iOS shows the auto-generated splash (background color + icon). Acceptable for this app.
-- **GAP / known warning — `apple-mobile-web-app-capable` is deprecated** in favor of the standard **`mobile-web-app-capable`**, and current iOS/Safari logs a console warning to that effect. The app sets only the `apple-` prefixed form.
-  **Recommendation:** add **both** for forward compatibility (keep the Apple one for older iOS, add the standard one to silence the warning and align with the spec):
+- **Both capability tags are present.** `apple-mobile-web-app-capable` is deprecated in favor of the standard `mobile-web-app-capable`; the app now ships **both** — the Apple form for older iOS and the standard form to satisfy the spec and silence the Safari console deprecation warning. (Previously the app set only the `apple-` form; that gap is now closed.)
 
   ```html
-  <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   ```
 
 ---
@@ -349,7 +329,7 @@ iOS Safari **auto-zooms the viewport** when the user focuses a form control whos
 ### Notch / Dynamic Island / home indicator (safe areas)
 Content can be obscured by the notch/Dynamic Island and the home indicator unless the page opts into the safe-area model. This is especially relevant here because `apple-mobile-web-app-status-bar-style` is `black-translucent`, so the web view draws **under** the status bar.
 
-- **How this app handles it — confirmed in source.** The viewport opts in with **`viewport-fit=cover`**, and `app.css` defines safe-area **custom properties** that are applied throughout the layout (header padding, filter bar, FAB position, install banner, modal, etc.).
+- **How this app handles it — confirmed in source.** The viewport opts in with **`viewport-fit=cover`**, and `app.css` defines safe-area **custom properties** that are applied throughout the layout (header padding, filter bar, FAB position, bottom sheet, modal, etc.).
 
   `index.html`:
   ```html
@@ -372,16 +352,40 @@ Content can be obscured by the notch/Dynamic Island and the home indicator unles
 
 ---
 
+## Internationalization (i18n)
+
+The app is **bilingual**: **Japanese by default**, with an **English toggle** in the header. This is mostly orthogonal to the iOS constraints above, but two points intersect with this document; the full design lives in **`docs/I18N.md`**.
+
+- **Language preference is stored in `localStorage.lang`** (`'ja'` | `'en'`), read at boot with a Japanese default:
+
+  ```js
+  let lang = (localStorage.lang === 'en' || localStorage.lang === 'ja') ? localStorage.lang : 'ja';
+  ```
+
+  Because `localStorage` is **script-writable storage**, it is subject to the **same 7-day eviction rule** as the Cache API (see *Storage & the 7-day eviction rule*). After 7 days of non-use the saved language can be wiped along with the tile cache, so the app reverts to its **Japanese default** on the next launch. Benign, but it's the same mechanism that drops downloaded maps.
+
+- **`<html lang>` is updated dynamically.** The document ships as `<html lang="ja">` and `applyStaticI18n()` rewrites `document.documentElement.lang` (and `document.title`) whenever the language changes:
+
+  ```js
+  function applyStaticI18n(){ document.documentElement.lang = lang; /* …swap [data-i18n] text… */ }
+  ```
+
+- **Manifest identity is Japanese.** `name`/`short_name` and the `apple-mobile-web-app-title` meta are Japanese (`梅ちゃんのトレイル` / `梅ちゃん`), so the installed Home-Screen app is labeled in Japanese regardless of the in-app toggle (the manifest is static and not re-read on language switch). See *Web App Manifest specifics on iOS*.
+
+> See `docs/I18N.md` for the complete i18n architecture (string tables, per-trail localized content, unit conversion, date/season formatting, etc.).
+
+---
+
 ## The offline strategy (dedicated section)
 
-Washington Trails uses a **three-tier offline model**. The first two tiers are automatic; the third is the deliberate, user-controlled step that the iOS background-fetch ban forces on us.
+Ume-chan's Trails uses a **three-tier offline model**. The first two tiers are automatic; the third is the deliberate, user-controlled step that the iOS background-fetch ban forces on us.
 
 ### Tier 1 — App shell + all trail data precached on SW install
 On `install`, the service worker precaches the **app shell** (must-succeed) and, best-effort, **all 8 GPX tracks + all 8 hero images**, so the app UI and every trail's info/elevation/photo work offline **immediately after first load** — even before the user downloads any map tiles.
 
 ```js
 const SHELL = [
-  './', './index.html', './app.css', './app.js', './trails.js',
+  './', './index.html', './app.css', './app.js', './trails.js', './i18n.js',
   './manifest.json', './icon.svg',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
@@ -477,10 +481,11 @@ This is the central design decision, and it's driven by both platform limits and
 
 | Concern | File(s) |
 |---|---|
-| Meta tags, manifest link, install banner, download modal markup | `index.html` |
-| Manifest (iOS-respected fields) | `manifest.json` |
+| Meta tags (both capability tags), manifest link, download modal markup, `[data-i18n]` hooks | `index.html` |
+| Manifest (iOS-respected fields; Japanese identity) | `manifest.json` |
 | Caching strategy, two named caches, precache lists | `sw.js` |
-| Geolocation, Wake Lock, install detection, cache-status probe, tile download | `app.js` |
+| Geolocation, Wake Lock, language preference, cache-status probe, tile download | `app.js` |
+| i18n string tables, per-trail localized content, unit/date formatting | `i18n.js` (design: `docs/I18N.md`) |
 | Safe-area variables, dynamic viewport height, display font sizes | `app.css` |
 | Trail metadata (8 trails) | `trails.js` |
 | Bundled offline assets | `gpx/` (8 GPX), `images/` (8 `.webp`) |
@@ -492,7 +497,10 @@ This is the central design decision, and it's driven by both platform limits and
 - [ ] **In-app browser / no-SW detection** → "Open in Safari" hint.
 - [ ] **Wake Lock fallback** for iOS 16.4–18.3 standalone → silent looping `<video>`; plus Auto-Lock tip.
 - [ ] **Eviction re-prompt** → persist per-trail "wanted offline" intent; warn + offer re-download when the sample-tile probe fails; probe more than one tile.
-- [ ] **`mobile-web-app-capable`** meta tag added alongside the deprecated `apple-` one.
 - [ ] **Offline status chip** via `navigator.onLine` + `online`/`offline` events.
 - [ ] **Geolocation error UX** for codes `2`/`3` (position unavailable / timeout).
 - [ ] **16px font-size** on any future text input.
+
+Closed since the previous revision:
+
+- [x] **`mobile-web-app-capable`** meta tag — now shipped alongside the legacy `apple-mobile-web-app-capable` (both present in `index.html`).

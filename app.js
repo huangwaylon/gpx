@@ -1,7 +1,7 @@
 'use strict';
 
 /* ════════════════════════════════════════════════════════════
-   Washington Trails — offline hiking PWA
+   Ume-chan's Trails — offline hiking PWA (JA default, EN toggle)
    ════════════════════════════════════════════════════════════ */
 
 const TILE_URL   = 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}';
@@ -9,27 +9,77 @@ const TILE_CACHE = 'wa-trails-tiles-v1';
 const DL_ZOOMS   = [10, 11, 12, 13, 14, 15, 16];
 const PAD        = 0.01;          // bbox padding in degrees for tile download
 const FT         = 3.28084;
-const MI         = 1609.344;
 
 // ── App state ──
-let map = null, curTrail = null;
-let trackLayer = null, markerLayer = null, gpsLayer = null;
+let map = null, curTrail = null, trackLayer = null;
 let trackPts = [], trackWpts = [];
 let totalDist = 0, gpsWatch = null, gpsMk = null, gpsAcc = null, gpsFollow = false;
 let curPos = null, wakeLock = null;
-let sheetState = 'peek';          // 'peek' | 'full' | 'hidden'
+let sheetState = 'peek';          // 'peek' | 'full'
 const cacheStatus = {};           // slug -> bool (tiles cached)
 
 const $  = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
 
 // ════════════════════════════════════════════════════════════
+//  i18n
+// ════════════════════════════════════════════════════════════
+let lang = (localStorage.lang === 'en' || localStorage.lang === 'ja')
+  ? localStorage.lang : 'ja';   // Japanese is the default
+
+const t = key => I18N.ui[lang][key] ?? I18N.ui.en[key] ?? key;
+const tf = key => I18N.fn[lang][key] ?? I18N.fn.en[key];
+
+// Localized accessors for trail data
+function trDiff(d)  { return (I18N.diff[lang][d]  ?? d); }
+function trRoute(r) { return (I18N.route[lang][r] ?? r); }
+function trDogs(g)  { return (I18N.dogs[lang][g]  ?? g); }
+function trWpt(name){ return lang === 'ja' ? (I18N.wpt[name] ?? name) : name; }
+
+// "Apr – Nov" → "4月～11月" in JA; unchanged in EN
+function trSeason(s) {
+  if (lang !== 'ja') return s;
+  return s.replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/g, m => I18N.months[m])
+          .replace(/\s*[–-]\s*/g, '～');
+}
+
+// Returns the trail object with locale-appropriate text fields merged in
+function loc(trail) {
+  if (lang === 'ja') {
+    const j = I18N.trails[trail.slug]?.ja;
+    if (j) return { ...trail, ...j };
+  }
+  return trail;
+}
+
+// Apply static UI strings to all [data-i18n] / [data-i18n-aria] nodes
+function applyStaticI18n() {
+  document.documentElement.lang = lang;
+  $$('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  $$('[data-i18n-aria]').forEach(el => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
+  document.title = t('appName');
+}
+
+function setLang(next) {
+  lang = next;
+  localStorage.lang = next;
+  applyStaticI18n();
+  renderList();
+  if (curTrail) {            // re-render the open detail view in the new language
+    $('#detail-title').textContent = loc(curTrail).name;
+    renderPeek(curTrail);
+    renderSheetBody(curTrail);
+    redrawTrailLabels();
+  }
+}
+
+// ════════════════════════════════════════════════════════════
 //  Boot
 // ════════════════════════════════════════════════════════════
 window.addEventListener('load', async () => {
+  applyStaticI18n();
   renderList();
   bindGlobal();
-  checkInstall();
   await refreshCacheStatus();
   renderList();                   // re-render with offline badges
   routeFromHash();
@@ -40,8 +90,8 @@ window.addEventListener('hashchange', routeFromHash);
 function routeFromHash() {
   const m = location.hash.match(/^#\/trail\/([\w-]+)/);
   if (m) {
-    const t = TRAILS.find(x => x.slug === m[1]);
-    if (t) { openDetail(t); return; }
+    const trail = TRAILS.find(x => x.slug === m[1]);
+    if (trail) { openDetail(trail); return; }
   }
   showList();
 }
@@ -57,35 +107,37 @@ function diffClass(d) {
 function diffKey(d) {
   return { 'Easy':'easy','Moderate':'moderate','Hard':'hard','Very Hard':'veryhard' }[d];
 }
+// Distance/elevation units: miles+feet in EN, km+meters in JA
+function fmtDist(mi) { return lang === 'ja' ? `${(mi*1.609344).toFixed(1)} km` : `${mi} mi`; }
+function fmtGain(ft) { return lang === 'ja' ? `${Math.round(ft/FT).toLocaleString()} m` : `${ft.toLocaleString()} ft`; }
 
 function renderList() {
   const wrap = $('#trail-list');
   let trails = TRAILS.slice();
-  if (listFilter !== 'all') trails = trails.filter(t => diffKey(t.diff) === listFilter);
+  if (listFilter !== 'all') trails = trails.filter(x => diffKey(x.diff) === listFilter);
   if (listSort === 'dist') trails.sort((a,b) => a.lengthMi - b.lengthMi);
   if (listSort === 'gain') trails.sort((a,b) => a.gainFt - b.gainFt);
 
-  wrap.innerHTML = trails.map(t => {
-    const cached = cacheStatus[t.slug];
-    const offIcon = cached
-      ? '<div class="card-offline ready" title="Available offline">✓</div>'
-      : '';
+  wrap.innerHTML = trails.map(trail => {
+    const tr = loc(trail);
+    const offIcon = cacheStatus[trail.slug]
+      ? `<div class="card-offline ready" title="${t('dlSaved')}">✓</div>` : '';
     return `
-    <article class="card" data-slug="${t.slug}">
+    <article class="card" data-slug="${trail.slug}">
       <div class="card-img-wrap">
-        <img class="card-img" src="${t.img}" alt="${t.name}" loading="lazy">
-        <span class="card-badge-diff ${diffClass(t.diff)}">${t.diff}</span>
+        <img class="card-img" src="${trail.img}" alt="${tr.name}" loading="lazy">
+        <span class="card-badge-diff ${diffClass(trail.diff)}">${trDiff(trail.diff)}</span>
         ${offIcon}
         <div class="card-titlebar">
-          <div class="card-title">${t.name}</div>
-          <div class="card-area">${t.area}</div>
+          <div class="card-title">${tr.name}</div>
+          <div class="card-area">${tr.area}</div>
         </div>
       </div>
       <div class="card-stats">
-        <span class="s"><span class="ic">↔</span>${t.lengthMi} mi</span>
-        <span class="s"><span class="ic">▲</span>${t.gainFt.toLocaleString()} ft</span>
-        <span class="s"><span class="ic">⟳</span>${t.route}</span>
-        <span class="s star">★ ${t.rating}</span>
+        <span class="s"><span class="ic">↔</span>${fmtDist(trail.lengthMi)}</span>
+        <span class="s"><span class="ic">▲</span>${fmtGain(trail.gainFt)}</span>
+        <span class="s"><span class="ic">⟳</span>${trRoute(trail.route)}</span>
+        <span class="s star">★ ${trail.rating}</span>
       </div>
     </article>`;
   }).join('');
@@ -108,16 +160,12 @@ function bindGlobal() {
     });
   });
 
+  $('#lang-toggle').addEventListener('click', () => setLang(lang === 'ja' ? 'en' : 'ja'));
   $('#btn-back').addEventListener('click', () => { location.hash = ''; });
   $('#btn-gps').addEventListener('click', toggleGPS);
 
-  // sheet drag
   initSheetDrag();
 
-  // install
-  $('#install-x').addEventListener('click', () => { $('#install').hidden = true; localStorage.installDismiss = '1'; });
-
-  // download modal
   $('#dl-cancel').addEventListener('click', () => { $('#dl-modal').hidden = true; });
   $('#dl-go').addEventListener('click', startDownload);
 }
@@ -132,74 +180,89 @@ function showList() {
 // ════════════════════════════════════════════════════════════
 //  Detail screen
 // ════════════════════════════════════════════════════════════
-async function openDetail(t) {
-  curTrail = t;
+async function openDetail(trail) {
+  curTrail = trail;
   $('#list').hidden = true;
   $('#detail').hidden = false;
-  $('#detail-title').textContent = t.name;
+  $('#detail-title').textContent = loc(trail).name;
 
-  // reset sheet to peek
   setSheet('peek');
-  $('#pk-title').textContent = t.name;
-  $('#pk-meta').innerHTML =
-    `<span>${t.lengthMi} mi</span><span>▲ ${t.gainFt.toLocaleString()} ft</span>` +
-    `<span class="${diffClass(t.diff)}" style="background:none;padding:0">${t.diff}</span>` +
-    `<span class="star">★ ${t.rating} (${t.reviews.toLocaleString()})</span>`;
-
-  renderSheetBody(t);
+  renderPeek(trail);
+  renderSheetBody(trail);
   initMap();
-  await loadTrail(t);
+  await loadTrail(trail);
 }
 
-function renderSheetBody(t) {
-  const cached = cacheStatus[t.slug];
+function renderPeek(trail) {
+  const tr = loc(trail);
+  $('#pk-title').textContent = tr.name;
+  $('#pk-meta').innerHTML =
+    `<span>${fmtDist(trail.lengthMi)}</span><span>▲ ${fmtGain(trail.gainFt)}</span>` +
+    `<span class="${diffClass(trail.diff)}" style="background:none;padding:0">${trDiff(trail.diff)}</span>` +
+    `<span class="star">★ ${trail.rating} (${trail.reviews.toLocaleString()})</span>`;
+}
+
+function renderSheetBody(trail) {
+  const tr = loc(trail);
+  const cached = cacheStatus[trail.slug];
+  // Stat boxes: km/m in JA, mi/k-ft in EN
+  const distV = lang==='ja' ? (trail.lengthMi*1.609344).toFixed(1) : trail.lengthMi;
+  const distL = lang==='ja' ? '距離 (km)' : t('statDistance');
+  const gainV = lang==='ja' ? Math.round(trail.gainFt/FT).toLocaleString() : (trail.gainFt/1000).toFixed(trail.gainFt>=1000?1:0)+'k';
+  const gainL = lang==='ja' ? '登り (m)' : 'Ft Gain';
   $('#sheet-body').innerHTML = `
     <div class="stat-grid">
-      <div class="stat-box"><div class="v">${t.lengthMi}</div><div class="l">Miles</div></div>
-      <div class="stat-box"><div class="v">${(t.gainFt/1000).toFixed(t.gainFt>=1000?1:0)}k</div><div class="l">Ft Gain</div></div>
-      <div class="stat-box"><div class="v" style="font-size:13px">${t.diff}</div><div class="l">Difficulty</div></div>
-      <div class="stat-box"><div class="v" style="font-size:13px">${t.time.replace(/ /g,'')}</div><div class="l">Time</div></div>
+      <div class="stat-box"><div class="v">${distV}</div><div class="l">${distL}</div></div>
+      <div class="stat-box"><div class="v">${gainV}</div><div class="l">${gainL}</div></div>
+      <div class="stat-box"><div class="v" style="font-size:13px">${trDiff(trail.diff)}</div><div class="l">${t('statDifficulty')}</div></div>
+      <div class="stat-box"><div class="v" style="font-size:13px">${fmtTime(trail.time)}</div><div class="l">${t('statTime')}</div></div>
     </div>
 
     <div id="elev-card">
-      <div class="hd"><span class="t">Elevation</span><span class="r" id="elev-range"></span></div>
+      <div class="hd"><span class="t">${t('elevation')}</span><span class="r" id="elev-range"></span></div>
       <svg id="elev-svg" preserveAspectRatio="none"></svg>
     </div>
 
     <button class="dl-btn ${cached?'ready':''}" id="sheet-dl">
-      ${cached ? '✓ Map saved for offline' : '⬇ Download map for offline'}
+      ${cached ? t('dlSaved') : t('dlDownload')}
     </button>
     <div class="dl-prog" id="sheet-dl-prog"><i></i></div>
 
     <div class="section">
-      <h3>Overview</h3>
-      <p>${t.summary}</p>
+      <h3>${t('secOverview')}</h3>
+      <p>${tr.summary}</p>
     </div>
     <div class="section">
-      <h3>The hike</h3>
-      <p>${t.description}</p>
+      <h3>${t('secHike')}</h3>
+      <p>${tr.description}</p>
     </div>
     <div class="section">
-      <h3>Tips & need-to-know</h3>
-      <ul class="tips">${t.tips.map(x=>`<li>${x}</li>`).join('')}</ul>
+      <h3>${t('secTips')}</h3>
+      <ul class="tips">${tr.tips.map(x=>`<li>${x}</li>`).join('')}</ul>
     </div>
     <div class="section">
-      <h3>Details</h3>
+      <h3>${t('secDetails')}</h3>
       <dl class="facts">
-        <dt>Route type</dt><dd>${t.route}</dd>
-        <dt>Best season</dt><dd>${t.season}</dd>
-        <dt>Dogs</dt><dd>${t.dogs}</dd>
-        <dt>Permit</dt><dd>${t.permit}</dd>
-        <dt>Location</dt><dd>${t.area}</dd>
+        <dt>${t('factRoute')}</dt><dd>${trRoute(trail.route)}</dd>
+        <dt>${t('factSeason')}</dt><dd>${trSeason(trail.season)}</dd>
+        <dt>${t('factDogs')}</dt><dd>${trDogs(trail.dogs)}</dd>
+        <dt>${t('factPermit')}</dt><dd>${tr.permit}</dd>
+        <dt>${t('factLocation')}</dt><dd>${tr.area}</dd>
       </dl>
     </div>
     <div class="section">
-      <p style="font-size:11px;color:var(--muted)">
-        Trail info &amp; photo via AllTrails. Map © USGS National Map.
-      </p>
+      <p style="font-size:11px;color:var(--muted)">${t('attribution')}</p>
     </div>
   `;
-  $('#sheet-dl').addEventListener('click', () => openDownloadModal(t));
+  $('#sheet-dl').addEventListener('click', () => openDownloadModal(trail));
+  drawProfile();
+}
+
+// "3 h 17 min" → "3時間17分" (JA); strip spaces in EN as before
+function fmtTime(s) {
+  if (lang !== 'ja') return s.replace(/ /g,'');
+  return s.replace(/~/g,'約').replace(/(\d+)\s*h(?:r)?/g,'$1時間').replace(/(\d+)\s*min/g,'$1分')
+          .replace(/\s*[–-]\s*/g,'～').replace(/時間(?=～|$)/,'時間').replace(/ /g,'');
 }
 
 // ── Map ──
@@ -209,25 +272,22 @@ function initMap() {
   const zoom = L.control.zoom({ position:'topright' }).addTo(map);
   L.tileLayer(TILE_URL, { maxZoom:16, minZoom:8, attribution:'© USGS', crossOrigin:true }).addTo(map);
   map.on('dragstart', () => { gpsFollow = false; $('#btn-gps').classList.remove('on'); });
-  // nudge zoom control below header
   zoom.getContainer().style.marginTop = 'calc(54px + env(safe-area-inset-top,0px))';
 }
 
-async function loadTrail(t) {
+async function loadTrail(trail) {
   trackPts = []; trackWpts = []; totalDist = 0;
   let text;
-  try { text = await (await fetch(t.gpx)).text(); }
+  try { text = await (await fetch(trail.gpx)).text(); }
   catch(e) { console.error('GPX load failed', e); return; }
   const xml = new DOMParser().parseFromString(text, 'text/xml');
 
-  // waypoints
   xml.querySelectorAll('wpt').forEach(w => {
     const lat=+w.getAttribute('lat'), lon=+w.getAttribute('lon');
     const name=(w.querySelector('name')?.textContent||'').trim().replace(/\s+/g,' ');
     trackWpts.push({ lat, lon, name, d:null });
   });
 
-  // track
   let pLat=null,pLon=null,d=0;
   xml.querySelectorAll('trkpt').forEach(n => {
     const lat=+n.getAttribute('lat'), lon=+n.getAttribute('lon');
@@ -238,10 +298,8 @@ async function loadTrail(t) {
   });
   totalDist = d;
 
-  // smooth elevations for display
   smoothEle();
 
-  // snap waypoints to track distance
   trackWpts.forEach(w => {
     let best=Infinity;
     trackPts.forEach(p => { const dd=hav(w.lat,w.lon,p.lat,p.lon); if(dd<best){best=dd;w.d=p.d;} });
@@ -268,27 +326,37 @@ function drawTrack() {
   L.polyline(coords, { color:'#000', weight:7, opacity:0.25, lineJoin:'round' }).addTo(map); // halo
   trackLayer = L.polyline(coords, { color:'#ef4444', weight:4, opacity:0.95, lineJoin:'round' }).addTo(map);
 
-  // endpoints
   if (trackPts.length) {
-    endMarker(trackPts[0], '#22c55e', 'Trailhead');
+    endMarker(trackPts[0], '#22c55e', 'markerTrailhead');
     const last = trackPts[trackPts.length-1];
     const isLoop = curTrail.route === 'Loop' || hav(trackPts[0].lat,trackPts[0].lon,last.lat,last.lon) < 120;
-    if (!isLoop) endMarker(last, '#ef4444', 'End');
+    if (!isLoop) endMarker(last, '#ef4444', 'markerEnd');
   }
-  // waypoints
   trackWpts.forEach(w => {
-    L.marker([w.lat,w.lon], { icon:dotIcon('#f59e0b',11) })
-      .bindPopup(`<div class="wp-pop">${w.name}</div>`, {maxWidth:240})
+    w._marker = L.marker([w.lat,w.lon], { icon:dotIcon('#f59e0b',11) })
+      .bindPopup(`<div class="wp-pop">${trWpt(w.name)}</div>`, {maxWidth:240})
       .addTo(map);
   });
 
   map.fitBounds(trackLayer.getBounds(), { paddingTopLeft:[30,70], paddingBottomRight:[30, sheetPeekHeight()+30] });
 }
 
-function endMarker(p,color,label){
-  L.marker([p.lat,p.lon], { icon:dotIcon(color,15) })
-    .bindPopup(`<div class="wp-pop">${label}</div>`).addTo(map);
+// Endpoint markers store an i18n key so labels can be re-rendered on language switch
+function endMarker(p, color, key) {
+  const mk = L.marker([p.lat,p.lon], { icon:dotIcon(color,15) })
+    .bindPopup(`<div class="wp-pop">${t(key)}</div>`).addTo(map);
+  mk._i18nKey = key;
+  (endMarker._all ||= []).push(mk);
 }
+
+// Re-bind marker popups in the active language (called from setLang)
+function redrawTrailLabels() {
+  (endMarker._all || []).forEach(mk => {
+    if (mk._i18nKey) mk.setPopupContent(`<div class="wp-pop">${t(mk._i18nKey)}</div>`);
+  });
+  trackWpts.forEach(w => { if (w._marker) w._marker.setPopupContent(`<div class="wp-pop">${trWpt(w.name)}</div>`); });
+}
+
 function dotIcon(color,size){
   const h=size/2;
   return L.divIcon({ className:'',
@@ -305,7 +373,7 @@ function drawProfile() {
   const lo=Math.min(...eles), hi=Math.max(...eles), range=hi-lo||1;
   const step=Math.max(1,Math.floor(trackPts.length/500));
   const sub=trackPts.filter((_,i)=>i%step===0||i===trackPts.length-1);
-  const X=d=>(d/totalDist)*W, Y=e=>H-14-((e-lo)/range)*(H-26);
+  const X=dd=>(dd/totalDist)*W, Y=e=>H-14-((e-lo)/range)*(H-26);
 
   let path=`M0,${H}`;
   sub.forEach(p=>{ path+=` L${X(p.d).toFixed(1)},${Y(p.se).toFixed(1)}`; });
@@ -327,7 +395,13 @@ function drawProfile() {
     <path d="${path}" fill="url(#eg)"/>
     <path d="${line}" fill="none" stroke="#60a5fa" stroke-width="1.5"/>
     <g id="epos"></g>`;
-  $('#elev-range').textContent = `${Math.round(lo*FT).toLocaleString()}–${Math.round(hi*FT).toLocaleString()} ft`;
+  $('#elev-range').textContent = fmtElevRange(lo, hi);
+}
+
+// Profile axis labels: feet in EN, meters in JA
+function fmtElevRange(loM, hiM) {
+  if (lang === 'ja') return `${Math.round(loM).toLocaleString()}～${Math.round(hiM).toLocaleString()} m`;
+  return `${Math.round(loM*FT).toLocaleString()}–${Math.round(hiM*FT).toLocaleString()} ft`;
 }
 
 function updateProfilePos(idx){
@@ -355,7 +429,7 @@ function toggleGPS(){
   startGPS();
 }
 function startGPS(){
-  if (!navigator.geolocation){ alert('Geolocation not available on this device.'); return; }
+  if (!navigator.geolocation){ alert(t('alertNoGeo')); return; }
   reqWake(); gpsFollow=true;
   $('#btn-gps').classList.add('on');
   gpsWatch = navigator.geolocation.watchPosition(onPos,onPosErr,{enableHighAccuracy:true,maximumAge:4000,timeout:30000});
@@ -381,7 +455,7 @@ function onPos(pos){
     updateProfilePos(idx);
   }
 }
-function onPosErr(err){ if(err.code===1){ alert('Location access denied. Enable it in Settings → Privacy → Location Services → Safari.'); stopGPS(); } }
+function onPosErr(err){ if(err.code===1){ alert(t('alertDenied')); stopGPS(); } }
 
 async function reqWake(){ if('wakeLock'in navigator){try{wakeLock=await navigator.wakeLock.request('screen');}catch(_){}}}
 async function relWake(){ if(wakeLock){try{await wakeLock.release();}catch(_){}wakeLock=null;} }
@@ -402,7 +476,6 @@ function setSheet(state){
   }
   if(state==='peek') sheet.style.height = sheetPeekHeight()+'px';
   else if(state==='full') sheet.style.height = '90dvh';
-  // GPS fab sits just above the peek sheet; hidden behind sheet when expanded
   if(fab) fab.style.bottom = `calc(${sheetPeekHeight()}px + 14px)`;
 }
 function initSheetDrag(){
@@ -419,7 +492,6 @@ function initSheetDrag(){
   window.addEventListener('mousemove',onMove);
   window.addEventListener('touchend',onEnd);
   window.addEventListener('mouseup',onEnd);
-  // tap peek toggles
   peek.addEventListener('click',()=>{ if(!dragging) setSheet(sheetState==='peek'?'full':'peek'); });
 }
 
@@ -427,31 +499,30 @@ function initSheetDrag(){
 //  Tile download (offline)
 // ════════════════════════════════════════════════════════════
 let dlTrail=null, dlRunning=false;
-function openDownloadModal(t){
-  dlTrail=t;
-  const n=countTiles(t);
-  $('#dl-desc').textContent=`Save ~${n} map tiles for "${t.name}" so it works without service. Stored on your phone.`;
-  $('#dl-bar').style.width='0%'; $('#dl-status').textContent=`${n} tiles`;
-  $('#dl-go').textContent='Download'; $('#dl-go').disabled=false;
+function openDownloadModal(trail){
+  dlTrail=trail;
+  const n=countTiles(trail);
+  $('#dl-desc').textContent=tf('dlDesc')(loc(trail).name, n);
+  $('#dl-bar').style.width='0%'; $('#dl-status').textContent=tf('dlTiles')(n);
+  $('#dl-go').textContent=t('dlGo'); $('#dl-go').disabled=false;
   $('#dl-modal').hidden=false;
 }
-function trailBox(t){
+function trailBox(trail){
   let n=-90,s=90,e=-180,w=180;
-  // prefer track bounds; fall back to center
-  if(trackPts.length && t===curTrail){
+  if(trackPts.length && trail===curTrail){
     trackPts.forEach(p=>{ n=Math.max(n,p.lat);s=Math.min(s,p.lat);e=Math.max(e,p.lon);w=Math.min(w,p.lon); });
   } else {
-    n=t.center[0]+0.02; s=t.center[0]-0.02; e=t.center[1]+0.02; w=t.center[1]-0.02;
+    n=trail.center[0]+0.02; s=trail.center[0]-0.02; e=trail.center[1]+0.02; w=trail.center[1]-0.02;
   }
   return { n:n+PAD, s:s-PAD, e:e+PAD, w:w-PAD };
 }
-function countTiles(t){
-  let n=0; const b=trailBox(t);
+function countTiles(trail){
+  let n=0; const b=trailBox(trail);
   DL_ZOOMS.forEach(z=>{ const r=tRange(b,z); n+=(r.x1-r.x0+1)*(r.y1-r.y0+1); });
   return n;
 }
-function tileURLs(t){
-  const urls=[]; const b=trailBox(t);
+function tileURLs(trail){
+  const urls=[]; const b=trailBox(trail);
   DL_ZOOMS.forEach(z=>{ const r=tRange(b,z);
     for(let x=r.x0;x<=r.x1;x++) for(let y=r.y0;y<=r.y1;y++)
       urls.push(TILE_URL.replace('{z}',z).replace('{y}',y).replace('{x}',x)); });
@@ -466,7 +537,7 @@ function ll2t(lat,lon,z){ const n=1<<z; const x=Math.floor(n*(lon+180)/360);
 async function startDownload(){
   if(dlRunning||!dlTrail) return;
   dlRunning=true;
-  $('#dl-go').disabled=true; $('#dl-go').textContent='Downloading…';
+  $('#dl-go').disabled=true; $('#dl-go').textContent=t('dlDownloading');
   const urls=tileURLs(dlTrail), total=urls.length; let done=0;
   const cache=await caches.open(TILE_CACHE), BATCH=8;
   for(let i=0;i<urls.length;i+=BATCH){
@@ -474,38 +545,28 @@ async function startDownload(){
       try{ if(!(await cache.match(u))){ const r=await fetch(u,{mode:'cors'}); if(r.ok||r.type==='opaque') await cache.put(u,r); } }catch(_){}
       done++;
       const pct=Math.round(done/total*100);
-      $('#dl-bar').style.width=pct+'%'; $('#dl-status').textContent=`${done} / ${total} (${pct}%)`;
+      $('#dl-bar').style.width=pct+'%'; $('#dl-status').textContent=tf('dlProgress')(done,total,pct);
     }));
   }
   dlRunning=false;
-  $('#dl-status').textContent=`Done — saved ${done} tiles.`;
-  $('#dl-go').textContent='Done';
+  $('#dl-status').textContent=tf('dlDone')(done);
+  $('#dl-go').textContent=t('dlDoneBtn');
   cacheStatus[dlTrail.slug]=true;
-  // update sheet button + list badge
-  const b=$('#sheet-dl'); if(b){ b.classList.add('ready'); b.textContent='✓ Map saved for offline'; }
+  const b=$('#sheet-dl'); if(b){ b.classList.add('ready'); b.textContent=t('dlSaved'); }
   renderList();
   setTimeout(()=>{ $('#dl-modal').hidden=true; }, 1400);
 }
 
-// Determine which trails already have tiles cached (sample center tile per zoom 14)
 async function refreshCacheStatus(){
   if(!('caches'in window)) return;
   try{
     const cache=await caches.open(TILE_CACHE);
-    for(const t of TRAILS){
-      const z=14, {x,y}=ll2t(t.center[0],t.center[1],z);
+    for(const trail of TRAILS){
+      const z=14, {x,y}=ll2t(trail.center[0],trail.center[1],z);
       const u=TILE_URL.replace('{z}',z).replace('{y}',y).replace('{x}',x);
-      cacheStatus[t.slug] = !!(await cache.match(u));
+      cacheStatus[trail.slug] = !!(await cache.match(u));
     }
   }catch(_){}
-}
-
-// ════════════════════════════════════════════════════════════
-//  Install banner
-// ════════════════════════════════════════════════════════════
-function checkInstall(){
-  const standalone = window.navigator.standalone || matchMedia('(display-mode:standalone)').matches;
-  if(!standalone && !localStorage.installDismiss) $('#install').hidden=false;
 }
 
 // ════════════════════════════════════════════════════════════

@@ -1,15 +1,16 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="WA Trails">
+  <meta name="apple-mobile-web-app-title" content="梅ちゃんのトレイル">
   <meta name="theme-color" content="#0f172a">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon.svg">
-  <title>WA Trails</title>
+  <title>梅ちゃんのトレイル</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="app.css">
 </head>
@@ -19,17 +20,19 @@
   <!-- ═══════════ LIST SCREEN ═══════════ -->
   <section id="list" class="screen">
     <header id="list-header">
-      <h1>Washington Trails</h1>
-      <div class="sub" id="list-sub">8 trails · tap to explore</div>
+      <div class="head-row">
+        <h1 data-i18n="appName">梅ちゃんのトレイル</h1>
+        <button id="lang-toggle" class="lang-btn" data-i18n="langOther">EN</button>
+      </div>
+      <div class="sub" id="list-sub" data-i18n="subtitle">8つのコース · タップして探索</div>
     </header>
     <div id="filter-bar">
-      <button class="chip active" data-filter="all">All</button>
-      <button class="chip" data-filter="easy">Easy</button>
-      <button class="chip" data-filter="moderate">Moderate</button>
-      <button class="chip" data-filter="hard">Hard</button>
-      <button class="chip" data-filter="veryhard">Very Hard</button>
-      <button class="chip" data-sort="dist">↕ Distance</button>
-      <button class="chip" data-sort="gain">↕ Elevation</button>
+      <button class="chip active" data-filter="all" data-i18n="filterAll">すべて</button>
+      <button class="chip" data-filter="moderate" data-i18n="filterModerate">中級</button>
+      <button class="chip" data-filter="hard" data-i18n="filterHard">上級</button>
+      <button class="chip" data-filter="veryhard" data-i18n="filterVeryhard">超上級</button>
+      <button class="chip" data-sort="dist" data-i18n="sortDist">↕ 距離</button>
+      <button class="chip" data-sort="gain" data-i18n="sortGain">↕ 標高</button>
     </div>
     <div id="trail-list"></div>
   </section>
@@ -37,11 +40,11 @@
   <!-- ═══════════ DETAIL SCREEN ═══════════ -->
   <section id="detail" class="screen" hidden>
     <div id="detail-header">
-      <button class="hbtn" id="btn-back" aria-label="Back">‹</button>
+      <button class="hbtn" id="btn-back" data-i18n-aria="back" aria-label="戻る">‹</button>
       <span id="detail-title"></span>
     </div>
     <div id="map"></div>
-    <button class="map-fab recenter on" id="btn-gps" aria-label="My location">◎</button>
+    <button class="map-fab recenter on" id="btn-gps" data-i18n-aria="gpsAria" aria-label="現在地">◎</button>
 
     <div id="sheet">
       <div class="sheet-grip" id="grip"></div>
@@ -53,22 +56,16 @@
     </div>
   </section>
 
-  <!-- install banner -->
-  <div id="install" hidden>
-    <span>📲 Install: <strong>Share → Add to Home Screen</strong></span>
-    <button class="x" id="install-x" aria-label="Dismiss">✕</button>
-  </div>
-
   <!-- download modal -->
   <div id="dl-modal" hidden>
     <div class="card-m">
-      <h3>Download map for offline</h3>
-      <p id="dl-desc">Save this trail's map tiles so it works without service. Stays on your phone.</p>
+      <h3 id="dl-title" data-i18n="dlModalTitle">オフライン用に地図をダウンロード</h3>
+      <p id="dl-desc"></p>
       <div id="dl-bar-wrap"><div id="dl-bar"></div></div>
-      <div id="dl-status">Ready</div>
+      <div id="dl-status" data-i18n="dlReady">準備完了</div>
       <div class="m-btns">
-        <button class="m-btn m-btn-s" id="dl-cancel">Cancel</button>
-        <button class="m-btn m-btn-p" id="dl-go">Download</button>
+        <button class="m-btn m-btn-s" id="dl-cancel" data-i18n="dlCancel">キャンセル</button>
+        <button class="m-btn m-btn-p" id="dl-go" data-i18n="dlGo">ダウンロード</button>
       </div>
     </div>
   </div>
@@ -76,6 +73,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="i18n.js"></script>
 <script src="trails.js"></script>
 <script src="app.js"></script>
 </body>

@@ -1,11 +1,12 @@
-# Washington Trails — Decisions & Lessons
+# Ume-chan's Trails (梅ちゃんのトレイル) — Decisions & Lessons
 
-Architecture decision records and engineering lessons for **Washington Trails**, a static,
-offline-capable hiking PWA for iPhone.
+Architecture decision records and engineering lessons for **Ume-chan's Trails**
+(梅ちゃんのトレイル), a static, offline-capable hiking PWA for iPhone.
 
 **Stack:** plain HTML/CSS/JS, [Leaflet 1.9.4](https://leafletjs.com/), USGS National Map topo
-tiles, no build step, deployed on GitHub Pages. Eight Washington trails, each with a map, GPX
-track, live GPS, and an elevation profile.
+tiles, no build step, deployed on GitHub Pages. Eight Washington State trails, each with a map, GPX
+track, live GPS, and an elevation profile. The UI is bilingual — Japanese by default with an
+English toggle (ADR-8).
 
 This document captures (1) the key architecture decisions — including the alternatives that were
 rejected and why — and (2) the concrete bugs found while building and testing, as symptom → root
@@ -339,9 +340,86 @@ A **three-tier** caching strategy:
 
 ---
 
+### ADR-8: Bilingual UI with Japanese as the default, plain-object i18n (no library)
+
+**Context.**
+The app needed a full, natural **Japanese** translation — not just labels, but trail summaries,
+descriptions, tips, waypoint names, and unit conventions — and it had to **default to Japanese**
+with a one-tap **English** toggle. This had to happen without a build step, without a framework,
+and without breaking the offline-cacheable static-file model (ADR-5, ADR-7).
+
+**Decision.**
+A **hand-rolled i18n layer** lives in `i18n.js` as a single plain object, `window.I18N`, with:
+
+- `ui` — static UI strings, keyed `en` / `ja` (titles, buttons, section headings, alerts).
+- `fn` — locale-aware **string functions** for dynamic text (e.g. download descriptions/progress).
+- **enum/token tables** — `diff`, `route`, `dogs`, `months` — translating data *tokens* at render
+  time (e.g. `"Hard"` → `"上級"`, `"Loop"` → `"周回"`).
+- `wpt` — GPX **waypoint name** translations (English → Japanese).
+- `trails.<slug>.ja` — **per-trail Japanese content** (`name`, `area`, `summary`, `description`,
+  `tips`, `permit`) that overrides the English base by slug.
+
+`app.js` consumes this through small helpers:
+
+- `t(key)` — a `ui` string in the active language, falling back to English then the key itself.
+- `tf(key)` — a `fn` string-builder in the active language.
+- `loc(trail)` — returns the trail object with locale text fields **merged in**: in Japanese it
+  spreads `I18N.trails[slug].ja` over the English base; in English it returns the base unchanged.
+
+**English base content stays in `trails.js`**; Japanese overrides **merge via `loc()`**.
+
+Units switch with language **at render time** while the **stored data stays imperial**: feet and
+miles are the single canonical source in `trails.js`, and the formatters convert to km/m for
+Japanese (`fmtDist`, `fmtGain`, `fmtElevRange`) — e.g. `mi * 1.609344` and `ft / FT`
+(`FT = 3.28084`). Date/duration/season text is also localized at render time
+(`fmtTime`, `trSeason` via the `months` table).
+
+The language preference persists in `localStorage.lang` and defaults to `ja`:
+
+```js
+let lang = (localStorage.lang === 'en' || localStorage.lang === 'ja')
+  ? localStorage.lang : 'ja';   // Japanese is the default
+```
+
+**Rationale.**
+
+- **No build step / no framework (ADR-5)** rules out an i18n library — there is nothing to compile
+  message catalogs or wire up a provider.
+- The **dataset is tiny** (eight trails, a few dozen UI strings), so plain objects are more than
+  enough and keep everything **debuggable** and **offline-cacheable** as ordinary static JS.
+- **Merging-with-fallback** means a missing Japanese field **degrades gracefully to English**
+  rather than rendering blank or throwing — important while translations are filled in.
+
+**Alternatives considered and rejected.**
+
+- **An i18n framework/library (i18next, FormatJS, etc.).** Rejected: needs tooling/a build step and
+  a dependency to maintain, contradicting ADR-5 for a dataset this small.
+- **Duplicating all of `trails.js` per language.** Rejected: two parallel copies **drift** — a fix
+  to one (a stat, a coordinate, a typo) silently fails to land in the other. One canonical English
+  base + Japanese overrides avoids the drift.
+- **Translating enum *values* in the data** (storing `"上級"` etc. on each trail). Rejected: it
+  would couple data to one language and defeat the English/Japanese toggle; chose **render-time enum
+  tables** (`diff`/`route`/`dogs`/`months`) instead.
+- **Storing metric in the data.** Rejected: chose to keep **one canonical imperial source** and
+  **convert on display**, so the stored numbers match the AllTrails-sourced figures (ADR-4) and only
+  the presentation changes.
+
+**Consequences.**
+
+- **Every new string must be added in both languages** (and a new trail needs a `trails.<slug>.ja`
+  block); a missing key falls back to English rather than failing loudly.
+- **Adding a 3rd language** would need new `ui`/`fn`/enum blocks **and** a real toggle UI — the
+  current toggle is a simple two-way switch (`setLang(lang === 'ja' ? 'en' : 'ja')`), not a picker.
+- **Live switching** can't just swap text: it required **re-rendering** the list and the open detail
+  view and **re-binding the Leaflet map marker popups** in the new language. That popup re-bind is
+  `redrawTrailLabels()`, which re-sets the popup content for the endpoint markers (each carries an
+  `_i18nKey`) and the waypoint markers on `setLang()`.
+
+---
+
 ## Part 2 — Bugs found during build & testing
 
-All three bugs below are **fixed in the current source**; each entry notes the verification.
+All four bugs below are **fixed in the current source**; each entry notes the verification.
 
 ### Bug 1 — Trail cards collapsed / overlapping (~69 px tall)
 
@@ -490,6 +568,59 @@ lever. See `docs/DEVELOPMENT.md`.
 
 ---
 
+### Bug 4 — Adding i18n broke the map: `L.polyline is not a function`
+
+**Symptom.**
+After adding the i18n layer (ADR-8), opening **any** trail showed the **map tiles but no track and
+no elevation profile**, and the console threw `TypeError: L.polyline is not a function`. Oddly, the
+global `L` still *existed* — but `L.map`, `L.polyline`, `L.control`, `L.marker`, etc. were all
+`undefined`.
+
+**Root cause.**
+The new trail-localization helper had been declared at **`app.js` top level** as a function
+named `L`:
+
+```js
+function L(trail) { /* merge in Japanese fields … */ }
+```
+
+A top-level `function L(...)` is **hoisted** and **shadows Leaflet's global `window.L`** for the
+whole module. So every `L.*` Leaflet call — `L.map`, `L.tileLayer`, `L.polyline`, `L.marker`,
+`L.control.zoom`, `L.divIcon` — was now resolving against the localization function (which has none
+of those properties), hence `L.polyline is not a function`. The tiles still appeared only because
+the map object had been created on a path before the shadowing bit (and partially via cached state
+during iteration), which made the failure look map-specific rather than global.
+
+**Fix.**
+Rename the helper to **`loc(trail)`** and update **all call sites**:
+
+```js
+function loc(trail) {
+  if (lang === 'ja') {
+    const j = I18N.trails[trail.slug]?.ja;
+    if (j) return { ...trail, ...j };
+  }
+  return trail;
+}
+```
+
+With the single-letter `L` gone, Leaflet's global `L` is intact and the track/markers/profile draw
+normally again.
+
+**Verification.** Confirmed in the current `app.js`: the helper is `function loc(trail)`, there is
+**no `function L(`** anywhere, and the call sites all use `loc(...)`
+(`loc(curTrail).name`, `loc(trail)` in `renderList`/`renderPeek`/`renderSheetBody`/`openDetail`, and
+`tf('dlDesc')(loc(trail).name, n)`). Leaflet calls (`L.map`, `L.polyline`, `L.control.zoom`, …)
+remain unshadowed.
+
+**Lesson.** **Never introduce a global single-letter `L` in a Leaflet app** — and more generally,
+watch for top-level names colliding with globals exported by CDN libraries (`L` for Leaflet, `$`
+for jQuery, etc.). A hoisted top-level `function` is especially dangerous because it overrides the
+global silently and for the entire file. Surfacing the console `TypeError` (not just eyeballing the
+half-rendered map) is what pinpointed it.
+
+---
+
 ## Part 3 — Testing methodology & lessons
 
 **Tooling.**
@@ -534,3 +665,27 @@ network** (shell + GPX + images from precache; tiles from the per-trail download
 - **Inspect state, don't infer it.** Reading live values in-page (track point counts, SVG content,
   cache keys, rects) caught issues that a glance at the screen would have missed — most notably the
   silently-aborted async flow in Bug 2.
+- **Mind globals from CDN libraries.** A top-level `function L(...)` silently shadowed Leaflet's
+  global `L` and broke every map call (Bug 4). Avoid single-letter top-level names that collide with
+  library globals, and read the console `TypeError` rather than only the half-rendered UI.
+
+---
+
+## Part 4 — Resolved cleanups
+
+Several previously-flagged items were addressed and **verified against the current source**:
+
+- **Dead "Easy" filter chip removed.** `index.html`'s filter bar now has only **All / Moderate /
+  Hard / Very Hard** (`data-filter="all|moderate|hard|veryhard"`); there is **no `data-filter="easy"`
+  chip**. (The `diffClass`/`diffKey` lookup tables in `app.js` still *map* an `"Easy"` key, which is
+  harmless — no trail uses it and no chip exposes it.)
+- **Install banner removed (product decision).** The `#install` banner markup, its CSS, the
+  `checkInstall()` function, and the `installDismiss` handling are all **gone**. The only remaining
+  "install" references are the unrelated service-worker `install` event in `sw.js`.
+- **Unused globals removed.** `markerLayer`, `gpsLayer`, and the `MI` constant no longer exist in
+  `app.js`. (The `FT` constant is **retained** — it is still used for the imperial⇄metric unit
+  conversions in `fmtGain`, `renderSheetBody`, and `fmtElevRange`; distance conversion uses an inline
+  `* 1.609344`.)
+- **`mobile-web-app-capable` added.** `index.html` now declares
+  `<meta name="mobile-web-app-capable" content="yes">` alongside the existing
+  `<meta name="apple-mobile-web-app-capable" content="yes">`.

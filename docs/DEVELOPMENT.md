@@ -1,8 +1,10 @@
-# Development Guide — Washington Trails
+# Development Guide — Ume-chan's Trails (梅ちゃんのトレイル)
 
-Developer guide for **Washington Trails**, a static, offline-capable hiking PWA
-for iPhone. It shows 8 Washington State trails with USGS topographic maps, GPX
-tracks, live GPS, and elevation profiles.
+Developer guide for **Ume-chan's Trails** (梅ちゃんのトレイル), a static,
+offline-capable hiking PWA for iPhone. It shows 8 Washington State trails with
+USGS topographic maps, GPX tracks, live GPS, and elevation profiles. The UI is
+**bilingual — Japanese by default, with a one-tap toggle to English** (all text
+and units; see [`docs/I18N.md`](./I18N.md)).
 
 - **Live site:** <https://huangwaylon.github.io/gpx/>
 - **Repo:** <https://github.com/huangwaylon/gpx>
@@ -94,13 +96,14 @@ how you [verify offline behavior](#6-testing).)
 **This is the single most common source of "my change isn't showing up."**
 
 `sw.js` registers a service worker that caches the app shell — `index.html`,
-`app.css`, `app.js`, `trails.js`, `manifest.json`, `icon.svg`, the Leaflet
-assets, and all bundled GPX + hero images — using a **cache-first** strategy.
-That is exactly what makes the app work offline, but during development it means:
+`app.css`, `app.js`, `trails.js`, `i18n.js`, `manifest.json`, `icon.svg`, the
+Leaflet assets, and all bundled GPX + hero images — using a **cache-first**
+strategy. That is exactly what makes the app work offline, but during
+development it means:
 
-> After you edit `app.js`, `app.css`, `index.html`, `trails.js`, etc., a normal
-> reload serves the **stale cached version**. Your change is on disk but the SW
-> hands the browser the old copy.
+> After you edit `app.js`, `app.css`, `index.html`, `trails.js`, `i18n.js`,
+> etc., a normal reload serves the **stale cached version**. Your change is on
+> disk but the SW hands the browser the old copy.
 
 To see your change you must **unregister the service worker and delete its
 caches**, then reload.
@@ -139,7 +142,7 @@ For **returning users**, the correct way to force everyone onto a new version on
 deploy is to bump the cache version constant at the top of `sw.js`:
 
 ```js
-const APP_V  = 'wa-trails-app-v2';   // ← bump this (…-v3, …-v4) when you ship shell changes
+const APP_V  = 'wa-trails-app-v3';   // ← bump this (…-v4, …-v5) when you ship shell changes
 const TILE_V = 'wa-trails-tiles-v1'; // map-tile cache; bump only if tile handling changes
 ```
 
@@ -156,12 +159,12 @@ self.addEventListener('activate', e => {
 });
 ```
 
-So changing `APP_V` from `wa-trails-app-v2` to `wa-trails-app-v3` invalidates
+So changing `APP_V` from `wa-trails-app-v3` to `wa-trails-app-v4` invalidates
 the old app-shell cache for all users and re-precaches the new shell on next
 load. **Bump `APP_V` whenever you change shell files** (`index.html`, `app.css`,
-`app.js`, `trails.js`, or the bundled asset lists). Leave `TILE_V` alone unless
-you change how tiles are cached — bumping it throws away users' downloaded
-offline maps.
+`app.js`, `trails.js`, `i18n.js`, or the bundled asset lists). Leave `TILE_V`
+alone unless you change how tiles are cached — bumping it throws away users'
+downloaded offline maps.
 
 > The console snippet / Clear site data is for **your** machine during dev.
 > Bumping `APP_V` is for **users** on deploy. They are not interchangeable.
@@ -175,9 +178,9 @@ config to enforce anything, so consistency is by convention. What's actually in
 the codebase:
 
 - **Vanilla ES, in the browser, no modules/bundler.** Scripts are plain
-  `<script src="…">` tags in `index.html`, loaded in order: Leaflet → `trails.js`
-  → `app.js`. There is no `import`/`export`; code shares state through the global
-  scope.
+  `<script src="…">` tags in `index.html`, loaded in order: Leaflet → `i18n.js`
+  → `trails.js` → `app.js`. There is no `import`/`export`; code shares state
+  through the global scope.
 - **`'use strict';`** at the top of `app.js`.
 - **Single quotes** for strings throughout. Template literals (backticks) are
   used for HTML generation and interpolation.
@@ -213,11 +216,28 @@ the codebase:
   (e.g. `renderList()`, `renderSheetBody()`), then wiring up event listeners
   afterward.
 - **Constants up top.** Tunables live as `const`s at the top of `app.js`:
-  `TILE_URL`, `TILE_CACHE`, `DL_ZOOMS`, `PAD`, `FT`, `MI`. Reuse them rather than
+  `TILE_URL`, `TILE_CACHE`, `DL_ZOOMS`, `PAD`, `FT`. Reuse them rather than
   hard-coding values.
 - **CSS custom properties** drive theming in `app.css` (`:root { --bg-0, --blue,
   --safe-t, … }`), including iOS safe-area insets. The design is dark,
   mobile-first, and responsive (portrait + landscape).
+- **Bilingual by construction (`i18n.js`).** The app is Japanese-by-default with
+  an EN toggle, and all text/units live in `window.I18N` (`i18n.js`). **Hard
+  rule: any user-facing string must be added to BOTH `en` and `ja`** in
+  `i18n.js` — never hard-code a display string in `app.js`/`index.html`. Static
+  strings go in `I18N.ui.{en,ja}` and are referenced with `t('key')`;
+  interpolated strings go in `I18N.fn.{en,ja}` as functions called via
+  `tf('key')(args)`. See [`docs/I18N.md`](./I18N.md) for the full structure and
+  helpers (`loc`, `trDiff`, `fmtDist`, …).
+- **`data-i18n` attribute convention.** Static translatable text in
+  `index.html` carries a `data-i18n="key"` (or `data-i18n-aria="key"` for
+  `aria-label`s); `applyStaticI18n()` swaps the text/attribute on load and on
+  every language switch. The HTML carries the **Japanese** default inline so the
+  first paint is correct before JS runs (e.g.
+  `<h1 data-i18n="appName">梅ちゃんのトレイル</h1>`).
+- **Never name a global `L`** — that's Leaflet's global. The trail-localization
+  helper is `loc()` (an earlier `function L(trail)` shadowed Leaflet and broke
+  the map). See the naming caution in [`docs/I18N.md`](./I18N.md).
 
 **There is intentionally no framework, transpiler, or build step.** Keep new
 code in the same plain-ES, no-dependency style. New third-party libraries should
@@ -228,14 +248,17 @@ offline and counts against the [GitHub Pages limits](#8-github-pages-constraints
 
 ## 5. Adding a new trail
 
-This is the most important contributor workflow. A trail is the sum of **four
-edits**: a GPX file, a hero image, a data object, and a service-worker precache
-entry. Miss any one and the trail will look broken or won't work offline.
+This is the most important contributor workflow. A trail is the sum of several
+coordinated edits: a GPX file, a hero image, an English data object, a
+**Japanese translation block**, and a service-worker precache entry. Miss any
+one and the trail will look broken, won't work offline, or shows English text in
+Japanese mode.
 
 > The detailed data-extraction / sourcing pipeline (how trail stats, GPX, and
 > photos are obtained and processed) lives in
-> [`docs/DATA-PIPELINE.md`](./DATA-PIPELINE.md). This section covers wiring an
-> already-sourced trail into the app.
+> [`docs/DATA-PIPELINE.md`](./DATA-PIPELINE.md). Translation conventions live in
+> [`docs/I18N.md`](./I18N.md). This section covers wiring an already-sourced
+> trail into the app.
 
 Pick a **slug** first — a lowercase, hyphenated id (e.g. `lake-22`,
 `snow-lake`). It's used as the trail's identity in the data, the URL hash
@@ -285,7 +308,7 @@ missing field renders as `undefined`. Copy an existing entry and edit it.
 | `reviews` | number | Review count, e.g. `18454` (rendered with thousands separators). |
 | `lengthMi` | number | Length in miles, e.g. `6.1`. Used for the **Distance** sort. |
 | `gainFt` | number | Elevation gain in feet, e.g. `1456`. Used for the **Elevation** sort. |
-| `diff` | string | **Exactly one of** `"Easy"`, `"Moderate"`, `"Hard"`, `"Very Hard"`. Drives the difficulty badge **and** the filter chips — any other value won't match a filter and gets a default badge style. |
+| `diff` | string | **Exactly one of** `"Easy"`, `"Moderate"`, `"Hard"`, `"Very Hard"`. Drives the difficulty badge **and** the filter chips. Note: the **Easy filter chip was removed** (no current trail is Easy), so an `"Easy"` trail still gets a badge but no chip will match it — the filter chips are **All / Moderate / Hard / Very Hard**. Any other value won't match a filter and gets a default badge style. |
 | `route` | string | Route type, e.g. `"Out & back"`, `"Loop"`, `"Point to point"`. (`"Loop"` suppresses the separate "End" marker on the map.) |
 | `time` | string | Estimated time, e.g. `"3 h 17 min"`. |
 | `season` | string | Best season, e.g. `"Apr – Nov"`. |
@@ -320,11 +343,46 @@ Example skeleton:
 }
 ```
 
-> The `8 trails` count in the list header (`index.html`) and `README.md` is a
-> hard-coded string, not computed from `TRAILS.length`. If you change the number
-> of trails, update those copy strings too.
+> The trail count in the list header is **not** computed from `TRAILS.length`.
+> The live string is the `subtitle` key in `i18n.js`, in **both** `ui.en`
+> (`"8 trails · tap to explore"`) and `ui.ja` (`"8つのコース · タップして探索"`);
+> `index.html` carries the Japanese default inline on the
+> `data-i18n="subtitle"` node for first paint. If you change the number of
+> trails, update the count in **both** `ui.en` and `ui.ja` in `i18n.js` (and the
+> `README.md` copy).
 
-### d. Precache the new assets in `sw.js`
+### d. Add the Japanese translation block to `i18n.js`
+
+**Required.** Add a Japanese block to `I18N.trails` in **`i18n.js`**, keyed by
+the **same slug** as the English object:
+
+```js
+I18N.trails = {
+  // …existing entries…
+  "my-new-trail": { ja: {
+    name:        "…",   // katakana transliteration of the trail name
+    area:        "…（ワシントン州）",
+    summary:     "…",
+    description: "…",
+    permit:      "…",
+    tips: [ "…", "…" ],
+  }},
+};
+```
+
+Translate the six text fields (`name, area, summary, description, permit,
+tips`). Everything else (stats, coords, rating, and the enum *values* like
+`"Moderate"`) stays in `trails.js` and is localized through the enum tables.
+Also translate any **new GPX waypoint names** by adding `English → Japanese`
+entries to `I18N.wpt`.
+
+> Without this block the trail still works — `loc()` falls back to the English
+> base field-by-field — but it shows **English text in Japanese mode**, which
+> defeats the purpose. Follow the translation conventions (katakana names,
+> natural prose, です・ます調, metric units woven in) in
+> [`docs/I18N.md`](./I18N.md).
+
+### e. Precache the new assets in `sw.js`
 
 So the trail works **offline**, add **both** the GPX path and the image path to
 the `TRAIL_ASSETS` array in **`sw.js`**:
@@ -344,25 +402,30 @@ but its GPX/photo won't be guaranteed available offline.
 > Paths in `sw.js` are relative to the site root, with **no leading `./`** for
 > trail assets (e.g. `gpx/...`, `images/...`) — match the existing entries.
 
-### e. (Optional but recommended) bump `APP_V`
+### f. (Optional but recommended) bump `APP_V`
 
-Editing `trails.js` and the precache list is a shell change. To make returning
-users pick it up on deploy, bump `APP_V` in `sw.js` (see
+Editing `trails.js`, `i18n.js`, and the precache list is a shell change. To make
+returning users pick it up on deploy, bump `APP_V` in `sw.js` (see
 [the SW section](#3-the-service-worker-gotcha-read-this)):
 
 ```js
-const APP_V = 'wa-trails-app-v3';
+const APP_V = 'wa-trails-app-v4';
 ```
 
 ### Verify the new trail locally
 
 1. Run the server (`python3 -m http.server 8743`).
-2. **Clear site data** (the SW will otherwise serve the old `trails.js`).
+2. **Clear site data** (the SW will otherwise serve the old `trails.js`/`i18n.js`).
 3. Confirm the new card appears in the list, the filter chip for its difficulty
-   includes it, and both sorts place it correctly.
+   includes it (All / Moderate / Hard / Very Hard), and both sorts place it
+   correctly.
 4. Open it and confirm the map draws the track, the elevation profile renders,
    and the hero image loads.
-5. Run the [offline check](#6-testing).
+5. **Toggle to Japanese** (the EN/日本語 button) and confirm the name, area,
+   summary, description, tips, and any waypoint labels render in Japanese (no
+   English fallback). The app defaults to Japanese, so also confirm the EN
+   toggle shows the English base correctly.
+6. Run the [offline check](#6-testing).
 
 ---
 
@@ -380,13 +443,21 @@ the page). Test at iPhone-like viewports in **both orientations**:
 (Set these via DevTools device toolbar / `Emulation`. The landscape layout has
 its own branch in the bottom-sheet code, so test it explicitly.)
 
+**Test both languages.** The app is **Japanese by default**; use the EN/日本語
+toggle (top-right of the list) to switch and re-check the screens in **both**
+languages — text, units (km/m vs mi/ft), difficulty/route labels, marker
+popups, and the download modal all change. Dev tip: the chosen language is
+persisted in `localStorage.lang`, so to test the first-run default, reset it
+with `localStorage.removeItem('lang')` (in the DevTools console) and reload — it
+should come up in Japanese.
+
 ### Functional checklist
 
 **List screen**
 
 - [ ] The list renders **8 cards** (one per trail in `TRAILS`).
-- [ ] Difficulty filter chips (All / Easy / Moderate / Hard / Very Hard) filter
-      correctly; "All" shows everything.
+- [ ] Difficulty filter chips (**All / Moderate / Hard / Very Hard** — there is
+      no "Easy" chip) filter correctly; "All" shows everything.
 - [ ] **↕ Distance** and **↕ Elevation** sorts reorder the cards; tapping an
       active sort chip again clears the sort.
 - [ ] Cards show distance, gain, route, rating; offline-ready cards show the ✓
@@ -409,6 +480,16 @@ its own branch in the bottom-sheet code, so test it explicitly.)
 - [ ] **Download for offline:** the "Download map for offline" button opens the
       modal, shows a tile count, runs the progress bar to 100%, and flips to
       "✓ Map saved for offline" (and the list card gains its ✓ badge).
+
+**Language (run the above in both EN and JA)**
+
+- [ ] First load with no stored preference (`localStorage.removeItem('lang')`)
+      comes up in **Japanese**.
+- [ ] The EN/日本語 toggle switches every screen live: list cards, the detail
+      title/peek/sheet, stat units (km/m ↔ mi/ft), difficulty/route/dogs labels,
+      season/time strings, and the map marker popups (trailhead/end + waypoints).
+- [ ] No untranslated English leaks through in Japanese mode (a missing
+      `I18N.trails[slug].ja` field or `I18N.wpt` entry shows English).
 
 ### Offline verification (do this — it's the whole point of the app)
 
@@ -500,10 +581,11 @@ du -sh --exclude=.git --exclude=alltrails .   # deployed app size (~3.4 MB)
 
 ```
 gpx/                     # ← repo root, served as-is by GitHub Pages
-├── index.html           # App shell: list + detail screens
+├── index.html           # App shell: list + detail screens (data-i18n keys, JA inline)
 ├── app.css              # Dark, mobile-first, responsive styles (CSS custom props)
-├── app.js               # Routing, Leaflet map, GPX parsing, GPS, elevation, tile download
-├── trails.js            # window.TRAILS — all trail metadata (edit to add trails)
+├── app.js               # Routing, Leaflet map, GPX parsing, GPS, elevation, tile download, i18n helpers
+├── i18n.js              # UI strings + per-trail Japanese translations (window.I18N)
+├── trails.js            # window.TRAILS — trail metadata, English base content (edit to add trails)
 ├── sw.js                # Service worker: offline caching (SHELL + TRAIL_ASSETS, APP_V/TILE_V)
 ├── manifest.json        # PWA manifest (name, icons, standalone display)
 ├── icon.svg             # App icon (also Apple touch icon)
@@ -513,12 +595,15 @@ gpx/                     # ← repo root, served as-is by GitHub Pages
 ├── images/              # Hero photos (<slug>.webp, ~1200×800)
 ├── docs/
 │   ├── DEVELOPMENT.md   # ← this file
-│   └── DATA-PIPELINE.md # Trail data sourcing/extraction pipeline (see §5)
+│   ├── DATA-PIPELINE.md # Trail data sourcing/extraction pipeline (see §5)
+│   └── I18N.md          # Internationalization: window.I18N, helpers, translation conventions
 └── alltrails/           # Source material (~166 MB) — GIT-IGNORED, never deployed
 ```
 
 > Note: the load order in `index.html` matters — Leaflet loads first, then
-> `trails.js` (defines `window.TRAILS`), then `app.js` (consumes it).
+> `i18n.js` (defines `window.I18N`), then `trails.js` (defines `window.TRAILS`),
+> then `app.js` (consumes both). `i18n.js` is part of the app shell and is
+> precached by the service worker.
 
 ### What's git-ignored
 

@@ -1,12 +1,15 @@
-# Washington Trails
+# Ume-chan's Trails 梅ちゃんのトレイル
 
-An offline-capable hiking PWA for iPhone. Browse 8 Washington State trails, view
-topographic maps with GPX tracks, see live GPS position, elevation profiles, and
-full trail details — all working offline once cached.
+An offline-capable hiking PWA for iPhone. Browse 8 trails (in Washington State, USA), view
+topographic maps with GPX tracks, see live GPS position, elevation profiles, and full trail
+details — all working offline once cached. The interface is **bilingual: Japanese by default,
+with a one-tap toggle to English**.
 
 ## Features
 
-- **8 curated WA trails** with stats, descriptions, tips, and photos (data via AllTrails)
+- **Bilingual UI (日本語 / English)** — Japanese by default; everything is translated,
+  including trail descriptions, map labels, and units (km/m in JA, mi/ft in EN)
+- **8 curated trails** with stats, descriptions, tips, and photos (data via AllTrails)
 - **USGS topographic maps** (public domain) with the trail route, waypoints, and trailhead
 - **Live GPS** — your location plotted on the map and the elevation profile
 - **Elevation profiles** drawn from the GPX track
@@ -30,16 +33,17 @@ Static site — no build step, no server. Plain HTML/CSS/JS + [Leaflet](https://
 Deployable to GitHub Pages as-is.
 
 - `index.html` — app shell (list + detail screens)
-- `app.js` — routing, map, GPX parsing, GPS, elevation, tile download
+- `app.js` — i18n, routing, map, GPX parsing, GPS, elevation, tile download
+- `i18n.js` — UI strings, unit formatting, and per-trail Japanese translations
 - `app.css` — dark, mobile-first, responsive styles
-- `trails.js` — trail metadata
+- `trails.js` — trail metadata (English base content)
 - `gpx/` — GPX tracks · `images/` — hero photos
 - `sw.js` — service worker (offline caching)
 
 ## Documentation
 
-Thorough docs live in [`docs/`](docs/) — architecture, development guide, iOS PWA
-constraints, the data pipeline, and decisions/lessons. See [`CLAUDE.md`](CLAUDE.md) for a
-quick orientation and the golden rules. Start at [`docs/README.md`](docs/README.md).
+Thorough docs live in [`docs/`](docs/) — architecture, internationalization, development
+guide, iOS PWA constraints, the data pipeline, and decisions/lessons. See [`CLAUDE.md`](CLAUDE.md)
+for a quick orientation and the golden rules. Start at [`docs/README.md`](docs/README.md).
 
 Map tiles © USGS National Map. Trail info & photos via AllTrails.

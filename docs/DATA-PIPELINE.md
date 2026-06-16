@@ -1,4 +1,4 @@
-# Washington Trails — Data Pipeline
+# Ume-chan's Trails — Data Pipeline
 
 How the source data for the eight bundled trails was extracted from saved
 AllTrails web pages and turned into the app's runtime assets
@@ -131,8 +131,8 @@ They appear in the raw HTML like this (note the escaped quotes):
 ```
 
 `9816.974 m ÷ 1609.344 = 6.1 mi`, which matches the published Lake 22 length
-exactly. The conversion constants are the same ones `app.js` uses
-(`FT = 3.28084`, `MI = 1609.344`).
+exactly. `app.js` uses the same factors at runtime — `FT = 3.28084` as a named
+constant for elevation, and `1609.344` inline (`mi → km`) for distance display.
 
 > ### ⚠️ Gotcha: the page embeds *many* trails, not just the one
 > An AllTrails page also embeds the stats for **nearby / recommended

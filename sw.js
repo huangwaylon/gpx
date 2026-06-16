@@ -1,8 +1,8 @@
-const APP_V  = 'wa-trails-app-v2';
+const APP_V  = 'wa-trails-app-v3';
 const TILE_V = 'wa-trails-tiles-v1';
 
 const SHELL = [
-  './', './index.html', './app.css', './app.js', './trails.js',
+  './', './index.html', './app.css', './app.js', './trails.js', './i18n.js',
   './manifest.json', './icon.svg',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',

@@ -1,7 +1,7 @@
 {
-  "name": "Washington Trails",
-  "short_name": "WA Trails",
-  "id": "/wa-trails",
+  "name": "梅ちゃんのトレイル",
+  "short_name": "梅ちゃん",
+  "id": "/ume-trails",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
