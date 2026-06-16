@@ -1,5 +1,6 @@
-// Washington Trails — trail data
+// Trail data — 8 Washington State (USA) trails + 4 Japan trails.
 // Stats sourced from AllTrails (length/gain/difficulty); geometry from bundled GPX.
+// `tiles` picks the offline basemap source: omitted = USGS topo (US), "gsi" = GSI 地理院タイル (Japan).
 window.TRAILS = [
   {
     slug: "lake-22",
@@ -165,6 +166,96 @@ window.TRAILS = [
       "Some sections require off-trail navigation — bring offline maps.",
       "Significant elevation loss on the descent — hard on the knees.",
       "Only for experienced adventurers. Two cars or a shuttle needed."
+    ]
+  },
+
+  // ───────────────────────── Japan (GSI 地理院タイル basemap) ─────────────────────────
+  {
+    slug: "fuji-yoshida",
+    name: "Mt. Fuji: Yoshida Trail (5th Station Ascent)",
+    area: "Fujiyoshida, Yamanashi",
+    img: "images/fuji-yoshida.webp",
+    gpx: "gpx/Mt_Fuji_Yoshida.gpx",
+    tiles: "gsi",
+    rating: 4.6, reviews: 448,
+    lengthMi: 4.2, gainFt: 4701, diff: "Hard",
+    route: "Point to point", time: "3 h 46 min",
+    season: "Jul – Sep", dogs: "Not allowed",
+    permit: "Climbing season only · Yoshida Trail reservation + ¥2,000 entry fee (2024–)",
+    center: [35.3800, 138.7403],
+    summary: "The most popular route up Mt. Fuji — a relentless switchback climb from the Subaru Line 5th Station up through volcanic cinder and a line of mountain huts to the 3,710 m crater rim, the classic spot to watch the sunrise (goraikō).",
+    description: "This is the busiest of Mt. Fuji's four routes and the one most first-timers choose. From the Subaru Line 5th Station (≈2,300 m) the trail climbs steadily through cinder slopes and dwarf pine, passing red torii gates, small shrines, and a near-continuous string of mountain huts. The ascending and descending trails are separate above the 6th Station, so this track follows the up-route only, finishing at the Yoshida-side crater rim near Kusushi Shrine (≈3,710 m); the true summit, Kengamine (3,776 m), is a 30–60 min walk around the crater (ohachi-meguri). Many climbers break the ascent with an overnight hut stay to acclimatize and reach the rim for dawn.",
+    tips: [
+      "Climbing season only — roughly early July to early September. Off-season the route is snowbound, hut-less, and genuinely dangerous.",
+      "Since 2024 the Yoshida Trail requires an advance reservation and a ¥2,000 entry fee (daily cap ~4,000; the 5th-Station gate is closed roughly 2 pm–3 am except for hut guests).",
+      "Altitude reaches ~3,710 m — climb slowly and watch for altitude sickness. An overnight hut stay helps you acclimatize.",
+      "Even in summer the summit can be near freezing with high wind. Bring warm layers, rain gear, a headlamp, and cash for huts and toilets."
+    ]
+  },
+  {
+    slug: "fuji-gotemba",
+    name: "Mt. Fuji: Gotemba Trail",
+    area: "Gotemba, Shizuoka",
+    img: "images/fuji-gotemba.webp",
+    gpx: "gpx/Mt_Fuji_Gotemba.gpx",
+    tiles: "gsi",
+    rating: 4.7, reviews: 137,
+    lengthMi: 12.5, gainFt: 7775, diff: "Hard",
+    route: "Out & back", time: "11 h 50 min",
+    season: "Jul – Sep", dogs: "Not allowed",
+    permit: "Climbing season only · no gate fee (¥1,000 conservation donation requested)",
+    center: [35.3508, 138.7609],
+    summary: "The longest, quietest, and most demanding of Mt. Fuji's four routes — a vast climb over black volcanic sand from the low Gotemba trailhead (1,440 m) to the 3,750 m crater rim, with the famous 'sunabashiri' sand-run on the way down.",
+    description: "The Gotemba route starts far lower than the others (≈1,440 m), so it is the longest and has by far the most elevation gain — a serious undertaking for fit, experienced, well-acclimatized hikers. Huts and water are sparse, and the trail crosses long, open slopes of loose cinder with little shelter and big exposure to wind and sun. The reward on the descent is the sunabashiri (大砂走り) — a kilometres-long plunge down soft volcanic sand that loses altitude fast. Because of its length most people climb it over two days, staying at one of the few huts near the 7th–8th Stations.",
+    tips: [
+      "Climbing season only — roughly early July to early September, like all Fuji routes.",
+      "The longest route by far (about 10–12 h round trip). Start well before dawn, or split it with a hut stay.",
+      "Few huts and little water — carry more than you think you need, plus cash.",
+      "Gaiters help on the sunabashiri sand descent, which is fun but hard on the knees. Watch for altitude sickness up high."
+    ]
+  },
+  {
+    slug: "daibosatsu",
+    name: "Mount Daibosatsu Loop",
+    area: "Kōshū, Yamanashi",
+    img: "images/daibosatsu.webp",
+    gpx: "gpx/Mount_Daibosatsu_Loop.gpx",
+    tiles: "gsi",
+    rating: 4.6, reviews: 29,
+    lengthMi: 5.4, gainFt: 2014, diff: "Hard",
+    route: "Loop", time: "3 h 41 min",
+    season: "Apr – Nov", dogs: "Leashed",
+    permit: "No permit — free; parking at Kamihikawa Pass (上日川峠)",
+    center: [35.7385, 138.8449],
+    summary: "A friendly ridge loop in the Okuchichibu mountains with one of the best Mt. Fuji panoramas in Yamanashi — easy access to a breezy 2,000 m skyline and the historic Daibosatsu Pass.",
+    description: "One of Japan's '100 Famous Mountains' and a perfect first alpine ridge. From Kamihikawa Pass (≈1,580 m) the loop climbs gently to the historic Daibosatsu Pass (1,897 m), then follows an open, grassy skyline over Raikō-iwa and the wooded summit of Daibosatsu-rei (2,057 m). The ridge gives sweeping views over Lake Kamihikawa to Mt. Fuji and the Southern Alps before dropping back through forest to the trailhead. Well-marked and hugely popular on clear weekends.",
+    tips: [
+      "Very easy access and well-signed — a great introduction to Japanese alpine ridge walking.",
+      "The summit ridge is open and windy; bring an extra layer even on warm days.",
+      "Best in autumn for colour and crisp Mt. Fuji views; expect snow and ice from late November into April (microspikes).",
+      "Parking and toilets at Kamihikawa Pass fill early on fine weekends."
+    ]
+  },
+  {
+    slug: "kinpu",
+    name: "Mount Kinpu (Kanayama)",
+    area: "Hokuto, Yamanashi",
+    img: "images/kinpu.webp",
+    gpx: "gpx/Mount_Kinpu_Kanayama.gpx",
+    tiles: "gsi",
+    rating: 4.8, reviews: 2,
+    lengthMi: 9.8, gainFt: 4304, diff: "Hard",
+    route: "Out & back", time: "7 h 22 min",
+    season: "Jun – Oct", dogs: "Leashed",
+    permit: "No permit — free; trailhead parking near Mizugaki / Kanayama",
+    center: [35.8755, 138.5996],
+    summary: "A rugged full-day climb to the granite crown of Mt. Kinpu (2,599 m) and its iconic Gojō-iwa rock pillar, high on the Yamanashi–Nagano border in the wild Okuchichibu range.",
+    description: "Mt. Kinpu is one of Japan's '100 Famous Mountains' and the high point of the Okuchichibu massif. From the Mizugaki/Kanayama trailhead the path climbs steadily through deep forest and mossy granite, passing huts and springs, before breaking out onto a boulder-strewn alpine ridge. The summit is crowned by Gojō-iwa (五丈岩), a giant granite tower visible for miles, with huge views across to Mt. Fuji, Yatsugatake, and the Southern and Central Alps. A long, rocky, rewarding day out.",
+    tips: [
+      "A long day with real elevation gain — start early and pace yourself on the rocky upper ridge.",
+      "Granite boulder-hopping near the top; sturdy boots and careful footing required.",
+      "Roughly June to October; snow lingers late and arrives early at 2,600 m.",
+      "Gojō-iwa is a sacred rock pillar — enjoy it, but think twice about scrambling up it."
     ]
   }
 ];

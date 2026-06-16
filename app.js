@@ -4,11 +4,27 @@
    Ume-chan's Trails — offline hiking PWA (JA default, EN toggle)
    ════════════════════════════════════════════════════════════ */
 
-const TILE_URL   = 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}';
 const TILE_CACHE = 'wa-trails-tiles-v1';
 const DL_ZOOMS   = [10, 11, 12, 13, 14, 15, 16];
 const PAD        = 0.01;          // bbox padding in degrees for tile download
 const FT         = 3.28084;
+
+// Map tile sources. Each trail picks one via its `tiles` field (default = usgs).
+// US trails use USGS topo ({z}/{y}/{x}); Japan trails use GSI 地理院タイル ({z}/{x}/{y}).
+// The {token} ORDER in the two URLs differs, but the download/probe code substitutes
+// by name (.replace('{z}'…).replace('{y}'…).replace('{x}'…)), so the same XYZ
+// (Web Mercator) tile math works unchanged for both.
+const TILE_SOURCES = {
+  usgs: {
+    url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
+    maxZoom: 16, leaflet: '© USGS', creditKey: 'attribUsgs',
+  },
+  gsi: {
+    url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
+    maxZoom: 16, leaflet: '地理院タイル © 国土地理院', creditKey: 'attribGsi',
+  },
+};
+const trailSource = trail => TILE_SOURCES[trail.tiles] || TILE_SOURCES.usgs;
 
 // ── App state ──
 let map = null, curTrail = null, trackLayer = null;
@@ -16,7 +32,7 @@ let trackPts = [], trackWpts = [];
 let totalDist = 0, gpsWatch = null, gpsMk = null, gpsAcc = null, gpsFollow = false;
 let curPos = null, wakeLock = null;
 let sheetState = 'peek';          // 'peek' | 'full'
-const cacheStatus = {};           // slug -> bool (tiles cached)
+let dlState = 'idle';             // global offline-maps download: 'idle' | 'busy' | 'done'
 
 const $  = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
@@ -58,6 +74,7 @@ function applyStaticI18n() {
   $$('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
   $$('[data-i18n-aria]').forEach(el => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
   document.title = t('appName');
+  updateDlBtn();                  // the global download button's label is state+lang dependent
 }
 
 function setLang(next) {
@@ -81,7 +98,7 @@ window.addEventListener('load', async () => {
   renderList();
   bindGlobal();
   await refreshCacheStatus();
-  renderList();                   // re-render with offline badges
+  updateDlBtn();                  // reflect detected offline-maps state (idle / done)
   routeFromHash();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
 });
@@ -120,14 +137,11 @@ function renderList() {
 
   wrap.innerHTML = trails.map(trail => {
     const tr = loc(trail);
-    const offIcon = cacheStatus[trail.slug]
-      ? `<div class="card-offline ready" title="${t('dlSaved')}">✓</div>` : '';
     return `
     <article class="card" data-slug="${trail.slug}">
       <div class="card-img-wrap">
         <img class="card-img" src="${trail.img}" alt="${tr.name}" loading="lazy">
         <span class="card-badge-diff ${diffClass(trail.diff)}">${trDiff(trail.diff)}</span>
-        ${offIcon}
         <div class="card-titlebar">
           <div class="card-title">${tr.name}</div>
           <div class="card-area">${tr.area}</div>
@@ -163,11 +177,9 @@ function bindGlobal() {
   $('#lang-toggle').addEventListener('click', () => setLang(lang === 'ja' ? 'en' : 'ja'));
   $('#btn-back').addEventListener('click', () => { location.hash = ''; });
   $('#btn-gps').addEventListener('click', toggleGPS);
+  $('#dl-all').addEventListener('click', downloadAll);
 
   initSheetDrag();
-
-  $('#dl-cancel').addEventListener('click', () => { $('#dl-modal').hidden = true; });
-  $('#dl-go').addEventListener('click', startDownload);
 }
 
 function showList() {
@@ -204,7 +216,6 @@ function renderPeek(trail) {
 
 function renderSheetBody(trail) {
   const tr = loc(trail);
-  const cached = cacheStatus[trail.slug];
   // Stat boxes: km/m in JA, mi/k-ft in EN
   const distV = lang==='ja' ? (trail.lengthMi*1.609344).toFixed(1) : trail.lengthMi;
   const distL = lang==='ja' ? '距離 (km)' : t('statDistance');
@@ -222,11 +233,6 @@ function renderSheetBody(trail) {
       <div class="hd"><span class="t">${t('elevation')}</span><span class="r" id="elev-range"></span></div>
       <svg id="elev-svg" preserveAspectRatio="none"></svg>
     </div>
-
-    <button class="dl-btn ${cached?'ready':''}" id="sheet-dl">
-      ${cached ? t('dlSaved') : t('dlDownload')}
-    </button>
-    <div class="dl-prog" id="sheet-dl-prog"><i></i></div>
 
     <div class="section">
       <h3>${t('secOverview')}</h3>
@@ -251,10 +257,9 @@ function renderSheetBody(trail) {
       </dl>
     </div>
     <div class="section">
-      <p style="font-size:11px;color:var(--muted)">${t('attribution')}</p>
+      <p style="font-size:11px;color:var(--muted)">${t('attribTrail')} ／ ${t(trailSource(trail).creditKey)}</p>
     </div>
   `;
-  $('#sheet-dl').addEventListener('click', () => openDownloadModal(trail));
   drawProfile();
 }
 
@@ -268,9 +273,10 @@ function fmtTime(s) {
 // ── Map ──
 function initMap() {
   if (map) { map.remove(); map = null; }
+  const src = trailSource(curTrail);
   map = L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center, zoom:13, tap:true });
   const zoom = L.control.zoom({ position:'topright' }).addTo(map);
-  L.tileLayer(TILE_URL, { maxZoom:16, minZoom:8, attribution:'© USGS', crossOrigin:true }).addTo(map);
+  L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:8, attribution:src.leaflet, crossOrigin:true }).addTo(map);
   map.on('dragstart', () => { gpsFollow = false; $('#btn-gps').classList.remove('on'); });
   zoom.getContainer().style.marginTop = 'calc(54px + env(safe-area-inset-top,0px))';
 }
@@ -496,76 +502,91 @@ function initSheetDrag(){
 }
 
 // ════════════════════════════════════════════════════════════
-//  Tile download (offline)
+//  Offline map download — ONE button downloads ALL trails' tiles
+//  (across both tile sources). iOS has no background fetch, so this
+//  is a single foreground, user-initiated action with inline progress.
 // ════════════════════════════════════════════════════════════
-let dlTrail=null, dlRunning=false;
-function openDownloadModal(trail){
-  dlTrail=trail;
-  const n=countTiles(trail);
-  $('#dl-desc').textContent=tf('dlDesc')(loc(trail).name, n);
-  $('#dl-bar').style.width='0%'; $('#dl-status').textContent=tf('dlTiles')(n);
-  $('#dl-go').textContent=t('dlGo'); $('#dl-go').disabled=false;
-  $('#dl-modal').hidden=false;
-}
-function trailBox(trail){
-  let n=-90,s=90,e=-180,w=180;
-  if(trackPts.length && trail===curTrail){
-    trackPts.forEach(p=>{ n=Math.max(n,p.lat);s=Math.min(s,p.lat);e=Math.max(e,p.lon);w=Math.min(w,p.lon); });
-  } else {
-    n=trail.center[0]+0.02; s=trail.center[0]-0.02; e=trail.center[1]+0.02; w=trail.center[1]-0.02;
-  }
-  return { n:n+PAD, s:s-PAD, e:e+PAD, w:w-PAD };
-}
-function countTiles(trail){
-  let n=0; const b=trailBox(trail);
-  DL_ZOOMS.forEach(z=>{ const r=tRange(b,z); n+=(r.x1-r.x0+1)*(r.y1-r.y0+1); });
-  return n;
-}
-function tileURLs(trail){
-  const urls=[]; const b=trailBox(trail);
-  DL_ZOOMS.forEach(z=>{ const r=tRange(b,z);
-    for(let x=r.x0;x<=r.x1;x++) for(let y=r.y0;y<=r.y1;y++)
-      urls.push(TILE_URL.replace('{z}',z).replace('{y}',y).replace('{x}',x)); });
-  return urls;
-}
 function tRange(b,z){ const a=ll2t(b.s,b.w,z), c=ll2t(b.n,b.e,z);
   return {x0:Math.min(a.x,c.x),x1:Math.max(a.x,c.x),y0:Math.min(a.y,c.y),y1:Math.max(a.y,c.y)}; }
 function ll2t(lat,lon,z){ const n=1<<z; const x=Math.floor(n*(lon+180)/360);
   const r=lat*Math.PI/180; const y=Math.floor(n*(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2);
   return {x,y}; }
 
-async function startDownload(){
-  if(dlRunning||!dlTrail) return;
-  dlRunning=true;
-  $('#dl-go').disabled=true; $('#dl-go').textContent=t('dlDownloading');
-  const urls=tileURLs(dlTrail), total=urls.length; let done=0;
+// Padded bounding box of a trail, computed from its GPX track points
+// (the GPX is already precached by the service worker, so this works offline too).
+async function gpxBox(trail){
+  let n=-90,s=90,e=-180,w=180;
+  try{
+    const xml=new DOMParser().parseFromString(await (await fetch(trail.gpx)).text(),'text/xml');
+    xml.querySelectorAll('trkpt').forEach(p=>{
+      const la=+p.getAttribute('lat'), lo=+p.getAttribute('lon');
+      n=Math.max(n,la); s=Math.min(s,la); e=Math.max(e,lo); w=Math.min(w,lo);
+    });
+    if(n<s) throw 0;                              // no track points parsed
+  }catch(_){ const [cy,cx]=trail.center;          // fall back to a small box around center
+    n=cy+0.02; s=cy-0.02; e=cx+0.02; w=cx-0.02; }
+  return { n:n+PAD, s:s-PAD, e:e+PAD, w:w-PAD };
+}
+
+// Every tile URL for one box across DL_ZOOMS, built from that trail's tile template.
+function tileURLsFor(box, urlTpl){
+  const urls=[];
+  DL_ZOOMS.forEach(z=>{ const r=tRange(box,z);
+    for(let x=r.x0;x<=r.x1;x++) for(let y=r.y0;y<=r.y1;y++)
+      urls.push(urlTpl.replace('{z}',z).replace('{y}',y).replace('{x}',x)); });
+  return urls;
+}
+
+async function downloadAll(){
+  if(dlState==='busy' || !('caches'in window)) return;
+  dlState='busy'; updateDlBtn(); updateDlProgress(0,1);
+  // Gather every tile URL across all trails (each via its own source), then dedupe.
+  let urls=[];
+  for(const trail of TRAILS){
+    const box=await gpxBox(trail);
+    urls.push(...tileURLsFor(box, trailSource(trail).url));
+  }
+  urls=[...new Set(urls)];
+  const total=urls.length || 1; let done=0;
   const cache=await caches.open(TILE_CACHE), BATCH=8;
   for(let i=0;i<urls.length;i+=BATCH){
     await Promise.allSettled(urls.slice(i,i+BATCH).map(async u=>{
       try{ if(!(await cache.match(u))){ const r=await fetch(u,{mode:'cors'}); if(r.ok||r.type==='opaque') await cache.put(u,r); } }catch(_){}
-      done++;
-      const pct=Math.round(done/total*100);
-      $('#dl-bar').style.width=pct+'%'; $('#dl-status').textContent=tf('dlProgress')(done,total,pct);
+      done++; updateDlProgress(done,total);
     }));
   }
-  dlRunning=false;
-  $('#dl-status').textContent=tf('dlDone')(done);
-  $('#dl-go').textContent=t('dlDoneBtn');
-  cacheStatus[dlTrail.slug]=true;
-  const b=$('#sheet-dl'); if(b){ b.classList.add('ready'); b.textContent=t('dlSaved'); }
-  renderList();
-  setTimeout(()=>{ $('#dl-modal').hidden=true; }, 1400);
+  dlState='done'; updateDlBtn();
 }
 
+// Reflect the current state + language on the global download button.
+function updateDlBtn(){
+  const b=$('#dl-all'); if(!b) return;
+  b.classList.toggle('busy', dlState==='busy');
+  b.classList.toggle('done', dlState==='done');
+  if(dlState==='idle') b.textContent=t('dlAll');
+  else if(dlState==='done') b.textContent=t('dlAllDone');
+  // 'busy' label is the live percentage, set by updateDlProgress()
+}
+function updateDlProgress(done,total){
+  const b=$('#dl-all'); if(!b) return;
+  const pct=Math.round(done/total*100);
+  b.style.setProperty('--p', pct+'%');
+  if(dlState==='busy') b.textContent=pct+'%';
+}
+
+// On startup decide the button state: 'done' only if a sample tile for EVERY trail
+// (its z14 center tile, from that trail's own source) is already cached; else 'idle'.
 async function refreshCacheStatus(){
-  if(!('caches'in window)) return;
+  if(dlState==='busy' || !('caches'in window)) return;
   try{
     const cache=await caches.open(TILE_CACHE);
+    let all=true;
     for(const trail of TRAILS){
-      const z=14, {x,y}=ll2t(trail.center[0],trail.center[1],z);
-      const u=TILE_URL.replace('{z}',z).replace('{y}',y).replace('{x}',x);
-      cacheStatus[trail.slug] = !!(await cache.match(u));
+      const {x,y}=ll2t(trail.center[0],trail.center[1],14);
+      const u=trailSource(trail).url.replace('{z}',14).replace('{y}',y).replace('{x}',x);
+      if(!(await cache.match(u))){ all=false; break; }
     }
+    dlState = all ? 'done' : 'idle';
   }catch(_){}
 }
 

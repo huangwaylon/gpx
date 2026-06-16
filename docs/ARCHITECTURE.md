@@ -10,18 +10,21 @@
 ## 1. High-level overview
 
 **Ume-chan's Trails** (Japanese: 梅ちゃんのトレイル) is an **offline-capable hiking PWA** built
-for the iPhone (Safari / "Add to Home Screen"). It presents **8 Washington State hiking
-trails** and is **bilingual** — **Japanese by default**, with a one-tap toggle to English
-(see §1a). A user browses a scrollable list of trail cards, taps one, and lands on a
-full-screen trail-detail view with:
+for the iPhone (Safari / "Add to Home Screen"). It presents **12 trails — 8 in Washington
+State (USA) and 4 in Japan** — and is **bilingual** — **Japanese by default**, with a
+one-tap toggle to English (see §1a). A user browses a scrollable list of trail cards, taps
+one, and lands on a full-screen trail-detail view with:
 
-- a **USGS topographic** base map (Leaflet),
+- a **topographic** base map (Leaflet) — **USGS** topo for the US trails, **GSI 地理院タイル**
+  (Geospatial Information Authority of Japan) for the Japan trails, chosen per trail (§7),
 - the trail's **GPX track** overlaid as a red polyline with a black halo,
 - **trailhead / endpoint / waypoint** markers,
 - **live GPS position** (pulsing blue dot + accuracy circle) with optional follow mode,
 - an **SVG elevation profile** that tracks the hiker's position along the route,
-- a draggable **bottom sheet** with trail stats, description, tips, and a details table,
-- a one-tap **"Download map for offline"** flow that pre-caches map tiles.
+- a draggable **bottom sheet** with trail stats, description, tips, and a details table.
+
+A single **"download all maps"** button in the list header pre-caches the map tiles for
+**every** trail (across both tile sources) in one tap (§12).
 
 ### The two-screen, single-page model
 
@@ -58,22 +61,22 @@ boots on `window load`.
 ```
                           ┌───────────────────────────────────────────────┐
                           │                  index.html                    │
-                          │  (app shell: #list + #detail sections, modal)  │
+                          │     (app shell: #list + #detail sections)      │
                           └───────────────┬───────────────────────────────┘
                                           │ <script> tags, in order
         ┌──────────────────┬──────────────┼──────────────┬───────────────┐
         ▼                  ▼              ▼               ▼               ▼
  leaflet@1.9.4 (unpkg)  i18n.js       trails.js        app.js
-   map engine + CSS    window.I18N  window.TRAILS[8]  ALL app logic
+   map engine + CSS    window.I18N  window.TRAILS[12] ALL app logic
                       (UI + JA text)                       │
         ┌───────────────────────────────────────────────────────────┼───────────────┐
         ▼                  ▼                ▼              ▼          ▼                ▼
-   renderList()       openDetail()      initMap()     loadTrail()  GPS subsystem   tile download
+   renderList()       openDetail()      initMap()     loadTrail()  GPS subsystem   downloadAll()
    (list screen)     (detail screen)   (Leaflet)     (GPX parse)  (watchPosition) (Cache API)
         │                  │                │              │                            │
         ▼                  ▼                ▼              ▼                            ▼
-   #trail-list        #sheet + #map    USGS tiles      drawTrack()                 caches.open(
-   cards              bottom sheet     ───────────►    drawProfile()                'wa-trails-
+   #trail-list        #sheet + #map    USGS / GSI      drawTrack()                 caches.open(
+   cards              bottom sheet     tiles  ───────►    drawProfile()                'wa-trails-
                                             ▲                                        tiles-v1')
                                             │                                            │
                                             └──────────────┬─────────────────────────────┘
@@ -81,7 +84,7 @@ boots on `window load`.
                                                   ┌──────────────────┐
                                                   │     sw.js        │  cache-first fetch
                                                   │  APP_V  (shell)  │  ◄── HTML/CSS/JS/GPX/img
-                                                  │  TILE_V (tiles)  │  ◄── USGS tiles
+                                                  │  TILE_V (tiles)  │  ◄── USGS + GSI tiles
                                                   └──────────────────┘
 ```
 
@@ -104,17 +107,19 @@ map marker labels, the difficulty/route/dog enums, seasons, times, and measureme
 global, `window.I18N` (`i18n.js:6`), holding all UI strings and the Japanese overrides:
 
 - **`ui.{en,ja}`** — static UI strings keyed by name (`appName`, `subtitle`, filter labels,
-  section headings, button labels, alerts, marker labels, …) (`i18n.js:9-90`).
-- **`fn.{en,ja}`** — functions that produce locale-aware **dynamic** strings (e.g.
-  `dlDesc(name,n)`, `dlProgress(done,total,pct)`, `dlDone(done)`) (`i18n.js:93-106`).
+  section headings, the download-button labels `dlAll`/`dlAllDone`, the attribution credits
+  `attribTrail`/`attribUsgs`/`attribGsi`, marker labels, alerts, …) (`i18n.js:9-83`).
+- **`fn.{en,ja}`** — reserved for functions producing locale-aware **dynamic** strings, called
+  via `tf()`. **Both are currently empty `{}`** (`i18n.js:89-92`): the offline-download UI now
+  shows a bare percentage on the global button, so no dynamic-string entries are needed today.
 - **Enum tables** `diff` / `route` / `dogs` — map the English data tokens (`"Moderate"`,
-  `"Out & back"`, `"Leashed"`, …) to their JA equivalents (`i18n.js:109-120`).
+  `"Out & back"`, `"Leashed"`, …) to their JA equivalents (`i18n.js:95-106`).
 - **`months`** — English month abbreviation → JA (`"Apr"`→`"4月"`) for season strings
-  (`i18n.js:121-124`).
-- **`wpt`** — GPX waypoint name → JA (`"Bridge"`→`"橋"`, …) (`i18n.js:126-133`).
+  (`i18n.js:107-110`).
+- **`wpt`** — GPX waypoint name → JA (`"Bridge"`→`"橋"`, …) (`i18n.js:112-119`).
 - **`trails.<slug>.ja`** — per-trail Japanese content (`name`, `area`, `summary`,
   `description`, `permit`, `tips`) that **overrides** the English base from `trails.js`
-  (`i18n.js:136-239`).
+  (`i18n.js:122-279`). All 12 trails (including the 4 Japan trails) have a Japanese block.
 
 `trails.js` remains the **English base**; the Japanese for each trail lives in
 `I18N.trails[slug].ja` and is merged over the base at render time (see `loc()` below).
@@ -123,44 +128,48 @@ global, `window.I18N` (`i18n.js:6`), holding all UI strings and the Japanese ove
 
 The document is now **`<html lang="ja">`** (`index.html:2`). Static text nodes carry
 **`data-i18n`** (textContent) or **`data-i18n-aria`** (aria-label) attributes naming a `ui`
-key, e.g. the `<h1 data-i18n="appName">`, the filter chips, the back button
-(`data-i18n-aria="back"`), and the download modal. The list header is a **`.head-row`**
-containing the `<h1>` and a **language toggle button `#lang-toggle`** (`index.html:23-26`).
+key, e.g. the `<h1 data-i18n="appName">`, the filter chips, and the back button
+(`data-i18n-aria="back"`). The list header's top row is a **`.head-row`** containing the
+`<h1>` and a **`.head-actions`** wrapper that holds the global **"download all maps" button
+`#dl-all`** (`data-i18n-aria="dlAllAria"`) and the **language toggle button `#lang-toggle`**
+(`index.html:23-29`).
 
 ### The i18n helpers (`app.js`)
 
 A module-level **`lang`** holds the active language: it reads `localStorage.lang` and
-defaults to **`'ja'`** (`app.js:27-28`). The helpers:
+defaults to **`'ja'`** (`app.js:43-44`). The helpers:
 
-- **`t(key)`** (`app.js:30`) — look up a **static** `ui` string for `lang`, falling back to
+- **`t(key)`** (`app.js:46`) — look up a **static** `ui` string for `lang`, falling back to
   English then to the raw key.
-- **`tf(key)`** (`app.js:31`) — look up a **dynamic-string function** from `fn` (then called
-  with arguments, e.g. `tf('dlDesc')(name, n)`).
-- **`loc(trail)`** (`app.js:47-53`) — when `lang==='ja'`, returns `{ ...trail,
+- **`tf(key)`** (`app.js:47`) — look up a **dynamic-string function** from `fn` (then called
+  with arguments). `fn` is currently empty for both languages (§1a above), so `tf` is defined
+  but unused.
+- **`loc(trail)`** (`app.js:63-69`) — when `lang==='ja'`, returns `{ ...trail,
   ...I18N.trails[slug].ja }` (Japanese fields override the English base); otherwise returns
   the trail unchanged. Render code reads localized fields off `loc(trail)` and
   language-neutral fields (slug, stats, paths) off the raw trail. (It is named `loc`, **not**
   `L`, to avoid shadowing Leaflet's global `L`.)
-- **`trDiff` / `trRoute` / `trDogs`** (`app.js:34-36`) — translate the enum tokens via the
+- **`trDiff` / `trRoute` / `trDogs`** (`app.js:50-52`) — translate the enum tokens via the
   `diff`/`route`/`dogs` tables (used for display only; `diffClass`/`diffKey` still key off
   the raw English token).
-- **`trWpt(name)`** (`app.js:37`) — translate a waypoint name in JA via the `wpt` table.
-- **`trSeason(s)`** (`app.js:40-44`) — in JA, rewrite `"Apr – Nov"` → `"4月～11月"` via the
+- **`trWpt(name)`** (`app.js:53`) — translate a waypoint name in JA via the `wpt` table.
+- **`trSeason(s)`** (`app.js:56-60`) — in JA, rewrite `"Apr – Nov"` → `"4月～11月"` via the
   `months` table and a dash→`～` swap.
-- **Unit formatters** — `fmtDist(mi)` / `fmtGain(ft)` (`app.js:111-112`), `fmtTime(s)`
-  (`app.js:262-266`), and `fmtElevRange(loM,hiM)` (`app.js:402-405`) emit **km / m / 時間・分**
+- **Unit formatters** — `fmtDist(mi)` / `fmtGain(ft)` (`app.js:128-129`), `fmtTime(s)`
+  (`app.js:267-271`), and `fmtElevRange(loM,hiM)` (`app.js:408-411`) emit **km / m / 時間・分**
   in JA and **mi / ft** in EN, converting from the stored imperial values on the fly.
 
 ### Applying & switching language
 
-- **`applyStaticI18n()`** (`app.js:56-61`) sets `document.documentElement.lang`, fills every
-  `[data-i18n]` / `[data-i18n-aria]` node, and sets `document.title` to `t('appName')`. It
-  runs on boot (`app.js:80`) and again on every language switch.
-- **`setLang(next)`** (`app.js:63-74`) — sets `lang`, persists it to `localStorage.lang`,
+- **`applyStaticI18n()`** (`app.js:72-78`) sets `document.documentElement.lang`, fills every
+  `[data-i18n]` / `[data-i18n-aria]` node, sets `document.title` to `t('appName')`, and calls
+  **`updateDlBtn()`** so the global download button's label tracks the language (§12). It runs
+  on boot (`app.js:97`) and again on every language switch.
+- **`setLang(next)`** (`app.js:80-91`) — sets `lang`, persists it to `localStorage.lang`,
   re-runs `applyStaticI18n()`, **live-re-renders the list** (`renderList()`), and if a detail
   view is open re-renders it (`#detail-title`, `renderPeek()`, `renderSheetBody()`) and calls
   **`redrawTrailLabels()`** to re-bind the Leaflet marker popups **without rebuilding the
-  map**. It is wired to `#lang-toggle` in `bindGlobal()` (`app.js:163`).
+  map**. It is wired to `#lang-toggle` in `bindGlobal()` (`app.js:177`).
 
 ---
 
@@ -171,17 +180,17 @@ artifact and its responsibility. (Source-only material is noted at the bottom.)
 
 | Path | Type | Responsibility |
 |---|---|---|
-| `index.html` | HTML | **App shell.** Declares the `#list` and `#detail` screens, the language toggle (`#lang-toggle`), the download modal (`#dl-modal`), PWA `<meta>` tags, manifest/icon links, `data-i18n`/`data-i18n-aria` hooks, and the four `<script>` tags. |
-| `app.js` | JS | **All application logic** — routing, i18n helpers (§1a), list/detail rendering, Leaflet map, GPX parsing & geometry, elevation profile, GPS, bottom-sheet drag, tile-download, SW registration. Single `'use strict'` script, no exports. |
-| `app.css` | CSS | **All styles** — design tokens (CSS custom properties), both screens, cards, the language-toggle button, bottom sheet, the download modal, the GPS-dot pulse animation, Leaflet overrides, and the landscape media query. |
-| `trails.js` | JS data | **Data model (English base).** Defines `window.TRAILS`, the array of 8 trail objects (see §3). |
+| `index.html` | HTML | **App shell.** Declares the `#list` and `#detail` screens, the `.head-actions` wrapper holding the global download button (`#dl-all`) and language toggle (`#lang-toggle`), PWA `<meta>` tags, manifest/icon links, `data-i18n`/`data-i18n-aria` hooks, and the four `<script>` tags. |
+| `app.js` | JS | **All application logic** — routing, i18n helpers (§1a), list/detail rendering, Leaflet map, GPX parsing & geometry, elevation profile, GPS, bottom-sheet drag, the global tile-download, SW registration. Single `'use strict'` script, no exports. |
+| `app.css` | CSS | **All styles** — design tokens (CSS custom properties), both screens, cards, the language-toggle button, the global download button (`.dl-all-btn`, incl. its `--p` progress gradient), bottom sheet, the GPS-dot pulse animation, Leaflet overrides, and the landscape media query. |
+| `trails.js` | JS data | **Data model (English base).** Defines `window.TRAILS`, the array of 12 trail objects — 8 Washington + 4 Japan (see §3). |
 | `i18n.js` | JS data | **i18n tables.** Defines `window.I18N` — UI strings, dynamic-string functions, enum/season/waypoint tables, and per-trail Japanese content (see §1a). Loads before `trails.js`/`app.js`. |
 | `sw.js` | JS (SW) | **Service worker.** Precaches the shell + bundled trail assets on `install`; serves cache-first for tiles and shell on `fetch`; prunes old caches on `activate`. |
 | `manifest.json` | JSON | **Web App Manifest** — name (`梅ちゃんのトレイル`), `start_url`/`scope` (`./`), `display:standalone`, theme/background colors, the SVG icon. |
 | `icon.svg` | SVG | **App icon** — a stylized mountain + red GPX line + blue GPS dot, declared `"purpose": "any maskable"`. Also used as the `apple-touch-icon`. |
 | `.nojekyll` | marker | Empty file that disables GitHub Pages' Jekyll processing so files (and any leading-underscore paths) are served verbatim. |
-| `gpx/` | dir | **8 GPX tracks**, one per trail (e.g. `gpx/Lake_22_Trail.gpx`). GPX 1.1 from AllTrails, containing `<trkpt>` track points (with `<ele>`) and `<wpt>` named waypoints. |
-| `images/` | dir | **8 WebP hero photos**, one per trail (e.g. `images/lake-22.webp`), shown on the list cards. |
+| `gpx/` | dir | **12 GPX tracks**, one per trail (e.g. `gpx/Lake_22_Trail.gpx`, `gpx/Mt_Fuji_Yoshida.gpx`). GPX 1.1 from AllTrails, containing `<trkpt>` track points (with `<ele>`) and (on the WA trails) `<wpt>` named waypoints. |
+| `images/` | dir | **12 WebP hero photos**, one per trail (e.g. `images/lake-22.webp`), shown on the list cards. |
 | `README.md` | docs | Project readme (not loaded by the app). |
 | `docs/ARCHITECTURE.md` | docs | This document. |
 
@@ -198,19 +207,21 @@ artifact and its responsibility. (Source-only material is noted at the bottom.)
 
 ## 3. The data model — `window.TRAILS`
 
-`trails.js` assigns a single global array, `window.TRAILS` (`trails.js:3`), of **8 trail
-objects**. It holds the **English base** content plus all language-neutral data; the Japanese
-translations live separately in `I18N.trails[slug].ja` and are merged in at render time via
-`loc()` (see §1a). `app.js` reads `TRAILS` everywhere as the bare global. Each object is a
-flat record with the following fields:
+`trails.js` assigns a single global array, `window.TRAILS` (`trails.js:4`), of **12 trail
+objects** — the 8 Washington State trails followed by 4 Japan trails. It holds the **English
+base** content plus all language-neutral data; the Japanese translations live separately in
+`I18N.trails[slug].ja` and are merged in at render time via `loc()` (see §1a). `app.js` reads
+`TRAILS` everywhere as the bare global. Each object is a flat record with the following
+fields:
 
 | Field | Type | Meaning | Example (`lake-22`) |
 |---|---|---|---|
-| `slug` | string | Stable URL id; used in the hash route `#/trail/<slug>`, as the key in `cacheStatus`, and as the key into `I18N.trails`. | `"lake-22"` |
+| `slug` | string | Stable URL id; used in the hash route `#/trail/<slug>` and as the key into `I18N.trails`. | `"lake-22"` |
 | `name` | string | English display name (card title, detail header, peek title). Translated in JA via `loc()`. | `"Lake 22 Trail"` |
 | `area` | string | English region / nearest town; shown under the card title and in the details table as "Location". Translated in JA via `loc()`. | `"Granite Falls, WA"` |
 | `img` | string | Relative path to the WebP hero photo. | `"images/lake-22.webp"` |
 | `gpx` | string | Relative path to the GPX track, fetched by `loadTrail()`. | `"gpx/Lake_22_Trail.gpx"` |
+| `tiles` | string? | **Optional** basemap selector read by `trailSource()` (§7): **omitted** ⇒ USGS topo (the US trails); `"gsi"` ⇒ GSI 地理院タイル (the Japan trails). | (absent) / `"gsi"` |
 | `rating` | number | AllTrails star rating (shown as `★ <rating>`). | `4.7` |
 | `reviews` | number | Review count; rendered with `.toLocaleString()`. | `18454` |
 | `lengthMi` | number | Trail length in **miles** (data stays imperial); also the **distance** sort key. Displayed via `fmtDist()` — mi in EN, km in JA. | `6.1` |
@@ -221,16 +232,19 @@ flat record with the following fields:
 | `season` | string | English best-season range; reformatted via `trSeason()` (`"Apr – Nov"` → `"4月～11月"` in JA). | `"Apr – Nov"` |
 | `dogs` | string | Dog-policy token; translated via `trDogs()`. | `"Leashed"` |
 | `permit` | string | Permit / pass requirement. | `"NW Forest Pass or day-use fee …"` |
-| `center` | `[lat, lon]` | Map center for `initMap()`, the fallback bounding box for tile download, and the sample point in `refreshCacheStatus()`. | `[48.0700, -121.7555]` |
+| `center` | `[lat, lon]` | Map center for `initMap()` and the sample point in `refreshCacheStatus()` (and the fallback box in `gpxBox()` if a GPX has no track points). | `[48.0700, -121.7555]` |
 | `summary` | string | Short lead paragraph under "Overview". | `"A beautiful hike to an alpine lake…"` |
 | `description` | string | Long paragraph under "The hike". | (multi-sentence) |
 | `tips` | string[] | Bullet list under "Tips & need-to-know"; rendered as `<li>` items. | `["Rocky trail — sturdy boots…", …]` |
 
-The 8 trails are: `lake-22`, `snow-lake`, `lake-valhalla`, `talapus-lake`, `mount-pilchuck`,
-`bridal-veil`, `skyline-loop`, `enchantments`. Exactly one (`skyline-loop`) has
-`route: "Loop"` and one (`enchantments`) is `"Point to point"`; the rest are `"Out & back"`.
-The header subtitle's "8 trails" copy (the `#list-sub` node, `data-i18n="subtitle"`,
-`index.html:27`) matches the array length.
+The 12 trails are, in array order: the **8 Washington** trails `lake-22`, `snow-lake`,
+`lake-valhalla`, `talapus-lake`, `mount-pilchuck`, `bridal-veil`, `skyline-loop`,
+`enchantments`, followed by the **4 Japan** trails `fuji-yoshida`, `fuji-gotemba`,
+`daibosatsu`, `kinpu`. The four Japan trails all set `tiles: "gsi"` and have **no GPX
+waypoints**. Across the set, two are `route: "Loop"` (`skyline-loop`, `daibosatsu`), two are
+`"Point to point"` (`enchantments`, `fuji-yoshida`), and the rest are `"Out & back"`. The
+header subtitle's "12 trails" copy (the `#list-sub` node, `data-i18n="subtitle"`,
+`index.html:30`) matches the array length.
 
 ---
 

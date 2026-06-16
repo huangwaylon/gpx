@@ -22,7 +22,10 @@
     <header id="list-header">
       <div class="head-row">
         <h1 data-i18n="appName">梅ちゃんのトレイル</h1>
-        <button id="lang-toggle" class="lang-btn" data-i18n="langOther">EN</button>
+        <div class="head-actions">
+          <button id="dl-all" class="dl-all-btn" data-i18n-aria="dlAllAria" aria-label="すべての地図をオフライン保存">⬇ 地図を保存</button>
+          <button id="lang-toggle" class="lang-btn" data-i18n="langOther">EN</button>
+        </div>
       </div>
       <div class="sub" id="list-sub" data-i18n="subtitle">8つのコース · タップして探索</div>
     </header>
@@ -55,20 +58,6 @@
       <div id="sheet-body"></div>
     </div>
   </section>
-
-  <!-- download modal -->
-  <div id="dl-modal" hidden>
-    <div class="card-m">
-      <h3 id="dl-title" data-i18n="dlModalTitle">オフライン用に地図をダウンロード</h3>
-      <p id="dl-desc"></p>
-      <div id="dl-bar-wrap"><div id="dl-bar"></div></div>
-      <div id="dl-status" data-i18n="dlReady">準備完了</div>
-      <div class="m-btns">
-        <button class="m-btn m-btn-s" id="dl-cancel" data-i18n="dlCancel">キャンセル</button>
-        <button class="m-btn m-btn-p" id="dl-go" data-i18n="dlGo">ダウンロード</button>
-      </div>
-    </div>
-  </div>
 
 </div>
 

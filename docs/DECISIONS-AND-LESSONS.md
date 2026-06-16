@@ -3,10 +3,11 @@
 Architecture decision records and engineering lessons for **Ume-chan's Trails**
 (梅ちゃんのトレイル), a static, offline-capable hiking PWA for iPhone.
 
-**Stack:** plain HTML/CSS/JS, [Leaflet 1.9.4](https://leafletjs.com/), USGS National Map topo
-tiles, no build step, deployed on GitHub Pages. Eight Washington State trails, each with a map, GPX
-track, live GPS, and an elevation profile. The UI is bilingual — Japanese by default with an
-English toggle (ADR-8).
+**Stack:** plain HTML/CSS/JS, [Leaflet 1.9.4](https://leafletjs.com/), per-trail raster topo tiles
+(USGS National Map for the US, GSI 地理院タイル for Japan — ADR-2, ADR-9), no build step, deployed
+on GitHub Pages. Twelve trails — eight in Washington State (USA) plus four in Japan (two Mt. Fuji
+routes plus Daibosatsu and Kinpu in Yamanashi) — each with a map, GPX track, live GPS, and an
+elevation profile. The UI is bilingual — Japanese by default with an English toggle (ADR-8).
 
 This document captures (1) the key architecture decisions — including the alternatives that were
 rejected and why — and (2) the concrete bugs found while building and testing, as symptom → root

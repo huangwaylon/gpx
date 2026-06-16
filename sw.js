@@ -1,4 +1,4 @@
-const APP_V  = 'wa-trails-app-v3';
+const APP_V  = 'wa-trails-app-v4';
 const TILE_V = 'wa-trails-tiles-v1';
 
 const SHELL = [
@@ -10,6 +10,7 @@ const SHELL = [
 
 // Trail GPX + hero images (bundled, cached on install for full offline)
 const TRAIL_ASSETS = [
+  // Washington (8)
   'gpx/Lake_22_Trail.gpx','gpx/Snow_Lake_Trail.gpx','gpx/Lake_Valhalla_Trail.gpx',
   'gpx/Talapus_Lake_Trail.gpx','gpx/Mount_Pilchuck_Trail.gpx',
   'gpx/Bridal_Veil_Falls_and_Lunch_Rock_via_Lake_Serene_Trail.gpx',
@@ -17,6 +18,11 @@ const TRAIL_ASSETS = [
   'images/lake-22.webp','images/snow-lake.webp','images/lake-valhalla.webp',
   'images/talapus-lake.webp','images/mount-pilchuck.webp','images/bridal-veil.webp',
   'images/skyline-loop.webp','images/enchantments.webp',
+  // Japan (4)
+  'gpx/Mt_Fuji_Yoshida.gpx','gpx/Mt_Fuji_Gotemba.gpx',
+  'gpx/Mount_Daibosatsu_Loop.gpx','gpx/Mount_Kinpu_Kanayama.gpx',
+  'images/fuji-yoshida.webp','images/fuji-gotemba.webp',
+  'images/daibosatsu.webp','images/kinpu.webp',
 ];
 
 self.addEventListener('install', e => {
@@ -40,8 +46,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  // USGS tiles — cache-first
-  if (url.includes('nationalmap.gov')) {
+  // Map tiles (USGS topo for US trails, GSI 地理院タイル for Japan) — cache-first
+  if (url.includes('nationalmap.gov') || url.includes('cyberjapandata.gsi.go.jp')) {
     e.respondWith(caches.open(TILE_V).then(cache =>
       cache.match(url).then(hit => hit || fetch(e.request).then(res => {
         if (res.ok || res.type==='opaque') cache.put(url, res.clone());

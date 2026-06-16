@@ -2,7 +2,7 @@
 
 A platform-constraints reference for **Ume-chan's Trails** (梅ちゃんのトレイル), an offline-capable hiking PWA targeting **iPhone Safari**, served as a static site on **GitHub Pages**. The app is bilingual — **Japanese by default with an English toggle** (see *Internationalization (i18n)* below and `docs/I18N.md`).
 
-The app must keep working **with no cell signal on the trail** after being installed to the Home Screen. Stack: plain HTML / CSS / JS + Leaflet 1.9.4 + USGS National Map topo tiles + a classic service worker.
+The app must keep working **with no cell signal on the trail** after being installed to the Home Screen. Stack: plain HTML / CSS / JS + Leaflet 1.9.4 + two topographic tile sources (USGS National Map for the US trails, GSI 地理院タイル for the Japan trails) + a classic service worker.
 
 This document captures hard-won research about iOS Safari PWA behavior (2025/2026) and, for each constraint, exactly **how this app designs around it** — including honest notes where the app does **not** yet handle it (marked **GAP**).
 
@@ -15,14 +15,14 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | Constraint | iOS behavior | How this app addresses it |
 |---|---|---|
 | **Service workers** | Supported in Safari tabs + Home-Screen PWAs since iOS 11.1. **Not** available in WKWebView / in-app browsers. | Registers `./sw.js` (classic SW) on `load`. Offline breaks inside in-app browsers — **recommend "Open in Safari"** (GAP: not detected/surfaced in-app). |
-| **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** via a manual "Download map for offline" button — never background prefetch. |
+| **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** via a single global **"Save maps"** button — never background prefetch. |
 | **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
-| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v3`) and map tiles (`wa-trails-tiles-v1`). No IndexedDB. |
+| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v4`) and map tiles (`wa-trails-tiles-v1`, holding both USGS + GSI tiles). No IndexedDB. |
 | **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded. | GPS only works screen-on, foreground. App re-acquires Wake Lock on `visibilitychange`. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
 | **`navigator.wakeLock` (standalone)** | Broken in standalone on iOS 16.4–18.3; works in standalone only from **18.4+**. | Calls `wakeLock.request('screen')`, re-acquires on visibility change. **GAP: no video-loop fallback.** Advise raising Auto-Lock. |
 | **`beforeinstallprompt`** | **Never fires** on iOS. | Installation is left to the user (Safari **Share → Add to Home Screen**); the app shows **no in-app install banner or prompt** and performs **no standalone detection**. |
-| **7-day storage eviction** | iOS evicts **all** script-writable storage after 7 days of no interaction. `persist()` does **not** help. | `refreshCacheStatus()` re-checks a sample tile per trail on startup and updates the badge. Affects `localStorage` too (e.g. the `lang` preference resets to JA default). **GAP: no auto re-prompt** when tiles are gone. |
+| **7-day storage eviction** | iOS evicts **all** script-writable storage after 7 days of no interaction. `persist()` does **not** help. | `refreshCacheStatus()` re-checks a sample tile for every trail on startup and sets the single download button to "saved" only if all are present. Affects `localStorage` too (e.g. the `lang` preference resets to JA default). **GAP: no auto re-prompt** when tiles are gone. |
 | **Manifest features** | `display:standalone` works; `fullscreen`/`minimal-ui` → standalone; `shortcuts`/`categories`/`screenshots` ignored; `id` needs iOS 17+. | Manifest uses `display:standalone` + `id:"/ume-trails"` and a Japanese `name`. Relies on Apple meta tags for capability; ships **both** `mobile-web-app-capable` and `apple-mobile-web-app-capable`. |
 | **Splash screen** | Auto-generated from `background_color` + icon; no manifest control. | Sets `background_color:#0f172a`; accepts the auto splash. |
 | **`navigator.connection`** | Network Information API unsupported. | App relies on cache-first SW + `navigator.onLine` semantics (see Other quirks). |
@@ -49,7 +49,7 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 
   Because registration uses no `type:'module'` and the SW spawns no nested workers, it runs on every iOS version that supports SWs at all (11.1+). This is a deliberate floor-setting choice for an app whose entire value proposition is offline reliability.
 
-- Because **there is no Background Fetch/Sync on iOS**, the app never tries to prefetch tiles in the background. The **only** way map tiles enter the cache is a **foreground, user-initiated** download (the "Download map for offline" button — see *The offline strategy*). This is not a stylistic choice; it is the **direct consequence** of the missing background APIs.
+- Because **there is no Background Fetch/Sync on iOS**, the app never tries to prefetch tiles in the background. The **only** way map tiles enter the cache is a **foreground, user-initiated** download (the single global **"Save maps"** button — see *The offline strategy*). This is not a stylistic choice; it is the **direct consequence** of the missing background APIs.
 
 - **GAP — in-app browser detection.** The app does not currently detect when it is running inside a WKWebView/in-app browser, and does not surface an "Open in Safari" hint. Inside such browsers offline support silently won't work.
   **Recommendation:** detect the lack of SW support and/or the in-app-browser UA and show a one-line banner: *"For offline maps, open this page in Safari (• • • → Open in Safari)."* A pragmatic heuristic:
@@ -72,13 +72,13 @@ The app uses the Cache API for **everything** persistent and uses **no IndexedDB
 
 | Cache name (constant) | Contents | Population strategy |
 |---|---|---|
-| **`wa-trails-app-v3`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
-| **`wa-trails-tiles-v1`** (`TILE_V` in `sw.js`, `TILE_CACHE` in `app.js`) | USGS topo map tiles | Filled cache-first on `fetch`, and bulk-filled by the user-initiated tile download. |
+| **`wa-trails-app-v4`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
+| **`wa-trails-tiles-v1`** (`TILE_V` in `sw.js`, `TILE_CACHE` in `app.js`) | Map tiles — USGS topo (US trails) **and** GSI 地理院タイル (Japan trails) | Filled cache-first on `fetch`, and bulk-filled by the user-initiated "Save maps" download. |
 
 `sw.js` declarations:
 
 ```js
-const APP_V  = 'wa-trails-app-v3';
+const APP_V  = 'wa-trails-app-v4';
 const TILE_V = 'wa-trails-tiles-v1';
 ```
 
@@ -102,7 +102,7 @@ const keys = await caches.keys();
 await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.delete(k)));
 ```
 
-**Tile cache (`TILE_V`).** Served cache-first; opaque (`res.type === 'opaque'`) and `ok` responses are both stored so cross-origin tiles persist (see *The offline strategy* for the fetch handler).
+**Tile cache (`TILE_V`).** Served cache-first; both `ok` and opaque (`res.type === 'opaque'`) responses are stored, so tiles persist regardless of CORS outcome. In practice both sources are CORS-enabled and fetched with `{ mode: 'cors' }`, so tiles are cached as **real (non-opaque)** responses (see *The offline strategy* for the fetch handler).
 
 ---
 

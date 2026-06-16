@@ -1,9 +1,14 @@
 # Ume-chan's Trails — Data Pipeline
 
-How the source data for the eight bundled trails was extracted from saved
+How the source data for the twelve bundled trails was extracted from saved
 AllTrails web pages and turned into the app's runtime assets
 (`trails.js`, `gpx/*.gpx`, `images/*.webp`). This document exists so the
 process is **reproducible** when adding a new trail.
+
+> The original eight Washington trails were extracted from saved `.html`
+> pages; the four newer Japan trails came from `.webarchive`-only saves and a
+> cleaner embedded-stats source (`trailGeoStats`). The differences are flagged
+> in §1, §2b/§2d, and §6 — read those before adding a non-US trail.
 
 > TL;DR for the impatient: skip to
 > [Reproducing the pipeline for a new trail](#6-reproducing-the-pipeline-for-a-new-trail).
@@ -21,10 +26,15 @@ process is **reproducible** when adding a new trail.
 | `sw.js` | committed | Service worker. Lists every GPX + image in `TRAIL_ASSETS` so they are cached on install for full offline use. |
 | `app.js` | committed | Runtime: GPX parse, haversine distance, elevation smoothing, map + elevation profile. |
 
-The app is a static PWA showing **8 Washington State trails**:
+The app is a static PWA showing **8 Washington State trails + 4 Japan trails**:
 
+**Washington (USGS topo basemap):**
 Lake 22, Snow Lake, Lake Valhalla, Talapus Lake, Mount Pilchuck,
 Bridal Veil Falls & Lake Serene, Skyline Loop, The Enchantments Traverse.
+
+**Japan (GSI 地理院タイル basemap — each carries `tiles:"gsi"` in `trails.js`):**
+Mt. Fuji: Yoshida Trail (5th Station Ascent), Mt. Fuji: Gotemba Trail,
+Mount Daibosatsu Loop, Mount Kinpu (Kanayama).
 
 ---
 
@@ -53,6 +63,34 @@ Lake 22 Trail, Washington - 18,454 Reviews, Map | AllTrails.html
 Lake 22 Trail, Washington - 18,454 Reviews, Map | AllTrails.webarchive
 Lake_22_Trail.gpx
 ```
+
+> ### Japan trails: `.webarchive`-only (recover HTML from `WebMainResource`)
+> The four Japan trails were saved as **`.webarchive` only — there is no
+> `.html` file** for them. That is fine: the rendered page HTML is also
+> inside the webarchive, under the top-level plist key
+> **`WebMainResource` → `WebResourceData`** (the raw bytes of the main
+> document). Decode those bytes to text and you have the same Next.js
+> app-router HTML the `.html` saves contain, so **every HTML-based extractor
+> below (§2a/§2b/§2d) works unchanged** once you've recovered it. (Contrast
+> with §4, which reads `WebSubresources` from the *same* archive to get the
+> embedded images; here it's `WebMainResource` for the document itself.)
+>
+> ```python
+> import plistlib
+>
+> def html_from_webarchive(webarchive_path):
+>     """Recover the page's main HTML document out of a Safari .webarchive."""
+>     with open(webarchive_path, "rb") as f:
+>         archive = plistlib.load(f)
+>     data = archive["WebMainResource"]["WebResourceData"]   # raw bytes
+>     return data.decode("utf-8", errors="replace")
+> ```
+>
+> Parse the returned string exactly like an `.html` file (the §2 helpers all
+> take a path; either write the recovered HTML to a temp file or refactor them
+> to accept a string). The §4 hero-image notes below also apply: the Japan
+> webarchives embedded only tiny thumbnails, so heroes were re-fetched at
+> `1200×800` with the same base64-config rewrite trick.
 
 ---
 
@@ -148,6 +186,12 @@ constant for elevation, and `1609.344` inline (`mi → km`) for distance display
 > Always sanity-check the converted numbers against the figures rendered on
 > the page before committing them. The final values that shipped (table
 > below) were verified this way.
+>
+> This is **especially** dangerous on the two Mt. Fuji pages: each Fuji page
+> cross-links **all four Fuji routes** plus many nearby trails, so a naïve
+> `length` / `elevation_gain` regex easily matches the wrong route. For the
+> Japan trails we sidestepped the problem entirely by reading the headline
+> stats from the page's own `trailGeoStats` block instead — see §2d.
 
 Representative extractor (returns *all* embedded stat objects so you can pick
 the primary one):
@@ -176,8 +220,6 @@ def extract_stat_objects(html_path):
 ```
 
 ### 2c. Hand-curated prose
-
-The `summary`, `description`, and `tips[]` fields in `trails.js` were
 **hand-written / edited** from the page's description text, official-trail
 notes, and top reviews. They are intentionally tighter and more useful than
 the raw AllTrails marketing blurb. Treat these as editorial, not mechanical
