@@ -1,0 +1,9 @@
+# Source material (large — not deployed)
+alltrails/
+
+# OS / editor cruft
+.DS_Store
+*.webarchive
+
+# Server logs
+*.log

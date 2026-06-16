@@ -1,13 +1,13 @@
 {
-  "name": "Lake 22 Trail",
-  "short_name": "Lake 22",
-  "id": "/lake22",
+  "name": "Washington Trails",
+  "short_name": "WA Trails",
+  "id": "/wa-trails",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "icons": [
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]
