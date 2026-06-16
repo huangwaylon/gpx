@@ -36,4 +36,10 @@ Deployable to GitHub Pages as-is.
 - `gpx/` — GPX tracks · `images/` — hero photos
 - `sw.js` — service worker (offline caching)
 
+## Documentation
+
+Thorough docs live in [`docs/`](docs/) — architecture, development guide, iOS PWA
+constraints, the data pipeline, and decisions/lessons. See [`CLAUDE.md`](CLAUDE.md) for a
+quick orientation and the golden rules. Start at [`docs/README.md`](docs/README.md).
+
 Map tiles © USGS National Map. Trail info & photos via AllTrails.

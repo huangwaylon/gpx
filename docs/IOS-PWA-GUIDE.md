@@ -1,0 +1,498 @@
+# iOS Safari PWA Constraints — Washington Trails
+
+A platform-constraints reference for **Washington Trails**, an offline-capable hiking PWA targeting **iPhone Safari**, served as a static site on **GitHub Pages**.
+
+The app must keep working **with no cell signal on the trail** after being installed to the Home Screen. Stack: plain HTML / CSS / JS + Leaflet 1.9.4 + USGS National Map topo tiles + a classic service worker.
+
+This document captures hard-won research about iOS Safari PWA behavior (2025/2026) and, for each constraint, exactly **how this app designs around it** — including honest notes where the app does **not** yet handle it (marked **GAP**).
+
+> Scope note: "iOS" here means iOS/iPadOS Safari and Home-Screen web apps. Because Apple requires all iOS browsers to use the system WebKit, the engine-level constraints below apply to Chrome/Edge/Firefox on iOS too.
+
+---
+
+## Summary table
+
+| Constraint | iOS behavior | How this app addresses it |
+|---|---|---|
+| **Service workers** | Supported in Safari tabs + Home-Screen PWAs since iOS 11.1. **Not** available in WKWebView / in-app browsers. | Registers `./sw.js` (classic SW) on `load`. Offline breaks inside in-app browsers — **recommend "Open in Safari"** (GAP: not detected/surfaced in-app). |
+| **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** via a manual "Download map for offline" button — never background prefetch. |
+| **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
+| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v2`) and map tiles (`wa-trails-tiles-v1`). No IndexedDB. |
+| **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded. | GPS only works screen-on, foreground. App re-acquires Wake Lock on `visibilitychange`. **Document: keep screen on.** |
+| **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
+| **`navigator.wakeLock` (standalone)** | Broken in standalone on iOS 16.4–18.3; works in standalone only from **18.4+**. | Calls `wakeLock.request('screen')`, re-acquires on visibility change. **GAP: no video-loop fallback.** Advise raising Auto-Lock. |
+| **`beforeinstallprompt`** | **Never fires** on iOS. | Manual install banner; standalone detected via `navigator.standalone \|\| matchMedia('(display-mode:standalone)')`; dismissal persisted in `localStorage`. |
+| **7-day storage eviction** | iOS evicts **all** script-writable storage after 7 days of no interaction. `persist()` does **not** help. | `refreshCacheStatus()` re-checks a sample tile per trail on startup and updates the badge. **GAP: no auto re-prompt** when tiles are gone. |
+| **Manifest features** | `display:standalone` works; `fullscreen`/`minimal-ui` → standalone; `shortcuts`/`categories`/`screenshots` ignored; `id` needs iOS 17+. | Manifest uses `display:standalone` + `id:"/wa-trails"`. Relies on Apple meta tags for capability. |
+| **Splash screen** | Auto-generated from `background_color` + icon; no manifest control. | Sets `background_color:#0f172a`; accepts the auto splash. |
+| **`navigator.connection`** | Network Information API unsupported. | App relies on cache-first SW + `navigator.onLine` semantics (see Other quirks). |
+| **Input font-size < 16px** | iOS auto-zooms the page on focus of < 16px controls. | App has **no text inputs**, so the trap is effectively N/A — see note. |
+| **Notch / home indicator** | Needs `viewport-fit=cover` + `env(safe-area-inset-*)`. | Both present: `viewport-fit=cover` in `index.html`, `--safe-*` vars in `app.css`. |
+
+---
+
+## Service Workers
+
+### iOS behavior
+- Service workers have been supported in **iOS Safari 11.1+**, both in normal browser tabs and in Home-Screen ("standalone") PWAs.
+- **They are NOT available inside `WKWebView` / in-app browsers** — i.e. when a link is opened inside another app (Messages, Mail, Instagram, Slack, the in-app browsers of most social apps). In that context `navigator.serviceWorker` is unavailable, so **the app cannot cache or serve anything offline**. The site will appear to "work" while online and then break the moment there's no signal.
+- **No Background Sync, no Periodic Background Sync, no Background Fetch.** A service worker on iOS only runs to handle `fetch`/lifecycle events while a controlled page is alive in the foreground. There is no mechanism to fetch or refresh data while the app is closed or backgrounded.
+- **ES-module service workers** (`navigator.serviceWorker.register(url, { type: 'module' })`) require **iOS 15+**; **nested workers** (a worker spawning another) require **iOS 15.5 / 16.4**.
+
+### How this app handles it
+- The app registers a **classic (non-module)** service worker after `load`, guarded by a feature check:
+
+  ```js
+  // app.js — boot
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  ```
+
+  Because registration uses no `type:'module'` and the SW spawns no nested workers, it runs on every iOS version that supports SWs at all (11.1+). This is a deliberate floor-setting choice for an app whose entire value proposition is offline reliability.
+
+- Because **there is no Background Fetch/Sync on iOS**, the app never tries to prefetch tiles in the background. The **only** way map tiles enter the cache is a **foreground, user-initiated** download (the "Download map for offline" button — see *The offline strategy*). This is not a stylistic choice; it is the **direct consequence** of the missing background APIs.
+
+- **GAP — in-app browser detection.** The app does not currently detect when it is running inside a WKWebView/in-app browser, and does not surface an "Open in Safari" hint. Inside such browsers offline support silently won't work.
+  **Recommendation:** detect the lack of SW support and/or the in-app-browser UA and show a one-line banner: *"For offline maps, open this page in Safari (• • • → Open in Safari)."* A pragmatic heuristic:
+
+  ```js
+  const noSW = !('serviceWorker' in navigator);
+  const inApp = /(FBAN|FBAV|Instagram|Line|Twitter|GSA)/.test(navigator.userAgent);
+  if (noSW || inApp) showOpenInSafariHint();
+  ```
+
+---
+
+## Cache API
+
+### iOS behavior
+The **Cache API** (`caches.open`, `cache.put`, `cache.match`, `cache.addAll`) is **fully supported since iOS 11.1** and is the storage primitive of choice for PWAs. It can store opaque cross-origin responses (important for third-party tiles).
+
+### How this app handles it
+The app uses the Cache API for **everything** persistent and uses **no IndexedDB**. There are exactly **two caches**, both keyed by version string so they can be rotated independently:
+
+| Cache name (constant) | Contents | Population strategy |
+|---|---|---|
+| **`wa-trails-app-v2`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
+| **`wa-trails-tiles-v1`** (`TILE_V` in `sw.js`, `TILE_CACHE` in `app.js`) | USGS topo map tiles | Filled cache-first on `fetch`, and bulk-filled by the user-initiated tile download. |
+
+`sw.js` declarations:
+
+```js
+const APP_V  = 'wa-trails-app-v2';
+const TILE_V = 'wa-trails-tiles-v1';
+```
+
+**App-shell cache (`APP_V`).** On `install` the SW precaches the shell (HTML, CSS, JS, manifest, icon, and Leaflet's JS/CSS from unpkg). The shell `addAll` is treated as **must-succeed**; the bundled trail assets are added **best-effort** so a single failed asset cannot abort installation:
+
+```js
+self.addEventListener('install', e => {
+  e.waitUntil((async () => {
+    const c = await caches.open(APP_V);
+    await c.addAll(SHELL);                                   // shell must succeed
+    await Promise.allSettled(TRAIL_ASSETS.map(u => c.add(u)));// assets best-effort
+    self.skipWaiting();
+  })());
+});
+```
+
+The `activate` handler deletes any cache that is **not** one of the two current versions, so bumping `APP_V`/`TILE_V` cleanly evicts stale data:
+
+```js
+const keys = await caches.keys();
+await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.delete(k)));
+```
+
+**Tile cache (`TILE_V`).** Served cache-first; opaque (`res.type === 'opaque'`) and `ok` responses are both stored so cross-origin tiles persist (see *The offline strategy* for the fetch handler).
+
+---
+
+## Geolocation
+
+### iOS behavior
+- **`watchPosition()` works only in the foreground with the screen on.** iOS suspends page JavaScript when the screen locks or the app is backgrounded, so the watch stops delivering positions. **There is no background geolocation for web content on iOS** — none of the native "always" / significant-location-change capabilities are exposed to the web.
+- **`navigator.permissions.query({ name: 'geolocation' })` does NOT work on iOS.** The Permissions API either lacks `geolocation` or throws, so you **cannot pre-check** whether the user has granted/denied location. You only learn the state by *actually calling* the geolocation API and inspecting the result.
+
+### How this app handles it
+- GPS is **explicitly foreground-only.** `startGPS()` opens a high-accuracy watch and acquires a screen Wake Lock; `stopGPS()` clears the watch and releases the lock:
+
+  ```js
+  gpsWatch = navigator.geolocation.watchPosition(
+    onPos, onPosErr, { enableHighAccuracy:true, maximumAge:4000, timeout:30000 });
+  ```
+
+  Because the watch dies when the screen sleeps, **the app cannot track you with the screen off.**
+  **User guidance to document in-product:** *Keep your screen on while navigating; the blue dot stops updating when the phone sleeps.* (The app already tries to prevent sleep via Wake Lock — see next section — but Wake Lock itself is unreliable on older iOS, so the manual guidance still matters.)
+
+- Instead of pre-checking permission (impossible on iOS), the app **reacts to the error**. `watchPosition`'s error callback inspects the standard `GeolocationPositionError` code; **code `1` is `PERMISSION_DENIED`**:
+
+  ```js
+  function onPosErr(err){
+    if (err.code === 1){   // PERMISSION_DENIED
+      alert('Location access denied. Enable it in Settings → Privacy → Location Services → Safari.');
+      stopGPS();
+    }
+  }
+  ```
+
+  This is the correct iOS pattern: attempt the call, then handle denial after the fact.
+
+- **Minor robustness note:** `onPosErr` handles only code `1`. Codes `2` (`POSITION_UNAVAILABLE`) and `3` (`TIMEOUT`) are ignored, so a transient timeout under tree cover currently produces no user feedback (the watch keeps trying, which is reasonable). Consider a soft "searching for GPS…" indicator for codes 2/3.
+
+---
+
+## Screen Wake Lock
+
+### iOS behavior
+- The **Screen Wake Lock API** (`navigator.wakeLock.request('screen')`) is **broken in standalone / Home-Screen PWA mode on iOS 16.4 – 18.3**: the API may exist but fails to actually keep the screen awake when launched from the Home Screen. It became reliable **in standalone mode only from iOS 18.4+**. (It generally works earlier in a normal Safari tab, but the app's target is the installed/standalone experience.)
+- Net effect: on a large installed base of in-service iPhones (anything on iOS 16.4–18.3 running the app from the Home Screen), Wake Lock cannot be relied upon to keep the map visible during a hike.
+
+### How this app handles it
+- The app **does** call Wake Lock and re-acquires it when the page becomes visible again (e.g. after the user taps the screen back on), which covers iOS 18.4+ standalone and most tab usage:
+
+  ```js
+  async function reqWake(){ if('wakeLock' in navigator){ try{ wakeLock = await navigator.wakeLock.request('screen'); }catch(_){ } } }
+  async function relWake(){ if(wakeLock){ try{ await wakeLock.release(); }catch(_){ } wakeLock=null; } }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && gpsWatch !== null && !wakeLock) reqWake();
+  });
+  ```
+
+  `reqWake()` is fired from `startGPS()`, and the `visibilitychange` listener re-acquires the lock because **Wake Locks are auto-released whenever a page is hidden** — re-acquisition on return is required even on platforms where Wake Lock works.
+
+- **GAP — no fallback for iOS < 18.4 standalone.** On 16.4–18.3 the `request()` call silently no-ops (the `catch(_)` swallows it), so the screen **will** sleep on schedule and GPS will stop. There is currently **no** fallback.
+  **Recommendations:**
+  1. **Silent looping `<video>` fallback** — the established hack for keeping iOS awake without Wake Lock: play a tiny, muted, `playsinline`, looping video while navigating. Start it alongside `reqWake()` when `wakeLock` ends up `null`, and pause it in `stopGPS()`/`relWake()`.
+
+     ```js
+     // sketch only — fallback when Wake Lock is unavailable/failed
+     async function reqWake(){
+       if ('wakeLock' in navigator){ try{ wakeLock = await navigator.wakeLock.request('screen'); }catch(_){} }
+       if (!wakeLock) startKeepAwakeVideo();   // muted, playsinline, loop
+     }
+     ```
+  2. **Advise raising Auto-Lock.** Surface a one-time tip: *Settings → Display & Brightness → Auto-Lock → Never (or a longer interval) while hiking.* This is the only fully reliable mitigation on affected iOS versions.
+
+---
+
+## Add to Home Screen / Install
+
+### iOS behavior
+- **There is no `beforeinstallprompt` event on iOS** and no programmatic install. Installation is **manual**: the user taps **Share → Add to Home Screen**. The app cannot trigger or even reliably detect availability of this flow — it can only *instruct* the user.
+- **iOS 16.4+** additionally allows "Add to Home Screen" from third-party browsers (Chrome/Edge/Firefox), not just Safari. Before 16.4, only Safari could install.
+- After install, the launched web app reports standalone via the legacy `navigator.standalone` boolean and/or the standard `display-mode: standalone` media query.
+
+### How this app handles it
+- A **manual install banner** lives in `index.html` and is shown/hidden by `checkInstall()`. The banner text spells out the manual gesture:
+
+  ```html
+  <div id="install" hidden>
+    <span>📲 Install: <strong>Share → Add to Home Screen</strong></span>
+    <button class="x" id="install-x" aria-label="Dismiss">✕</button>
+  </div>
+  ```
+
+- **Standalone detection** uses both the Apple-legacy flag and the standard media query, so it works across iOS versions:
+
+  ```js
+  function checkInstall(){
+    const standalone = window.navigator.standalone || matchMedia('(display-mode:standalone)').matches;
+    if (!standalone && !localStorage.installDismiss) $('#install').hidden = false;
+  }
+  ```
+
+  The banner is shown **only** when the app is *not* already installed **and** the user hasn't dismissed it before.
+
+- **Dismiss persistence.** Dismissing the banner writes a flag to `localStorage`, so it stays dismissed across visits:
+
+  ```js
+  $('#install-x').addEventListener('click', () => {
+    $('#install').hidden = true;
+    localStorage.installDismiss = '1';
+  });
+  ```
+
+  > Caveat tied to the eviction rule below: `localStorage` is itself script-writable storage and can be cleared after 7 days of non-use, so a long-dormant user may see the install banner again. For a dismissal flag this is benign.
+
+---
+
+## Storage & the 7-day eviction rule
+
+### iOS behavior
+- iOS (WebKit ITP) **evicts ALL script-writable storage for an origin after 7 days without user interaction with that site.** This includes **Cache API, IndexedDB, OPFS, localStorage, and Service Worker registrations** — effectively everything a PWA can write.
+- **`navigator.storage.persist()` does NOT override this on iOS.** Unlike some other platforms, requesting persistence does not exempt an origin from the 7-day timer. (Frequent foreground use *does* reset the clock — the eviction is specifically about *inactivity*.)
+- Counterbalancing the eviction rule, **installed PWAs get a large quota**: on iOS 17+ roughly **~60% of device disk** is available to an installed web app, with an **~80% overall cap** shared across origins. So while data can *expire*, there is plenty of room to store map tiles in the first place.
+
+### How this app handles it
+- **Implication:** **downloaded map tiles can simply vanish after a week of not opening the app** — exactly the scenario where a user downloads a trail on Sunday and hikes it the *next* weekend. The app must not assume cached tiles are still present.
+- The app **verifies cache state on every startup** rather than trusting it. `refreshCacheStatus()` runs during boot and, for each trail, checks whether a **representative sample tile** (the trail's center tile at zoom 14) is still in the tile cache. The result drives the offline badge in the list and the download button's "✓ saved" state:
+
+  ```js
+  async function refreshCacheStatus(){
+    if(!('caches' in window)) return;
+    try{
+      const cache = await caches.open(TILE_CACHE);
+      for(const t of TRAILS){
+        const z = 14, {x,y} = ll2t(t.center[0], t.center[1], z);
+        const u = TILE_URL.replace('{z}',z).replace('{y}',y).replace('{x}',x);
+        cacheStatus[t.slug] = !!(await cache.match(u));   // sample-tile probe
+      }
+    }catch(_){}
+  }
+  ```
+
+  Boot order in `app.js` re-renders the list **after** the probe so badges reflect reality:
+
+  ```js
+  renderList();
+  ...
+  await refreshCacheStatus();
+  renderList();                 // re-render with offline badges
+  ```
+
+  If eviction has occurred, the sample tile is missing → `cacheStatus[slug]` becomes `false` → the "✓ Available offline" badge disappears and the button reverts to "⬇ Download map for offline." So the **UI self-corrects** after eviction.
+
+- **GAP — no proactive re-prompt.** The app reflects eviction in badges but does **not** actively warn the user (e.g. *"Your saved map for Lake 22 has expired — re-download before you go"*) and does not auto-re-download. A user who previously downloaded a trail could arrive at the trailhead, offline, with an empty cache and no warning.
+  **Recommendations:**
+  1. **Persist a "user intended this offline" flag per trail** (in `localStorage`) when they download. On startup, if that flag is set but `refreshCacheStatus()` finds the sample tile gone, show a re-download prompt.
+  2. **Probe more than one tile** before declaring a trail "available offline" — a single sample tile can be a false positive (present) or false negative. A few spot-checks across zoom levels would make the badge trustworthier.
+  3. Keep the app opened/used often enough, or simply re-download before each trip; this is the only guaranteed defense against the 7-day timer.
+
+---
+
+## Web App Manifest specifics on iOS
+
+### iOS behavior
+- **`display`**: `standalone` works. **`fullscreen` and `minimal-ui` fall back to `standalone`.**
+- **Ignored on iOS**: `shortcuts`, `categories`, `screenshots` (and related richer-install metadata).
+- **`id`**: honored only on **iOS 17+** (older iOS ignores it; identity falls back to `start_url`/`scope`).
+- **Apple-specific `<meta>`/`<link>` tags are still required** for a good installed experience — the manifest alone is not sufficient on iOS.
+- **Splash screen** is **auto-generated** by iOS from the manifest `background_color` plus the app icon. There is **no manifest field to supply a custom splash**; the only per-device control is the legacy `apple-touch-startup-image` link tags (not used here).
+
+### How this app handles it
+The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS respects:
+
+```json
+{
+  "name": "Washington Trails",
+  "short_name": "WA Trails",
+  "id": "/wa-trails",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "any",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
+```
+
+- `display:standalone` → real standalone launch on iOS.
+- `id:"/wa-trails"` → used on iOS 17+, harmlessly ignored earlier.
+- No `shortcuts`/`categories`/`screenshots` are declared (they'd be ignored anyway).
+- `background_color:#0f172a` is what iOS uses to paint the **auto-generated splash**.
+
+**Apple-specific meta/link tags present in `index.html`** (these do the heavy lifting on iOS):
+
+| Tag (as written in `index.html`) | Value | Purpose |
+|---|---|---|
+| `<meta name="apple-mobile-web-app-capable">` | `yes` | Launch in standalone (no Safari chrome) when added to Home Screen. |
+| `<meta name="apple-mobile-web-app-status-bar-style">` | `black-translucent` | Status bar style; **translucent → content draws under the status bar**, which is why safe-area insets matter (below). |
+| `<meta name="apple-mobile-web-app-title">` | `WA Trails` | Home-Screen icon label. |
+| `<link rel="apple-touch-icon">` | `icon.svg` | Home-Screen icon. |
+| `<meta name="theme-color">` | `#0f172a` | UI tinting (also a standard tag). |
+| `<link rel="manifest">` | `manifest.json` | Standard manifest link. |
+
+Exact source:
+
+```html
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="WA Trails">
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+```
+
+- **No `apple-touch-startup-image`** is set, so iOS shows the auto-generated splash (background color + icon). Acceptable for this app.
+- **GAP / known warning — `apple-mobile-web-app-capable` is deprecated** in favor of the standard **`mobile-web-app-capable`**, and current iOS/Safari logs a console warning to that effect. The app sets only the `apple-` prefixed form.
+  **Recommendation:** add **both** for forward compatibility (keep the Apple one for older iOS, add the standard one to silence the warning and align with the spec):
+
+  ```html
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  ```
+
+---
+
+## Other iOS quirks
+
+### Network Information API is unsupported
+`navigator.connection` (downlink, effectiveType, `change` events) is **not implemented** on iOS. Don't branch on connection quality.
+
+- **How this app handles it.** It doesn't depend on `navigator.connection` at all. Offline resilience is handled structurally by the **cache-first service worker** (a request simply succeeds from cache when the network is down). The recommended online/offline signal on iOS is **`navigator.onLine` plus the `online`/`offline` events** — currently the app does not display an explicit offline banner.
+  **Recommendation (optional):** add an `offline`/`online` listener to show a subtle "Offline — showing saved maps" chip:
+
+  ```js
+  window.addEventListener('offline', showOfflineChip);
+  window.addEventListener('online',  hideOfflineChip);
+  ```
+
+### Input font-size ≥ 16px to avoid focus auto-zoom
+iOS Safari **auto-zooms the viewport** when the user focuses a form control whose computed `font-size` is **below 16px**, which is jarring in a map UI.
+
+- **How this app handles it.** The app has **no `<input>`, `<textarea>`, or `<select>` fields** — all interactions are taps on buttons/cards — so the auto-zoom-on-focus trap **cannot trigger** today. (Note: `html,body` does not set an explicit base `font-size`, and several elements use sub-16px sizes like 9–15px; that's fine for *display* text and only matters for *focusable form fields*, of which there are none.)
+  **Recommendation:** if a search/filter **text input** is ever added, give it `font-size: 16px` (or larger) to prevent the zoom. Also note `maximum-scale=1` is set in the viewport (below), which suppresses pinch-zoom but is **not** a substitute for the 16px rule on inputs across all iOS versions.
+
+### Notch / Dynamic Island / home indicator (safe areas)
+Content can be obscured by the notch/Dynamic Island and the home indicator unless the page opts into the safe-area model. This is especially relevant here because `apple-mobile-web-app-status-bar-style` is `black-translucent`, so the web view draws **under** the status bar.
+
+- **How this app handles it — confirmed in source.** The viewport opts in with **`viewport-fit=cover`**, and `app.css` defines safe-area **custom properties** that are applied throughout the layout (header padding, filter bar, FAB position, install banner, modal, etc.).
+
+  `index.html`:
+  ```html
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  ```
+
+  `app.css`:
+  ```css
+  :root {
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+  }
+  /* e.g. list header respects the notch + side insets */
+  #list-header { padding: calc(var(--safe-t) + 14px) calc(16px + var(--safe-l)) 12px calc(16px + var(--safe-r)); }
+  ```
+
+  The app also handles dynamic viewport height with `height:100dvh` (with a `100vh` fallback) so the layout tracks Safari's collapsing toolbar.
+
+---
+
+## The offline strategy (dedicated section)
+
+Washington Trails uses a **three-tier offline model**. The first two tiers are automatic; the third is the deliberate, user-controlled step that the iOS background-fetch ban forces on us.
+
+### Tier 1 — App shell + all trail data precached on SW install
+On `install`, the service worker precaches the **app shell** (must-succeed) and, best-effort, **all 8 GPX tracks + all 8 hero images**, so the app UI and every trail's info/elevation/photo work offline **immediately after first load** — even before the user downloads any map tiles.
+
+```js
+const SHELL = [
+  './', './index.html', './app.css', './app.js', './trails.js',
+  './manifest.json', './icon.svg',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+];
+
+const TRAIL_ASSETS = [
+  'gpx/Lake_22_Trail.gpx','gpx/Snow_Lake_Trail.gpx','gpx/Lake_Valhalla_Trail.gpx',
+  'gpx/Talapus_Lake_Trail.gpx','gpx/Mount_Pilchuck_Trail.gpx',
+  'gpx/Bridal_Veil_Falls_and_Lunch_Rock_via_Lake_Serene_Trail.gpx',
+  'gpx/Skyline_Loop.gpx','gpx/The_Enchantments_Traverse.gpx',
+  'images/lake-22.webp', /* …8 total… */ 'images/enchantments.webp',
+];
+```
+
+> Verified: the repo contains exactly **8 GPX files** and **8 `.webp` hero images**, matching the 8 trails in `trails.js` (`lake-22`, `snow-lake`, `lake-valhalla`, `talapus-lake`, `mount-pilchuck`, `bridal-veil`, `skyline-loop`, `enchantments`). The GPX/image lists in `sw.js` are bundled at install time — this is *trail metadata*, not map imagery.
+
+### Tier 2 — USGS map tiles served cache-first with network fallback
+Any request to a USGS National Map tile is intercepted and served **cache-first**: return the cached tile if present, otherwise fetch, store (including **opaque** cross-origin responses), and return — falling back to a `503` if offline and uncached.
+
+```js
+// sw.js — fetch handler (tiles)
+if (url.includes('nationalmap.gov')) {
+  e.respondWith(caches.open(TILE_V).then(cache =>
+    cache.match(url).then(hit => hit || fetch(e.request).then(res => {
+      if (res.ok || res.type === 'opaque') cache.put(url, res.clone());
+      return res;
+    }).catch(() => new Response('', { status: 503 })))
+  ));
+  return;
+}
+```
+
+This means simply **panning the map while online warms the cache** for free — but it does **not** guarantee complete coverage at all zooms, which is what Tier 3 is for.
+
+### Tier 3 — User explicitly downloads a trail's tiles ("Download map for offline")
+The user taps **Download map for offline**, which **prefetches the trail's tile range into `wa-trails-tiles-v1`**. The range is the trail's bounding box (from its track points, with `PAD = 0.01°` padding) across **zooms 10–16**, fetched in batches of 8 with a progress bar.
+
+```js
+const DL_ZOOMS = [10, 11, 12, 13, 14, 15, 16];   // 7 zoom levels
+const PAD      = 0.01;                             // bbox padding in degrees
+
+async function startDownload(){
+  const urls = tileURLs(dlTrail), total = urls.length; let done = 0;
+  const cache = await caches.open(TILE_CACHE), BATCH = 8;
+  for (let i = 0; i < urls.length; i += BATCH){
+    await Promise.allSettled(urls.slice(i, i+BATCH).map(async u => {
+      try{
+        if(!(await cache.match(u))){                      // skip already-cached
+          const r = await fetch(u, { mode: 'cors' });
+          if (r.ok || r.type === 'opaque') await cache.put(u, r);
+        }
+      }catch(_){}
+      done++;
+      const pct = Math.round(done/total*100);
+      $('#dl-bar').style.width = pct+'%';
+      $('#dl-status').textContent = `${done} / ${total} (${pct}%)`;
+    }));
+  }
+  cacheStatus[dlTrail.slug] = true;
+  renderList();   // flip the badge to "available offline"
+}
+```
+
+The modal previews the count up front via `countTiles()` (same bbox/zoom math) before the user commits.
+
+### Approximate tile counts & storage footprint
+The brief cites **~130 tiles per trail**. That is the right **order of magnitude** for the spec, and it's the number to put in front of users, but be aware the **actual** count is computed per-trail from the real track bounding box, so it varies:
+
+- A compact trail (e.g. a short out-and-back like Lake 22) lands in the low **~100–150** tiles.
+- A large, spread-out route (e.g. **The Enchantments Traverse**, which spans many miles) produces a **much larger** bounding box and therefore **substantially more** tiles — likely several hundred — because the box-area × 7 zoom levels grows with the trail's geographic extent. (Tile counts roughly **quadruple per added zoom level**, and zooms 15–16 dominate the total.)
+
+At a typical **~15–25 KB** per 256×256 USGS topo PNG tile:
+
+| Per-trail tiles (approx) | Approx storage |
+|---|---|
+| ~130 tiles ("typical" small trail) | **~2–3 MB** |
+| ~300 tiles (larger trail) | **~5–7 MB** |
+| All 8 trails, mixed | **roughly ~25–50 MB total** |
+
+These are well within the large installed-PWA quota on iOS 17+ (~60% of disk), so storage size is **not** the limiting factor — *eviction* (the 7-day rule) is.
+
+### Why per-trail manual download instead of caching everything
+This is the central design decision, and it's driven by both platform limits and product sense:
+
+1. **No background fetch on iOS (hard constraint).** iOS has no Background Fetch/Sync, so tiles can only be pulled while the app is open and in the foreground. Bulk-caching every trail's imagery would have to happen during an active session anyway — there's no "download overnight" option — so it must be an explicit, visible action with a progress bar.
+2. **Bandwidth.** Hikers often set up at home on Wi-Fi or at a trailhead on a weak/metered LTE connection. Downloading *only the chosen trail* (a few MB) respects metered data; downloading all 8 (tens of MB) on cell signal would be hostile.
+3. **Storage & the 7-day eviction rule.** Since tiles can be evicted after a week of inactivity anyway, eagerly caching everything would repeatedly waste bandwidth re-downloading maps the user may never open. Downloading **on intent** keeps the cache aligned with what the user actually needs *this* trip.
+4. **User control & predictability.** An explicit button with a tile count and progress bar makes storage use transparent and consensual — the user decides what lives on their phone, and the offline badge tells them exactly which trails are ready.
+
+---
+
+## Appendix — file map
+
+| Concern | File(s) |
+|---|---|
+| Meta tags, manifest link, install banner, download modal markup | `index.html` |
+| Manifest (iOS-respected fields) | `manifest.json` |
+| Caching strategy, two named caches, precache lists | `sw.js` |
+| Geolocation, Wake Lock, install detection, cache-status probe, tile download | `app.js` |
+| Safe-area variables, dynamic viewport height, display font sizes | `app.css` |
+| Trail metadata (8 trails) | `trails.js` |
+| Bundled offline assets | `gpx/` (8 GPX), `images/` (8 `.webp`) |
+
+---
+
+### Gap checklist (for the backlog)
+
+- [ ] **In-app browser / no-SW detection** → "Open in Safari" hint.
+- [ ] **Wake Lock fallback** for iOS 16.4–18.3 standalone → silent looping `<video>`; plus Auto-Lock tip.
+- [ ] **Eviction re-prompt** → persist per-trail "wanted offline" intent; warn + offer re-download when the sample-tile probe fails; probe more than one tile.
+- [ ] **`mobile-web-app-capable`** meta tag added alongside the deprecated `apple-` one.
+- [ ] **Offline status chip** via `navigator.onLine` + `online`/`offline` events.
+- [ ] **Geolocation error UX** for codes `2`/`3` (position unavailable / timeout).
+- [ ] **16px font-size** on any future text input.
