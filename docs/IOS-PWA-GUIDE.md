@@ -264,7 +264,8 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
   "theme_color": "#0f172a",
   "orientation": "any",
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
   ]
 }
 ```
@@ -283,7 +284,7 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
 | `<meta name="apple-mobile-web-app-capable">` | `yes` | Apple-legacy form, kept for older iOS. Launch in standalone (no Safari chrome) when added to Home Screen. |
 | `<meta name="apple-mobile-web-app-status-bar-style">` | `black-translucent` | Status bar style; **translucent → content draws under the status bar**, which is why safe-area insets matter (below). |
 | `<meta name="apple-mobile-web-app-title">` | `梅ちゃんのトレイル` | Home-Screen icon label. |
-| `<link rel="apple-touch-icon">` | `icon.svg` | Home-Screen icon. |
+| `<link rel="apple-touch-icon">` | `icon-180.png` | Home-Screen icon (180×180 PNG; iOS does not reliably honor SVG here). |
 | `<meta name="theme-color">` | `#0f172a` | UI tinting (also a standard tag). |
 | `<link rel="manifest">` | `manifest.json` | Standard manifest link. |
 
@@ -296,7 +297,7 @@ Exact source:
 <meta name="apple-mobile-web-app-title" content="梅ちゃんのトレイル">
 <meta name="theme-color" content="#0f172a">
 <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="icon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
 ```
 
 - **No `apple-touch-startup-image`** is set, so iOS shows the auto-generated splash (background color + icon). Acceptable for this app.
@@ -388,7 +389,7 @@ On `install`, the service worker precaches the **app shell** (must-succeed) and,
 ```js
 const SHELL = [
   './', './index.html', './app.css', './app.js', './trails.js', './i18n.js',
-  './manifest.json', './icon.svg',
+  './manifest.json', './icon-180.png', './icon-192.png', './icon-512.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
 ];

@@ -97,7 +97,7 @@ how you [verify offline behavior](#6-testing).)
 **This is the single most common source of "my change isn't showing up."**
 
 `sw.js` registers a service worker that caches the app shell — `index.html`,
-`app.css`, `app.js`, `trails.js`, `i18n.js`, `manifest.json`, `icon.svg`, the
+`app.css`, `app.js`, `trails.js`, `i18n.js`, `manifest.json`, the PNG icons, the
 Leaflet assets, and all bundled GPX + hero images — using a **cache-first**
 strategy. That is exactly what makes the app work offline, but during
 development it means:
@@ -621,7 +621,7 @@ gpx/                     # ← repo root, served as-is by GitHub Pages
 ├── trails.js            # window.TRAILS — trail metadata, English base content (edit to add trails)
 ├── sw.js                # Service worker: offline caching (SHELL + TRAIL_ASSETS, APP_V/TILE_V)
 ├── manifest.json        # PWA manifest (name, icons, standalone display)
-├── icon.svg             # App icon (also Apple touch icon)
+├── icon-180/192/512.png # App icon (apple-touch-icon + manifest) — Enchantments photo crop
 ├── .nojekyll            # Disables Jekyll on GitHub Pages (serve files verbatim)
 ├── README.md            # User-facing overview
 ├── gpx/                 # GPX track files (one per trail)

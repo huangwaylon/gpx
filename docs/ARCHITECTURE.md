@@ -186,8 +186,8 @@ artifact and its responsibility. (Source-only material is noted at the bottom.)
 | `trails.js` | JS data | **Data model (English base).** Defines `window.TRAILS`, the array of 12 trail objects — 8 Washington + 4 Japan (see §3). |
 | `i18n.js` | JS data | **i18n tables.** Defines `window.I18N` — UI strings, dynamic-string functions, enum/season/waypoint tables, and per-trail Japanese content (see §1a). Loads before `trails.js`/`app.js`. |
 | `sw.js` | JS (SW) | **Service worker.** Precaches the shell + bundled trail assets on `install`; serves cache-first for tiles and shell on `fetch`; prunes old caches on `activate`. |
-| `manifest.json` | JSON | **Web App Manifest** — name (`梅ちゃんのトレイル`), `start_url`/`scope` (`./`), `display:standalone`, theme/background colors, the SVG icon. |
-| `icon.svg` | SVG | **App icon** — a stylized mountain + red GPX line + blue GPS dot, declared `"purpose": "any maskable"`. Also used as the `apple-touch-icon`. |
+| `manifest.json` | JSON | **Web App Manifest** — name (`梅ちゃんのトレイル`), `start_url`/`scope` (`./`), `display:standalone`, theme/background colors, the PNG icons. |
+| `icon-180.png` / `icon-192.png` / `icon-512.png` | PNG | **App icon** — a square center-crop of the Enchantments (Colchuck Lake) hero photo. `icon-180.png` is the iOS `apple-touch-icon`; the 192/512 sizes are the manifest icons (`purpose:"any"`). |
 | `.nojekyll` | marker | Empty file that disables GitHub Pages' Jekyll processing so files (and any leading-underscore paths) are served verbatim. |
 | `gpx/` | dir | **12 GPX tracks**, one per trail (e.g. `gpx/Lake_22_Trail.gpx`, `gpx/Mt_Fuji_Yoshida.gpx`). GPX 1.1 from AllTrails, containing `<trkpt>` track points (with `<ele>`) and (on the WA trails) `<wpt>` named waypoints. |
 | `images/` | dir | **12 WebP hero photos**, one per trail (e.g. `images/lake-22.webp`), shown on the list cards. |
@@ -910,7 +910,7 @@ The app has **two distinct Service-Worker caches**, declared at the top of `sw.j
 
 On `install` (`sw.js:28-36`), the SW opens `APP_V`, **`addAll(SHELL)`** (which must all succeed —
 `SHELL` lists `./`, `index.html`, `app.css`, `app.js`, `trails.js`, **`i18n.js`**,
-`manifest.json`, `icon.svg`, and the two Leaflet CDN URLs, `sw.js:4-9`), then **best-effort**
+`manifest.json`, `icon-180.png`, `icon-192.png`, `icon-512.png`, and the two Leaflet CDN URLs, `sw.js:4-9`), then **best-effort**
 caches `TRAIL_ASSETS` (the **12 GPX + 12 webp** — 8 Washington + 4 Japan, `sw.js:12-26`) with
 `Promise.allSettled` so a single failed asset doesn't break install. It calls `skipWaiting()`.
 Bundling the GPX and images means a trail's track and photo are available with **zero network**,

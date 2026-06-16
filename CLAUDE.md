@@ -63,7 +63,7 @@ is fully translated.
 | `app.css` | Dark, mobile-first, responsive styles (custom properties, safe-area insets, CJK font stack) |
 | `trails.js` | The data model — `window.TRAILS` array of 12 trail objects (8 US + 4 Japan; English base content). Optional `tiles` field picks the basemap (USGS default; `"gsi"` for Japan) |
 | `sw.js` | Service worker — precaches shell+i18n+GPX+images; cache-first map tiles (USGS + GSI) |
-| `manifest.json`, `icon.svg` | PWA install metadata + icon (Japanese name) |
+| `manifest.json`, `icon-{180,192,512}.png` | PWA install metadata + Home-Screen icon (cropped from the Enchantments photo) |
 | `gpx/` | 12 GPX tracks (committed, parsed at runtime) |
 | `images/` | 12 WebP hero photos (1200×800) |
 | `alltrails/` | **git-ignored** raw source pages used to build the data |

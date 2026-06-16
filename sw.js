@@ -3,7 +3,7 @@ const TILE_V = 'wa-trails-tiles-v1';
 
 const SHELL = [
   './', './index.html', './app.css', './app.js', './trails.js', './i18n.js',
-  './manifest.json', './icon.svg',
+  './manifest.json', './icon-180.png', './icon-192.png', './icon-512.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
 ];
