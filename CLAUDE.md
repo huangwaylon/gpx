@@ -5,8 +5,8 @@ Guidance for Claude Code (and humans) working in this repository.
 ## What this is
 
 **Ume-chan's Trails** (梅ちゃんのトレイル) — an offline-capable hiking PWA for iPhone.
-It shows 13 trails — **8 in Washington State (USA)** and **5 in Japan** (Mt. Fuji and the
-Yamanashi mountains) — on topographic maps with the GPX track overlaid, live GPS position,
+It shows 10 trails — **8 in Washington State (USA)** and **2 in Japan** (Mt. Fuji's Yoshida
+route and Mt. Kinpu in the Yamanashi mountains) — on topographic maps with the GPX track overlaid, live GPS position,
 waypoints, and an elevation profile. The profile is **scrubbable** (drag a finger to inspect
 any point — a readout pill plus a synced marker on the map), and a **live trail-progress**
 mode fills the walked portion green and tracks elapsed time. US trails use **USGS** topo tiles;
@@ -64,11 +64,11 @@ is fully translated.
 | `app.js` | All logic — i18n, routing, map (per-trail tile source via `TILE_SOURCES`), GPX parse, GPS, elevation, global tile download |
 | `i18n.js` | `window.I18N` — UI strings, dynamic-string fns, enum tables, waypoint names, and per-trail Japanese content |
 | `app.css` | Dark, mobile-first, responsive styles (custom properties, safe-area insets, CJK font stack) |
-| `trails.js` | The data model — `window.TRAILS` array of 13 trail objects (8 US + 5 Japan; English base content). Optional `tiles` field picks the basemap (USGS default; `"gsi"` for Japan) |
+| `trails.js` | The data model — `window.TRAILS` array of 10 trail objects (8 US + 2 Japan; English base content). Optional `tiles` field picks the basemap (USGS default; `"gsi"` for Japan) |
 | `sw.js` | Service worker — precaches shell+i18n+GPX+images; cache-first map tiles (USGS + GSI) |
 | `manifest.json`, `icon-{180,192,512}.png` | PWA install metadata + Home-Screen icon (cropped from the Enchantments photo) |
-| `gpx/` | 12 GPX tracks (committed, parsed at runtime) |
-| `images/` | 12 WebP hero photos (1200×800) |
+| `gpx/` | 10 GPX tracks (committed, parsed at runtime) |
+| `images/` | 10 WebP hero photos (1200×800) |
 | `alltrails/` | **git-ignored** raw source pages used to build the data |
 | `docs/` | Full documentation suite (see below) |
 
@@ -76,7 +76,7 @@ is fully translated.
 
 One HTML document, two screens toggled by the `hidden` attribute. **Hash routing**:
 `#/trail/<slug>` → `openDetail()`; empty hash → `showList()`. The list renders cards from
-`window.TRAILS` (13 trails), merged with Japanese content from `I18N.trails` via `loc(trail)`.
+`window.TRAILS` (10 trails), merged with Japanese content from `I18N.trails` via `loc(trail)`.
 The detail screen builds a Leaflet map (`initMap`) using the trail's tile source
 (`TILE_SOURCES` — USGS for US, GSI for Japan, chosen by each trail's optional `tiles` field),
 fetches+parses the GPX (`loadTrail` → `drawTrack`/`drawProfile`), and shows a draggable bottom
@@ -139,7 +139,7 @@ old caches. Reset language during testing with `localStorage.removeItem('lang')`
    into `I18N.wpt`.
 4. Register the GPX path **and** image path in `TRAIL_ASSETS` in `sw.js` (so they precache),
    and bump `APP_V` so returning users pick up the new asset list.
-5. Update the trail-count copy (`subtitle` in `i18n.js`, both languages) if the count changes.
+5. The list subtitle no longer shows a trail count, so no copy needs updating when the count changes.
 
 Full sourcing/extraction process is in `docs/DATA-PIPELINE.md`; translation conventions in
 `docs/I18N.md`; step-by-step contributor workflow in `docs/DEVELOPMENT.md`.

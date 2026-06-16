@@ -17,7 +17,10 @@ body { overflow:hidden; }
 button { font-family:inherit; color:inherit; }
 img { display:block; }
 
-#app { height:100vh; height:100dvh; position:relative; overflow:hidden; }
+/* Pinned to the visual-viewport edges (incl. safe areas under `viewport-fit=cover`).
+   Using position:fixed instead of height:100dvh avoids the iOS standalone bug where the
+   dynamic-viewport height comes up short of the screen, leaving a gap at the bottom. */
+#app { position:fixed; top:0; right:0; bottom:0; left:0; overflow:hidden; }
 
 /* ── Screen routing ── */
 .screen { position:absolute; inset:0; display:flex; flex-direction:column;
@@ -102,7 +105,7 @@ img { display:block; }
   font-size:13px; color:var(--text-2); font-weight:600; }
 .card-stats .s { display:flex; align-items:center; gap:4px; }
 .card-stats .ic { opacity:0.7; font-size:12px; }
-.card-stats .star { color:var(--amber); margin-left:auto; }
+.card-stats .time { margin-left:auto; }
 
 /* difficulty colors */
 .d-easy   { background:rgba(34,197,94,0.25);  color:#4ade80; }
@@ -194,7 +197,6 @@ img { display:block; }
 #sheet-peek .pk-title { font-size:18px; font-weight:700; letter-spacing:-0.3px; }
 #sheet-peek .pk-meta { font-size:13px; color:var(--text-2); margin-top:3px; font-weight:600;
   display:flex; gap:10px; flex-wrap:wrap; }
-#sheet-peek .pk-meta .star { color:var(--amber); }
 
 #sheet-body {
   flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;

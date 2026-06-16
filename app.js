@@ -189,7 +189,7 @@ function renderList() {
         <span class="s"><span class="ic">↔</span>${fmtDist(trail.lengthMi)}</span>
         <span class="s"><span class="ic">▲</span>${fmtGain(trail.gainFt)}</span>
         <span class="s"><span class="ic">⟳</span>${trRoute(trail.route)}</span>
-        <span class="s star">★ ${trail.rating}</span>
+        <span class="s time">⏱ ${fmtTime(trail.time)}</span>
       </div>
     </article>`;
   }).join('');
@@ -255,7 +255,6 @@ function renderPeek(trail) {
   $('#pk-meta').innerHTML =
     `<span>${fmtDist(trail.lengthMi)}</span><span>▲ ${fmtGain(trail.gainFt)}</span>` +
     `<span class="${diffClass(trail.diff)}" style="background:none;padding:0">${trDiff(trail.diff)}</span>` +
-    `<span class="star">★ ${trail.rating} (${trail.reviews.toLocaleString()})</span>` +
     `<span>⏱ ${fmtTime(trail.time)}</span>`;
 }
 
