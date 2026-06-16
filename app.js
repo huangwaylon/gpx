@@ -255,24 +255,13 @@ function renderPeek(trail) {
   $('#pk-meta').innerHTML =
     `<span>${fmtDist(trail.lengthMi)}</span><span>▲ ${fmtGain(trail.gainFt)}</span>` +
     `<span class="${diffClass(trail.diff)}" style="background:none;padding:0">${trDiff(trail.diff)}</span>` +
-    `<span class="star">★ ${trail.rating} (${trail.reviews.toLocaleString()})</span>`;
+    `<span class="star">★ ${trail.rating} (${trail.reviews.toLocaleString()})</span>` +
+    `<span>⏱ ${fmtTime(trail.time)}</span>`;
 }
 
 function renderSheetBody(trail) {
   const tr = loc(trail);
-  // Stat boxes: km/m in JA, mi/k-ft in EN
-  const distV = lang==='ja' ? (trail.lengthMi*MI_PER_KM).toFixed(1) : trail.lengthMi;
-  const distL = lang==='ja' ? '距離 (km)' : t('statDistance');
-  const gainV = lang==='ja' ? Math.round(trail.gainFt/FT).toLocaleString() : (trail.gainFt/1000).toFixed(trail.gainFt>=1000?1:0)+'k';
-  const gainL = lang==='ja' ? '登り (m)' : 'Ft Gain';
   $('#sheet-body').innerHTML = `
-    <div class="stat-grid">
-      <div class="stat-box"><div class="v">${distV}</div><div class="l">${distL}</div></div>
-      <div class="stat-box"><div class="v">${gainV}</div><div class="l">${gainL}</div></div>
-      <div class="stat-box"><div class="v" style="font-size:13px">${trDiff(trail.diff)}</div><div class="l">${t('statDifficulty')}</div></div>
-      <div class="stat-box"><div class="v" style="font-size:13px">${fmtTime(trail.time)}</div><div class="l">${t('statTime')}</div></div>
-    </div>
-
     <div id="elev-card">
       <div class="hd"><span class="t">${t('elevation')}</span><span class="r" id="elev-range"></span></div>
       <svg id="elev-svg" preserveAspectRatio="none" role="img" aria-label="${t('scrubAria')}"></svg>
