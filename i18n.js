@@ -20,7 +20,6 @@ window.I18N = {
       gpsAria: "My location",
       langOther: "日本語",
       statDistance: "Distance",
-      statElevation: "Elev. gain",
       statDifficulty: "Difficulty",
       statTime: "Time",
       elevation: "Elevation",
@@ -52,6 +51,13 @@ window.I18N = {
       markerEnd: "End",
       alertNoGeo: "Geolocation not available on this device.",
       alertDenied: "Location access denied. Enable it in Settings → Privacy → Location Services → Safari.",
+      // Live trail-progress tracking + elevation scrubbing
+      trackStartAria: "Start tracking your progress",
+      trackPauseAria: "Pause tracking",
+      trackEndAria: "End and reset tracking",
+      trackTurnaround: "Turnaround reached — head back",
+      trackComplete: "Trail complete!",
+      scrubAria: "Drag to inspect elevation along the trail",
     },
     ja: {
       appName: "梅ちゃんのトレイル",
@@ -66,7 +72,6 @@ window.I18N = {
       gpsAria: "現在地",
       langOther: "EN",
       statDistance: "距離",
-      statElevation: "登り",
       statDifficulty: "難易度",
       statTime: "所要時間",
       elevation: "標高グラフ",
@@ -98,6 +103,13 @@ window.I18N = {
       markerEnd: "終点",
       alertNoGeo: "この端末では位置情報を利用できません。",
       alertDenied: "位置情報へのアクセスが拒否されました。設定 → プライバシーとセキュリティ → 位置情報サービス → Safari で許可してください。",
+      // Live trail-progress tracking + elevation scrubbing
+      trackStartAria: "歩行の記録を開始",
+      trackPauseAria: "計測を一時停止",
+      trackEndAria: "計測を終了してリセット",
+      trackTurnaround: "折り返し地点に到達 — ここから下山",
+      trackComplete: "踏破！",
+      scrubAria: "ドラッグでコース上の標高を確認",
     },
   },
 

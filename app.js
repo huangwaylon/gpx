@@ -12,6 +12,22 @@ const DL_ZOOMS   = [10, 11, 12, 13, 14, 15, 16];
 // costs a lot of tiles for context you rarely zoom that far in to read.
 const padFor = z => z <= 12 ? 0.05 : z <= 14 ? 0.03 : 0.015;
 const FT         = 3.28084;
+const MI_PER_KM  = 1.609344;
+
+// Elevation-profile SVG geometry. The viewBox is W×PROF_H; PROF_H must match #elev-svg's
+// height in app.css, and PROF_PAD_B/T are the px reserved below/above the plotted area.
+const PROF_H = 96, PROF_PAD_B = 14, PROF_PAD_T = 12;
+
+// Track / marker palette — mirrors the --red/--green/--blue/--violet/--amber custom properties
+// in app.css (SVG strings and Leaflet options can't read CSS vars without getComputedStyle).
+// Keep in sync with :root in app.css.
+const C = { red:'#ef4444', green:'#22c55e', blue:'#3b82f6', violet:'#d946ef', amber:'#f59e0b' };
+
+// Live-tracking tuning. Per GPS fix we snap the position to the nearest track vertex,
+// searching only a forward window around the last snapped index so an out-and-back's
+// return leg (which overlaps the outbound leg) can't match the wrong leg.
+const SNAP_FWD_M  = 250;   // how far ahead along the track to search (≈ one fix's travel)
+const SNAP_BACK_M = 80;    // small backward slack for GPS jitter
 
 // Map tile sources. Each trail picks one via its `tiles` field (default = usgs).
 // US trails use USGS topo ({z}/{y}/{x}); Japan trails use GSI 地理院タイル ({z}/{x}/{y}).
@@ -37,6 +53,24 @@ let totalDist = 0, gpsWatch = null, gpsMk = null, gpsAcc = null, gpsFollow = fal
 let curPos = null, wakeLock = null;
 let sheetState = 'peek';          // 'peek' | 'full'
 let dlState = 'idle';             // global offline-maps download: 'idle' | 'busy' | 'done'
+
+// Cached profile elevation bounds (smoothed), computed once per trail in loadTrail.
+let eleLo = 0, eleHi = 0, eleRange = 1;
+// Downsampled render points for the track polyline, kept WITH cumulative distance .d so the
+// green "walked" overlay (live tracking) can be sliced by distance without re-deriving them.
+let renderPts = [];
+// Far end of the trail = the point of greatest distance from the trailhead. For an out-and-back
+// (whose GPX is a closed round trip) this is the turnaround/summit, and progress locks here.
+let turnIdx = 0, turnDist = 0, isOutAndBack = false;
+
+// Elevation-scrub state (drag a finger along the profile to inspect a point on the trail).
+let scrubbing = false, scrubMk = null, scrubRAF = 0, scrubX = 0, scrubRect = null, scrubCardRect = null;
+
+// Live trail-progress state.
+let tracking = false, paused = false;
+let trackStartTs = 0, trackElapsedMs = 0, hudTimer = null;
+let walkedDist = 0, progIdx = -1;   // monotonic distance-along reached (m); last snapped vertex
+let walkedLayer = null;             // green polyline drawn over the red base track
 
 const $  = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
@@ -91,6 +125,8 @@ function setLang(next) {
     renderPeek(curTrail);
     renderSheetBody(curTrail);
     redrawTrailLabels();
+    updateTrackBtn(); updateHUD();   // re-localize the tracking button + HUD message
+    syncGpsCursor();
   }
 }
 
@@ -122,14 +158,12 @@ function routeFromHash() {
 // ════════════════════════════════════════════════════════════
 let listFilter = 'all', listSort = null;
 
-function diffClass(d) {
-  return { 'Easy':'d-easy','Moderate':'d-moderate','Hard':'d-hard','Very Hard':'d-veryhard' }[d] || 'd-moderate';
-}
-function diffKey(d) {
-  return { 'Easy':'easy','Moderate':'moderate','Hard':'hard','Very Hard':'veryhard' }[d];
-}
+// Difficulty → slug (used for the CSS class `d-<slug>` and the filter chips' data-filter).
+const DIFF = { 'Easy':'easy', 'Moderate':'moderate', 'Hard':'hard', 'Very Hard':'veryhard' };
+function diffClass(d) { return DIFF[d] ? 'd-'+DIFF[d] : 'd-moderate'; }
+function diffKey(d)   { return DIFF[d]; }
 // Distance/elevation units: miles+feet in EN, km+meters in JA
-function fmtDist(mi) { return lang === 'ja' ? `${(mi*1.609344).toFixed(1)} km` : `${mi} mi`; }
+function fmtDist(mi) { return lang === 'ja' ? `${(mi*MI_PER_KM).toFixed(1)} km` : `${mi} mi`; }
 function fmtGain(ft) { return lang === 'ja' ? `${Math.round(ft/FT).toLocaleString()} m` : `${ft.toLocaleString()} ft`; }
 
 function renderList() {
@@ -181,15 +215,20 @@ function bindGlobal() {
   $('#lang-toggle').addEventListener('click', () => setLang(lang === 'ja' ? 'en' : 'ja'));
   $('#btn-back').addEventListener('click', () => { location.hash = ''; });
   $('#btn-gps').addEventListener('click', toggleGPS);
+  $('#btn-track').addEventListener('click', toggleTrack);
+  $('#th-close').addEventListener('click', stopTracking);
   $('#dl-all').addEventListener('click', downloadAll);
 
   initSheetDrag();
+  initProfileScrub();
 }
 
 function showList() {
   $('#detail').hidden = true;
   $('#list').hidden = false;
   if (gpsWatch !== null) stopGPS();
+  stopTracking();
+  scrubbing = false; clearScrub();
   curTrail = null;
 }
 
@@ -198,6 +237,7 @@ function showList() {
 // ════════════════════════════════════════════════════════════
 async function openDetail(trail) {
   curTrail = trail;
+  stopTracking(); scrubbing = false;     // fresh per-trail tracking/scrub state
   $('#list').hidden = true;
   $('#detail').hidden = false;
   $('#detail-title').textContent = loc(trail).name;
@@ -221,7 +261,7 @@ function renderPeek(trail) {
 function renderSheetBody(trail) {
   const tr = loc(trail);
   // Stat boxes: km/m in JA, mi/k-ft in EN
-  const distV = lang==='ja' ? (trail.lengthMi*1.609344).toFixed(1) : trail.lengthMi;
+  const distV = lang==='ja' ? (trail.lengthMi*MI_PER_KM).toFixed(1) : trail.lengthMi;
   const distL = lang==='ja' ? '距離 (km)' : t('statDistance');
   const gainV = lang==='ja' ? Math.round(trail.gainFt/FT).toLocaleString() : (trail.gainFt/1000).toFixed(trail.gainFt>=1000?1:0)+'k';
   const gainL = lang==='ja' ? '登り (m)' : 'Ft Gain';
@@ -235,7 +275,8 @@ function renderSheetBody(trail) {
 
     <div id="elev-card">
       <div class="hd"><span class="t">${t('elevation')}</span><span class="r" id="elev-range"></span></div>
-      <svg id="elev-svg" preserveAspectRatio="none"></svg>
+      <svg id="elev-svg" preserveAspectRatio="none" role="img" aria-label="${t('scrubAria')}"></svg>
+      <div id="scrub-tip" hidden></div>
     </div>
 
     ${trail.plan ? renderPlanCard(trail.plan) : ''}
@@ -283,7 +324,7 @@ function fmtTime(s) {
 function renderPlanCard(plan) {
   const by   = plan.by[lang]        || plan.by.en;
   const pace = plan.paceLabel[lang] || plan.paceLabel.en;
-  const dist = lang === 'ja' ? `${plan.distKm} km` : `${(plan.distKm/1.609344).toFixed(1)} mi`;
+  const dist = lang === 'ja' ? `${plan.distKm} km` : `${(plan.distKm/MI_PER_KM).toFixed(1)} mi`;
   const gain = lang === 'ja' ? `${plan.gainM.toLocaleString()} m`
                              : `${Math.round(plan.gainM*FT).toLocaleString()} ft`;
   return `
@@ -358,6 +399,8 @@ function fmtPlanDate(iso) {
 // ── Map ──
 function initMap() {
   if (map) { map.remove(); map = null; }
+  // map.remove() drops all layers; clear stale references so onPos/scrub recreate them fresh.
+  trackLayer = walkedLayer = scrubMk = gpsMk = gpsAcc = null; endMarker._all = [];
   const src = trailSource(curTrail);
   map = L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center, zoom:13, tap:true });
   const zoom = L.control.zoom({ position:'topright' }).addTo(map);
@@ -368,6 +411,7 @@ function initMap() {
 
 async function loadTrail(trail) {
   trackPts = []; trackWpts = []; totalDist = 0;
+  renderPts = []; walkedDist = 0; progIdx = -1;
   let text;
   try { text = await (await fetch(trail.gpx)).text(); }
   catch(e) { console.error('GPX load failed', e); return; }
@@ -390,6 +434,7 @@ async function loadTrail(trail) {
   totalDist = d;
 
   smoothEle();
+  precomputeProfileAndFarEnd();
 
   trackWpts.forEach(w => {
     let best=Infinity;
@@ -400,6 +445,26 @@ async function loadTrail(trail) {
   drawProfile();
 }
 
+// One-pass precompute (avoids re-deriving these on every profile redraw / GPS fix):
+//   • eleLo/eleHi/eleRange — smoothed-elevation bounds for the profile's Y scale.
+//   • turnIdx/turnDist     — the far end (max distance from the trailhead). For an out-and-back
+//     the GPX is a closed round trip, so this is the turnaround; progress locks here.
+function precomputeProfileAndFarEnd() {
+  eleLo = Infinity; eleHi = -Infinity;
+  const p0 = trackPts[0]; let far = -1; turnIdx = 0;
+  trackPts.forEach((p, i) => {
+    if (p.se < eleLo) eleLo = p.se;
+    if (p.se > eleHi) eleHi = p.se;
+    const dd = hav(p0.lat, p0.lon, p.lat, p.lon);
+    if (dd > far) { far = dd; turnIdx = i; }
+  });
+  eleRange = (eleHi - eleLo) || 1;
+  turnDist = trackPts[turnIdx] ? trackPts[turnIdx].d : totalDist;
+  isOutAndBack = curTrail.route === 'Out & back';
+}
+
+// 15-point centered moving average over raw GPX elevations → trackPts[i].se ("smoothed
+// elevation"), used everywhere downstream (profile, cursor) to tame GPS elevation noise.
 function smoothEle() {
   const w = 15, n = trackPts.length;
   const raw = trackPts.map(p => p.ele);
@@ -412,24 +477,33 @@ function smoothEle() {
 
 function drawTrack() {
   const step = Math.max(1, Math.floor(trackPts.length/1200));
-  const coords = trackPts.filter((_,i)=>i%step===0||i===trackPts.length-1).map(p=>[p.lat,p.lon]);
+  // Keep the downsampled points (with cumulative distance .d) so the green progress overlay
+  // can be sliced by distance; coords is just their [lat,lon] for the base polylines.
+  renderPts = trackPts.filter((_,i)=>i%step===0||i===trackPts.length-1);
+  const coords = renderPts.map(p=>[p.lat,p.lon]);
+  walkedLayer = null;            // recreated lazily by recolorProgress() while tracking
 
   L.polyline(coords, { color:'#000', weight:7, opacity:0.25, lineJoin:'round' }).addTo(map); // halo
-  trackLayer = L.polyline(coords, { color:'#ef4444', weight:4, opacity:0.95, lineJoin:'round' }).addTo(map);
+  trackLayer = L.polyline(coords, { color:C.red, weight:4, opacity:0.95, lineJoin:'round' }).addTo(map);
 
   if (trackPts.length) {
-    endMarker(trackPts[0], '#22c55e', 'markerTrailhead');
+    endMarker(trackPts[0], C.green, 'markerTrailhead');
     const last = trackPts[trackPts.length-1];
     const isLoop = curTrail.route === 'Loop' || hav(trackPts[0].lat,trackPts[0].lon,last.lat,last.lon) < 120;
-    if (!isLoop) endMarker(last, '#ef4444', 'markerEnd');
+    if (!isLoop) endMarker(last, C.red, 'markerEnd');
   }
   trackWpts.forEach(w => {
-    w._marker = L.marker([w.lat,w.lon], { icon:dotIcon('#f59e0b',11) })
+    w._marker = L.marker([w.lat,w.lon], { icon:dotIcon(C.amber,11) })
       .bindPopup(`<div class="wp-pop">${trWpt(w.name)}</div>`, {maxWidth:240})
       .addTo(map);
   });
 
-  map.fitBounds(trackLayer.getBounds(), { paddingTopLeft:[30,70], paddingBottomRight:[30, sheetPeekHeight()+30] });
+  fitTrack();
+}
+
+// Fit the map to the full track, leaving room for the header (top) and the sheet peek (bottom).
+function fitTrack() {
+  if (map && trackLayer) map.fitBounds(trackLayer.getBounds(), { paddingTopLeft:[30,70], paddingBottomRight:[30, sheetPeekHeight()+30] });
 }
 
 // Endpoint markers store an i18n key so labels can be re-rendered on language switch
@@ -456,37 +530,40 @@ function dotIcon(color,size){
 }
 
 // ── Elevation profile ──
+// Profile Y for a smoothed elevation `se` (px within the PROF_H-tall viewBox). drawProfile and
+// drawProfileCursor MUST map elevations identically, or the GPS/scrub dot drifts off the area —
+// hence this single shared helper. Reads the cached eleLo/eleRange (set in loadTrail).
+const profY = se => PROF_H - PROF_PAD_B - ((se-eleLo)/eleRange)*(PROF_H - PROF_PAD_B - PROF_PAD_T);
+
 function drawProfile() {
   const svg = $('#elev-svg'); if (!svg || trackPts.length<2) return;
-  const W = svg.clientWidth || 340, H = 96;
+  const W = svg.clientWidth || 340, H = PROF_H;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  const eles = trackPts.map(p=>p.se);
-  const lo=Math.min(...eles), hi=Math.max(...eles), range=hi-lo||1;
   const step=Math.max(1,Math.floor(trackPts.length/500));
   const sub=trackPts.filter((_,i)=>i%step===0||i===trackPts.length-1);
-  const X=dd=>(dd/totalDist)*W, Y=e=>H-14-((e-lo)/range)*(H-26);
+  const X=dd=>(dd/totalDist)*W;
 
   let path=`M0,${H}`;
-  sub.forEach(p=>{ path+=` L${X(p.d).toFixed(1)},${Y(p.se).toFixed(1)}`; });
+  sub.forEach(p=>{ path+=` L${X(p.d).toFixed(1)},${profY(p.se).toFixed(1)}`; });
   path+=` L${W},${H}Z`;
-  let line=`M0,${Y(sub[0].se).toFixed(1)}`;
-  sub.forEach(p=>{ line+=` L${X(p.d).toFixed(1)},${Y(p.se).toFixed(1)}`; });
+  let line=`M0,${profY(sub[0].se).toFixed(1)}`;
+  sub.forEach(p=>{ line+=` L${X(p.d).toFixed(1)},${profY(p.se).toFixed(1)}`; });
 
   const wp = trackWpts.filter(w=>w.d!=null).map(w=>{
     const x=X(w.d).toFixed(1);
-    return `<line x1="${x}" y1="4" x2="${x}" y2="${H}" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>`;
+    return `<line x1="${x}" y1="4" x2="${x}" y2="${H}" stroke="${C.amber}" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>`;
   }).join('');
 
   svg.innerHTML = `
     <defs><linearGradient id="eg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.7"/>
+      <stop offset="0%" stop-color="${C.blue}" stop-opacity="0.7"/>
       <stop offset="100%" stop-color="#1e3a8a" stop-opacity="0.15"/>
     </linearGradient></defs>
     ${wp}
     <path d="${path}" fill="url(#eg)"/>
     <path d="${line}" fill="none" stroke="#60a5fa" stroke-width="1.5"/>
     <g id="epos"></g>`;
-  $('#elev-range').textContent = fmtElevRange(lo, hi);
+  $('#elev-range').textContent = fmtElevRange(eleLo, eleHi);
 }
 
 // Profile axis labels: feet in EN, meters in JA
@@ -495,17 +572,102 @@ function fmtElevRange(loM, hiM) {
   return `${Math.round(loM*FT).toLocaleString()}–${Math.round(hiM*FT).toLocaleString()} ft`;
 }
 
-function updateProfilePos(idx){
-  const svg=$('#elev-svg'); if(!svg) return;
-  const g=$('#epos'); if(!g) return;
-  const W=svg.viewBox.baseVal.width||340, H=96;
-  const eles=trackPts.map(p=>p.se);
-  const lo=Math.min(...eles), hi=Math.max(...eles), range=hi-lo||1;
-  const p=trackPts[idx];
-  const x=((p.d/totalDist)*W).toFixed(1);
-  const y=(H-14-((p.se-lo)/range)*(H-26)).toFixed(1);
-  g.innerHTML=`<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="#fff" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.8"/>
-    <circle cx="${x}" cy="${y}" r="4.5" fill="#3b82f6" stroke="#fff" stroke-width="2"/>`;
+// Interpolated point at cumulative distance D (m) along the track: binary-search the monotonic
+// trackPts[].d, then linearly blend the bracketing vertices. Used by the scrub and the progress
+// overlay's exact split vertex. Returns {lat,lon,se,d,idx}.
+function pointAtDistance(D){
+  const n=trackPts.length; if(!n) return null;
+  D=Math.max(0,Math.min(totalDist,D));
+  let lo=0,hi=n-1;
+  while(lo<hi){ const mid=(lo+hi+1)>>1; if(trackPts[mid].d<=D) lo=mid; else hi=mid-1; }
+  const a=trackPts[lo], b=trackPts[Math.min(lo+1,n-1)];
+  const seg=b.d-a.d, t=seg>1e-9 ? (D-a.d)/seg : 0;
+  return { lat:a.lat+t*(b.lat-a.lat), lon:a.lon+t*(b.lon-a.lon), se:a.se+t*(b.se-a.se), d:D, idx:lo };
+}
+
+// Nearest track vertex to a lat/lon, scanning indices [from,to] (default = whole track).
+// Returns {idx, dist} with dist in meters.
+function nearestIdx(lat,lon,from=0,to=trackPts.length-1){
+  let best=Infinity, bi=from;
+  for(let i=from;i<=to;i++){ const dd=hav(lat,lon,trackPts[i].lat,trackPts[i].lon); if(dd<best){best=dd;bi=i;} }
+  return { idx:bi, dist:best };
+}
+
+// Single point's elevation / distance-along, in the active language's units.
+function fmtElev(m){ return lang==='ja' ? `${Math.round(m).toLocaleString()} m` : `${Math.round(m*FT).toLocaleString()} ft`; }
+function fmtDistAlong(m){ return lang==='ja' ? `${(m/1000).toFixed(1)} km` : `${(m/(MI_PER_KM*1000)).toFixed(1)} mi`; }
+
+// Draw the profile cursor (vertical line + dot) for point p={d,se}. When `scrub` is true the dot
+// is violet (matching the map marker) and the floating readout pill is shown; otherwise it's the
+// blue GPS-position dot. Shared by GPS (onPos) and scrubbing.
+function drawProfileCursor(p, scrub){
+  const svg=$('#elev-svg'), g=$('#epos'); if(!svg||!g||!p) return;
+  const W=svg.viewBox.baseVal.width||340, H=PROF_H;
+  const x=(p.d/totalDist)*W, y=profY(p.se);
+  g.innerHTML=
+    `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${H}" stroke="#fff" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.85"/>`+
+    `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${scrub?C.violet:C.blue}" stroke="#fff" stroke-width="2"/>`;
+  const tip=$('#scrub-tip');
+  if(tip && scrub){
+    tip.innerHTML=`${fmtElev(p.se)}<span class="d">${fmtDistAlong(p.d)}</span>`;
+    tip.hidden=false;
+    // Reuse the rects captured at gesture start to avoid a forced reflow each scrub frame.
+    const r=scrubRect||svg.getBoundingClientRect(), card=scrubCardRect||svg.closest('#elev-card').getBoundingClientRect();
+    const cssX=(r.left-card.left)+(p.d/totalDist)*r.width, half=tip.offsetWidth/2;
+    tip.style.left=Math.max(half+2, Math.min(card.width-half-2, cssX))+'px';
+  }
+}
+
+// Put the blue GPS cursor back on the profile at the current position, if any (used after the
+// profile SVG is rebuilt or a scrub ends). onPos draws its own cursor from the fresh fix.
+function syncGpsCursor(){
+  if(curPos && trackPts.length && !scrubbing)
+    drawProfileCursor(trackPts[nearestIdx(curPos.lat,curPos.lon).idx], false);
+}
+
+// ── Elevation scrubbing ──
+// Bound once (from bindGlobal) via delegation, since the profile SVG is rebuilt on every
+// language switch / sheet re-render. touch-action:none on #elev-svg keeps the drag from
+// scrolling the sheet; window-level move/up listeners track the finger past the SVG edge.
+function initProfileScrub(){
+  document.addEventListener('pointerdown', e=>{
+    if(!e.target.closest || !e.target.closest('#elev-svg') || trackPts.length<2) return;
+    scrubbing=true;
+    const svg=$('#elev-svg');
+    scrubRect=svg.getBoundingClientRect();
+    scrubCardRect=svg.closest('#elev-card').getBoundingClientRect();   // cached for the readout pill
+    applyScrub(e.clientX);
+    window.addEventListener('pointermove', onScrubMove);
+    window.addEventListener('pointerup', endScrub);
+    window.addEventListener('pointercancel', endScrub);
+    e.preventDefault();
+  });
+}
+function onScrubMove(e){ scrubX=e.clientX; if(!scrubRAF) scrubRAF=requestAnimationFrame(()=>{ scrubRAF=0; applyScrub(scrubX); }); }
+function applyScrub(clientX){
+  const rect=scrubRect; if(!rect) return;
+  let f=(clientX-rect.left)/rect.width; f=Math.max(0,Math.min(1,f));
+  const p=pointAtDistance(f*totalDist); if(!p) return;
+  drawProfileCursor(p, true);
+  if(!scrubMk){
+    scrubMk=L.marker([p.lat,p.lon], { interactive:false, zIndexOffset:900,
+      icon:L.divIcon({ className:'', html:'<div class="scrub-dot"></div>', iconSize:[16,16], iconAnchor:[8,8] }) }).addTo(map);
+  } else scrubMk.setLatLng([p.lat,p.lon]);
+}
+function endScrub(){
+  scrubbing=false;
+  window.removeEventListener('pointermove', onScrubMove);
+  window.removeEventListener('pointerup', endScrub);
+  window.removeEventListener('pointercancel', endScrub);
+  if(scrubRAF){ cancelAnimationFrame(scrubRAF); scrubRAF=0; }
+  clearScrub();
+}
+// Remove the scrub marker + readout, and restore the profile cursor to the GPS position (if any).
+function clearScrub(){
+  if(scrubMk){ scrubMk.remove(); scrubMk=null; }
+  const tip=$('#scrub-tip'); if(tip) tip.hidden=true;
+  const g=$('#epos'); if(g) g.innerHTML='';
+  syncGpsCursor();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -537,13 +699,15 @@ function onPos(pos){
   curPos={lat,lon};
   if(!gpsMk){
     gpsMk=L.marker([lat,lon],{icon:L.divIcon({className:'',html:'<div class="gps-dot"></div>',iconSize:[16,16],iconAnchor:[8,8]}),zIndexOffset:1000}).addTo(map);
-    gpsAcc=L.circle([lat,lon],{radius:accuracy,fillColor:'#3b82f6',fillOpacity:0.08,color:'#3b82f6',weight:1}).addTo(map);
+    gpsAcc=L.circle([lat,lon],{radius:accuracy,fillColor:C.blue,fillOpacity:0.08,color:C.blue,weight:1}).addTo(map);
   } else { gpsMk.setLatLng([lat,lon]); gpsAcc.setLatLng([lat,lon]); gpsAcc.setRadius(accuracy); }
   if(gpsFollow) map.setView([lat,lon], Math.max(map.getZoom(),15), {animate:true});
-  if(trackPts.length){
-    let best=Infinity,idx=0;
-    trackPts.forEach((p,i)=>{const dd=hav(lat,lon,p.lat,p.lon);if(dd<best){best=dd;idx=i;}});
-    updateProfilePos(idx);
+  if(tracking && !paused) updateProgress(lat,lon,accuracy);
+  if(trackPts.length && !scrubbing){
+    // While tracking, reuse the windowed snap index (cheaper than a full-track scan, and it
+    // won't jump the cursor to the wrong overlapping leg of an out-and-back); else scan fully.
+    const i = (tracking && !paused && progIdx>=0) ? progIdx : nearestIdx(lat,lon).idx;
+    drawProfileCursor(trackPts[i], false);
   }
 }
 function onPosErr(err){ if(err.code===1){ alert(t('alertDenied')); stopGPS(); } }
@@ -553,21 +717,133 @@ async function relWake(){ if(wakeLock){try{await wakeLock.release();}catch(_){}w
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden && gpsWatch!==null && !wakeLock) reqWake(); });
 
 // ════════════════════════════════════════════════════════════
+//  Live trail progress
+//  Start a session → each GPS fix snaps to the trail, fills the walked portion green,
+//  and the HUD shows percent + elapsed time. Out-and-back progress locks at the far end
+//  so the return leg never un-colors the trail.
+// ════════════════════════════════════════════════════════════
+
+// FAB tap: start, or toggle pause/resume while a session is running.
+function toggleTrack(){
+  if(!tracking){ startTracking(); return; }
+  paused=!paused;
+  if(paused) trackElapsedMs+=Date.now()-trackStartTs;   // bank elapsed, freeze the clock
+  else       trackStartTs=Date.now();                   // resume from now
+  updateTrackBtn(); updateHUD();
+}
+function startTracking(){
+  if(!navigator.geolocation){ alert(t('alertNoGeo')); return; }
+  tracking=true; paused=false;
+  trackStartTs=Date.now(); trackElapsedMs=0;
+  walkedDist=0; progIdx=-1;
+  if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; }
+  $('#track-hud').hidden=false;
+  if(gpsWatch===null) startGPS();          // tracking needs live fixes
+  clearInterval(hudTimer); hudTimer=setInterval(updateHUD,1000);
+  updateTrackBtn(); updateHUD();
+}
+// End the session entirely (HUD ✕). Leaves GPS as-is so the location dot can stay on.
+function stopTracking(){
+  tracking=false; paused=false;
+  clearInterval(hudTimer); hudTimer=null;
+  const hud=$('#track-hud'); if(hud) hud.hidden=true;
+  if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; }
+  walkedDist=0; progIdx=-1; trackElapsedMs=0;
+  updateTrackBtn();
+}
+function updateTrackBtn(){
+  const b=$('#btn-track'); if(!b) return;
+  const live = tracking && !paused;
+  b.classList.toggle('tracking', live);
+  b.textContent = live ? '⏸' : '▶';
+  b.setAttribute('aria-label', t(live ? 'trackPauseAria' : 'trackStartAria'));
+}
+
+// Off-trail gate: reject fixes whose nearest vertex is implausibly far, scaled to the reported
+// GPS accuracy (tighter for good fixes, looser under tree cover) and clamped to a sane range.
+function offTrailGate(acc){ return Math.max(25, Math.min(60, 2.5*(acc||20))); }
+
+// First fix: among vertices within the gate, take the one with the SMALLEST distance-along, so
+// the trailhead/return overlap of an out-and-back can't be mistaken for near-complete progress.
+function acquireIdx(lat,lon,gate){
+  let bi=-1, bd=Infinity, biDist=Infinity;
+  for(let i=0;i<trackPts.length;i++){
+    const dd=hav(lat,lon,trackPts[i].lat,trackPts[i].lon);
+    if(dd<=gate && trackPts[i].d<bd){ bd=trackPts[i].d; bi=i; biDist=dd; }
+  }
+  return bi<0 ? nearestIdx(lat,lon) : { idx:bi, dist:biDist };
+}
+function updateProgress(lat,lon,accuracy){
+  const n=trackPts.length; if(n<2) return;
+  const gate=offTrailGate(accuracy);
+  let r;
+  if(progIdx<0){ r=acquireIdx(lat,lon,gate); }      // first fix: whole-track, smallest-d match
+  else {
+    const avg=totalDist/(n-1)||1;                   // forward window around the last snap
+    const from=Math.max(0, progIdx-Math.ceil(SNAP_BACK_M/avg));
+    const to  =Math.min(n-1, progIdx+Math.ceil(SNAP_FWD_M/avg));
+    r=nearestIdx(lat,lon,from,to);
+  }
+  if(r.dist>gate) return;                           // off-trail: hold progress
+  progIdx=r.idx;
+  // Only recolor when the high-water mark actually advances (walkedDist is monotonic), so a
+  // stationary or backward-jittering fix doesn't rebuild the polyline for an identical line.
+  if(trackPts[r.idx].d>walkedDist){ walkedDist=trackPts[r.idx].d; recolorProgress(); }
+  updateHUD();
+}
+
+// Green overlay over the red base track, covering everything walked (cumulative distance
+// ≤ walkedDist) with an exact end vertex. For an out-and-back the return leg overlaps the
+// outbound on the map, so extending the overlay along it keeps the line green without
+// un-coloring; walkedDist is monotonic so it never shrinks.
+function recolorProgress(){
+  if(!map || !renderPts.length) return;
+  const D=walkedDist, coords=[];
+  for(const p of renderPts){ if(p.d<=D) coords.push([p.lat,p.lon]); else break; }
+  if(D>0){ const j=pointAtDistance(D); if(j) coords.push([j.lat,j.lon]); }
+  if(coords.length<2){ if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; } return; }
+  if(!walkedLayer) walkedLayer=L.polyline(coords,{ color:C.green, weight:4, opacity:0.97, lineJoin:'round' }).addTo(map);
+  else walkedLayer.setLatLngs(coords);
+}
+
+function elapsedMs(){ return trackElapsedMs + ((tracking && !paused) ? Date.now()-trackStartTs : 0); }
+function fmtElapsed(ms){
+  const s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+  const pad=x=>String(x).padStart(2,'0');
+  return (h ? `${h}:${pad(m)}` : `${m}`) + ':' + pad(sec);
+}
+function updateHUD(){
+  const hud=$('#track-hud'); if(!hud || hud.hidden) return;
+  // Out-and-back % is measured to the far end (turnDist) so reaching it reads 100%; loop and
+  // point-to-point measure against the full length.
+  const total = isOutAndBack ? turnDist : totalDist;
+  const pct = total>0 ? Math.min(100, Math.round(walkedDist/total*100)) : 0;
+  $('.th-fill').style.width = pct+'%';
+  $('.th-pct').textContent = pct+'%';
+  $('.th-time').textContent = fmtElapsed(elapsedMs());
+  const msg=$('.th-msg'), m = pct>=100 ? t(isOutAndBack ? 'trackTurnaround' : 'trackComplete') : '';
+  msg.textContent=m; msg.hidden=!m;
+}
+
+// ════════════════════════════════════════════════════════════
 //  Bottom sheet drag
 // ════════════════════════════════════════════════════════════
 function sheetPeekHeight(){ return Math.round(window.innerHeight*0.16); }
 function setSheet(state){
   sheetState=state;
   const sheet=$('#sheet');
-  const fab=$('#btn-gps');
+  const gps=$('#btn-gps'), track=$('#btn-track');
+  let gpsBottom;
   if (matchMedia('(orientation:landscape) and (max-height:560px)').matches){
     sheet.style.height='';
-    if(fab) fab.style.bottom = `calc(20px + var(--safe-b))`;
-    return;
+    gpsBottom = 'calc(20px + var(--safe-b))';
+  } else {
+    if(state==='peek') sheet.style.height = sheetPeekHeight()+'px';
+    else if(state==='full') sheet.style.height = '90dvh';
+    gpsBottom = `calc(${sheetPeekHeight()}px + 14px)`;
   }
-  if(state==='peek') sheet.style.height = sheetPeekHeight()+'px';
-  else if(state==='full') sheet.style.height = '90dvh';
-  if(fab) fab.style.bottom = `calc(${sheetPeekHeight()}px + 14px)`;
+  if(gps) gps.style.bottom = gpsBottom;
+  if(track) track.style.bottom = `calc(${gpsBottom} + 58px)`;   // stacked above the GPS FAB
 }
 function initSheetDrag(){
   const sheet=$('#sheet'), grip=$('#grip'), peek=$('#sheet-peek');
@@ -691,6 +967,5 @@ function hav(la1,lo1,la2,lo2){
 // redraw profile + refit on rotation/resize
 let rzT;
 window.addEventListener('resize',()=>{ clearTimeout(rzT); rzT=setTimeout(()=>{
-  if(curTrail && map){ map.invalidateSize(); setSheet(sheetState); drawProfile();
-    if(trackLayer) map.fitBounds(trackLayer.getBounds(),{paddingTopLeft:[30,70],paddingBottomRight:[30,sheetPeekHeight()+30]}); }
+  if(curTrail && map){ map.invalidateSize(); setSheet(sheetState); drawProfile(); syncGpsCursor(); fitTrack(); }
 },250); });

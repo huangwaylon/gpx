@@ -49,6 +49,18 @@
     </div>
     <div id="map"></div>
     <button class="map-fab recenter on" id="btn-gps" data-i18n-aria="gpsAria" aria-label="現在地">◎</button>
+    <button class="map-fab track" id="btn-track" data-i18n-aria="trackStartAria" aria-label="歩行の記録を開始">▶</button>
+
+    <!-- Live trail-progress HUD (shown only while tracking) -->
+    <div id="track-hud" hidden role="status" aria-live="polite">
+      <div class="th-bar"><span class="th-fill"></span></div>
+      <div class="th-row">
+        <span class="th-pct">0%</span>
+        <span class="th-time">0:00</span>
+        <span class="th-msg"></span>
+        <button class="th-close" id="th-close" data-i18n-aria="trackEndAria" aria-label="計測を終了してリセット">✕</button>
+      </div>
+    </div>
 
     <div id="sheet">
       <div class="sheet-grip" id="grip"></div>

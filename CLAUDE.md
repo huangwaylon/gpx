@@ -5,9 +5,12 @@ Guidance for Claude Code (and humans) working in this repository.
 ## What this is
 
 **Ume-chan's Trails** (梅ちゃんのトレイル) — an offline-capable hiking PWA for iPhone.
-It shows 12 trails — **8 in Washington State (USA)** and **4 in Japan** (Mt. Fuji and the
+It shows 13 trails — **8 in Washington State (USA)** and **5 in Japan** (Mt. Fuji and the
 Yamanashi mountains) — on topographic maps with the GPX track overlaid, live GPS position,
-waypoints, and an elevation profile. US trails use **USGS** topo tiles; Japan trails use
+waypoints, and an elevation profile. The profile is **scrubbable** (drag a finger to inspect
+any point — a readout pill plus a synced marker on the map), and a **live trail-progress**
+mode fills the walked portion green and tracks elapsed time. US trails use **USGS** topo tiles;
+Japan trails use
 **GSI 地理院タイル** (Geospatial Information Authority of Japan). Built to work with **no
 cell signal** on the trail once installed to the home screen via Safari.
 
@@ -61,7 +64,7 @@ is fully translated.
 | `app.js` | All logic — i18n, routing, map (per-trail tile source via `TILE_SOURCES`), GPX parse, GPS, elevation, global tile download |
 | `i18n.js` | `window.I18N` — UI strings, dynamic-string fns, enum tables, waypoint names, and per-trail Japanese content |
 | `app.css` | Dark, mobile-first, responsive styles (custom properties, safe-area insets, CJK font stack) |
-| `trails.js` | The data model — `window.TRAILS` array of 12 trail objects (8 US + 4 Japan; English base content). Optional `tiles` field picks the basemap (USGS default; `"gsi"` for Japan) |
+| `trails.js` | The data model — `window.TRAILS` array of 13 trail objects (8 US + 5 Japan; English base content). Optional `tiles` field picks the basemap (USGS default; `"gsi"` for Japan) |
 | `sw.js` | Service worker — precaches shell+i18n+GPX+images; cache-first map tiles (USGS + GSI) |
 | `manifest.json`, `icon-{180,192,512}.png` | PWA install metadata + Home-Screen icon (cropped from the Enchantments photo) |
 | `gpx/` | 12 GPX tracks (committed, parsed at runtime) |
@@ -73,11 +76,17 @@ is fully translated.
 
 One HTML document, two screens toggled by the `hidden` attribute. **Hash routing**:
 `#/trail/<slug>` → `openDetail()`; empty hash → `showList()`. The list renders cards from
-`window.TRAILS` (12 trails), merged with Japanese content from `I18N.trails` via `loc(trail)`.
+`window.TRAILS` (13 trails), merged with Japanese content from `I18N.trails` via `loc(trail)`.
 The detail screen builds a Leaflet map (`initMap`) using the trail's tile source
 (`TILE_SOURCES` — USGS for US, GSI for Japan, chosen by each trail's optional `tiles` field),
 fetches+parses the GPX (`loadTrail` → `drawTrack`/`drawProfile`), and shows a draggable bottom
-sheet. GPS uses `watchPosition`. Offline is three tiers: SW precache (shell+i18n+GPX+images) →
+sheet. GPS uses `watchPosition`. Two interactive layers sit on top: **scrubbing** the elevation
+profile (`initProfileScrub`/`drawProfileCursor` → `pointAtDistance`) drags a synced marker along
+the trail with an elevation/distance readout; **live tracking** (`startTracking`/`updateProgress`
+→ `recolorProgress`, toggled by the `#btn-track` FAB) snaps each GPS fix to the trail with a
+windowed-forward search, fills the walked portion green over the red base, and shows percent +
+elapsed in the `#track-hud` banner (out-and-back progress locks at the far end so the return leg
+doesn't un-color). Offline is three tiers: SW precache (shell+i18n+GPX+images) →
 cache-first tiles (both hosts) → a **single global "download all maps" button** (`downloadAll`)
 in the list header that pre-caches every trail's tiles across both sources. Full detail in
 `docs/ARCHITECTURE.md`.
@@ -116,7 +125,7 @@ Paste into the DevTools console:
 ```
 
 (Or DevTools → Application → Storage → **Clear site data**.) To ship an update to returning
-users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v4`) — the `activate` handler purges
+users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v7`) — the `activate` handler purges
 old caches. Reset language during testing with `localStorage.removeItem('lang')`.
 
 ## Adding a trail (short version)
