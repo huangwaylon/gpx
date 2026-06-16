@@ -242,9 +242,9 @@ async function openDetail(trail) {
   $('#detail').hidden = false;
   $('#detail-title').textContent = loc(trail).name;
 
-  setSheet('peek');
   renderPeek(trail);
-  renderSheetBody(trail);
+  renderSheetBody(trail);     // render the body first so setSheet can size the peek to the chart
+  setSheet('peek');
   initMap();
   await loadTrail(trail);
 }
@@ -828,9 +828,22 @@ function updateHUD(){
 // ════════════════════════════════════════════════════════════
 //  Bottom sheet drag
 // ════════════════════════════════════════════════════════════
-function sheetPeekHeight(){ return Math.round(window.innerHeight*0.16); }
+// Peek (closed) height: tall enough to reveal the whole elevation chart so it can be scrubbed
+// without opening the sheet (otherwise the synced map indicator is the only visible feedback),
+// capped so the map stays usable. Cached in peekH so drag/resize don't re-measure each frame;
+// recomputed by computePeekH() from the rendered sheet body (called at the top of setSheet).
+let peekH = 0;
+function computePeekH(){
+  const card=$('#elev-card'), fallback=Math.round(window.innerHeight*0.16);
+  if(!card || $('#detail').hidden || matchMedia('(orientation:landscape) and (max-height:560px)').matches)
+    return peekH = fallback;
+  const h = card.offsetTop + card.offsetHeight + 14;   // sheet top → just below the elevation chart
+  return peekH = h ? Math.min(Math.max(h, fallback), Math.round(window.innerHeight*0.62)) : fallback;
+}
+function sheetPeekHeight(){ return peekH || Math.round(window.innerHeight*0.16); }
 function setSheet(state){
   sheetState=state;
+  computePeekH();
   const sheet=$('#sheet');
   const gps=$('#btn-gps'), track=$('#btn-track');
   let gpsBottom;
