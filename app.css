@@ -198,6 +198,70 @@ img { display:block; }
 .facts dt { color:var(--muted); font-weight:600; }
 .facts dd { color:var(--text-2); font-weight:600; }
 
+/* upcoming-hike plan panel (data baked in from a shared YAMAP plan) */
+.plan-card {
+  background:linear-gradient(135deg, rgba(59,130,246,0.16), rgba(217,70,239,0.11));
+  border:1px solid rgba(96,165,250,0.32); border-radius:14px;
+  padding:13px 14px; margin-bottom:18px;
+}
+.plan-head { display:flex; align-items:center; gap:7px; }
+.plan-head .ic { font-size:15px; line-height:1; flex-shrink:0; }
+.plan-head .lbl { font-size:12px; font-weight:800; letter-spacing:0.4px;
+  text-transform:uppercase; color:var(--blue-l); }
+.plan-yamap { margin-left:auto; flex-shrink:0; font-size:11px; font-weight:700;
+  color:var(--blue-l); text-decoration:none; white-space:nowrap;
+  padding:4px 8px; margin:-4px -4px -4px 0; border-radius:8px;
+  transition:background .15s; }
+.plan-yamap:active { background:rgba(96,165,250,0.16); }
+.plan-date { font-size:18px; font-weight:800; letter-spacing:-0.3px; margin:8px 0 10px; line-height:1.15; }
+.plan-chips { display:flex; flex-wrap:wrap; gap:7px; }
+.plan-chips .pc {
+  display:flex; align-items:center; gap:4px;
+  background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.10);
+  border-radius:9px; padding:5px 9px; font-size:12.5px; font-weight:700; color:var(--text-2);
+  white-space:nowrap;
+}
+.plan-foot { font-size:11.5px; color:var(--muted); font-weight:600; margin-top:11px; line-height:1.55; }
+
+/* hour-by-hour itinerary timeline (collapsible, open by default) */
+.tl-wrap { margin-top:13px; border-top:1px solid rgba(255,255,255,0.10); padding-top:11px; }
+.tl-title { display:flex; align-items:center; gap:6px; cursor:pointer; list-style:none;
+  font-size:12px; font-weight:800; letter-spacing:0.4px; text-transform:uppercase; color:var(--blue-l); }
+.tl-title::-webkit-details-marker { display:none; }
+.tl-title::after { content:"⌄"; margin-left:auto; font-size:15px; line-height:1; color:var(--muted);
+  transform:translateY(-2px); transition:transform .2s; }
+.tl-wrap[open] .tl-title::after { transform:translateY(1px) rotate(180deg); }
+.tl-meta { display:flex; flex-wrap:wrap; gap:7px 14px; margin:10px 0 12px;
+  font-size:12px; font-weight:700; color:var(--text-2); }
+.tl-meta > span { display:inline-flex; align-items:center; gap:4px; }
+
+.tl { position:relative; list-style:none; margin:0; padding:0; }
+.tl::before { content:""; position:absolute; left:6px; top:11px; bottom:11px; width:2px;
+  background:rgba(255,255,255,0.16); border-radius:1px; }
+.tl-stop { position:relative; display:grid; grid-template-columns:14px 46px 1fr;
+  align-items:center; gap:0 10px; min-height:25px; }
+.tl-dot { width:13px; height:13px; border-radius:50%; position:relative; z-index:1;
+  justify-self:start; margin-left:0; background:var(--amber); }
+.tl-pass .tl-dot { background:transparent; border:2.5px solid var(--amber); }
+.tl-junction .tl-dot { width:10px; height:10px; margin-left:1.5px;
+  background:var(--bg-1); border:2px solid var(--muted); }
+.tl-start .tl-dot { background:var(--green); width:14px; height:14px; box-shadow:0 0 0 3px rgba(34,197,94,0.18); }
+.tl-goal .tl-dot { background:var(--red); width:14px; height:14px; box-shadow:0 0 0 3px rgba(239,68,68,0.18); }
+.tl-time { font-size:13px; font-weight:800; color:var(--text); letter-spacing:-0.3px; }
+.tl-name { font-size:13px; font-weight:600; color:var(--text-2);
+  display:flex; align-items:center; gap:7px; flex-wrap:wrap; line-height:1.3; }
+.tl-start .tl-name, .tl-goal .tl-name, .tl-peak .tl-name { color:var(--text); font-weight:700; }
+.tl-junction .tl-name { color:var(--muted); font-weight:600; }
+.tl-stay { font-size:10.5px; font-weight:800; color:var(--amber);
+  background:rgba(245,158,11,0.14); border:1px solid rgba(245,158,11,0.34);
+  border-radius:6px; padding:1px 7px; white-space:nowrap; }
+.tl-leg { position:relative; display:grid; grid-template-columns:14px 1fr; gap:0 10px;
+  min-height:17px; align-items:center; }
+.tl-leg > span { grid-column:2; font-size:11px; font-weight:600; color:var(--muted); }
+
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+  clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+
 /* GPS dot */
 .gps-dot { width:16px; height:16px; background:var(--blue); border:3px solid #fff; border-radius:50%;
   box-shadow:0 0 0 0 rgba(59,130,246,0.5); animation:gpspulse 2s infinite; }

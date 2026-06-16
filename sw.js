@@ -1,4 +1,4 @@
-const APP_V  = 'wa-trails-app-v5';
+const APP_V  = 'wa-trails-app-v6';
 const TILE_V = 'wa-trails-tiles-v1';
 
 const SHELL = [
@@ -18,11 +18,12 @@ const TRAIL_ASSETS = [
   'images/lake-22.webp','images/snow-lake.webp','images/lake-valhalla.webp',
   'images/talapus-lake.webp','images/mount-pilchuck.webp','images/bridal-veil.webp',
   'images/skyline-loop.webp','images/enchantments.webp',
-  // Japan (4)
+  // Japan (5)
   'gpx/Mt_Fuji_Yoshida.gpx','gpx/Mt_Fuji_Gotemba.gpx',
   'gpx/Mount_Daibosatsu_Loop.gpx','gpx/Mount_Kinpu_Kanayama.gpx',
+  'gpx/Mount_Kinpu_Odarumi.gpx',
   'images/fuji-yoshida.webp','images/fuji-gotemba.webp',
-  'images/daibosatsu.webp','images/kinpu.webp',
+  'images/daibosatsu.webp','images/kinpu.webp','images/kinpu-odarumi.webp',
 ];
 
 self.addEventListener('install', e => {

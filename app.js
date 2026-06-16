@@ -238,6 +238,8 @@ function renderSheetBody(trail) {
       <svg id="elev-svg" preserveAspectRatio="none"></svg>
     </div>
 
+    ${trail.plan ? renderPlanCard(trail.plan) : ''}
+
     <div class="section">
       <h3>${t('secOverview')}</h3>
       <p>${tr.summary}</p>
@@ -272,6 +274,85 @@ function fmtTime(s) {
   if (lang !== 'ja') return s.replace(/ /g,'');
   return s.replace(/~/g,'約').replace(/(\d+)\s*h(?:r)?/g,'$1時間').replace(/(\d+)\s*min/g,'$1分')
           .replace(/\s*[–-]\s*/g,'～').replace(/時間(?=～|$)/,'時間').replace(/ /g,'');
+}
+
+// Optional upcoming-hike plan panel (data from a shared YAMAP plan, baked in so it
+// works fully offline — no network call). Summary chips + an hour-by-hour timeline.
+// The plan's own distance/gain are shown here (metric in JA, imperial in EN, like the
+// rest of the app) and read as the plan's figures, not the trail's.
+function renderPlanCard(plan) {
+  const by   = plan.by[lang]        || plan.by.en;
+  const pace = plan.paceLabel[lang] || plan.paceLabel.en;
+  const dist = lang === 'ja' ? `${plan.distKm} km` : `${(plan.distKm/1.609344).toFixed(1)} mi`;
+  const gain = lang === 'ja' ? `${plan.gainM.toLocaleString()} m`
+                             : `${Math.round(plan.gainM*FT).toLocaleString()} ft`;
+  return `
+    <section class="plan-card">
+      <div class="plan-head">
+        <span class="ic" aria-hidden="true">📅</span>
+        <span class="lbl">${t('secPlan')}</span>
+        <a class="plan-yamap" href="${plan.url}" target="_blank" rel="noopener"
+           aria-label="${t('planYamapAria')}">${t('planYamap')} ↗</a>
+      </div>
+      <div class="plan-date">${fmtPlanDate(plan.dateISO)}</div>
+      <div class="plan-chips">
+        <span class="pc">👥 ${tf('planParty')(plan.party)}</span>
+        <span class="pc">↔ ${dist}</span>
+        <span class="pc">▲ ${gain}</span>
+      </div>
+      ${plan.itinerary ? renderTimeline(plan) : ''}
+      <div class="plan-foot">${pace} ${plan.pace}% · ${t('planCourse')} ${plan.constant} · ${t('planBy')} ${by}</div>
+    </section>`;
+}
+
+// Hour-by-hour itinerary as a vertical timeline. Leg durations between stops are
+// computed from the times (a `depart` time marks a rest, e.g. the 2 h on the summit).
+function renderTimeline(plan) {
+  const it = plan.itinerary;
+  const hm = s => { const [h,m] = s.split(':').map(Number); return h*60 + m; };
+  const rows = it.map((s, i) => {
+    const stay = s.depart ? hm(s.depart) - hm(s.time) : 0;
+    const badge = stay
+      ? `<span class="tl-stay">${lang==='ja' ? '滞在 '+fmtDur(stay) : fmtDur(stay)+' rest'}</span>`
+      : '';
+    const stop = `<li class="tl-stop tl-${s.type}"><span class="tl-dot"></span>` +
+      `<span class="tl-time">${s.time}</span>` +
+      `<span class="tl-name">${s.name[lang] || s.name.en}${badge}</span></li>`;
+    if (i === it.length - 1) return stop;
+    const leg = hm(it[i+1].time) - (s.depart ? hm(s.depart) : hm(s.time));
+    return stop + `<li class="tl-leg"><span>${fmtDur(leg)}</span></li>`;
+  }).join('');
+  const meta = `<div class="tl-meta">` +
+    `<span><span aria-hidden="true">🌅</span> ${plan.sunrise}<span class="sr-only"> ${t('schedRise')}</span></span>` +
+    `<span><span aria-hidden="true">🌇</span> ${plan.sunset}<span class="sr-only"> ${t('schedSet')}</span></span>` +
+    (plan.totalTime ? `<span><span aria-hidden="true">⏱</span> ${plan.totalTime}<span class="sr-only"> ${t('schedTotal')}</span></span>` : '') +
+    `</div>`;
+  return `<details class="tl-wrap" open>
+      <summary class="tl-title">${t('secSchedule')}</summary>
+      ${meta}<ol class="tl">${rows}</ol>
+    </details>`;
+}
+
+// Minutes → "2時間" / "39分" (JA) or "2 h" / "39 min" (EN)
+function fmtDur(min) {
+  const h = Math.floor(min/60), m = min%60;
+  if (lang === 'ja') return (h ? `${h}時間` : '') + (m ? `${m}分` : '') || '0分';
+  const p = []; if (h) p.push(`${h} h`); if (m) p.push(`${m} min`);
+  return p.join(' ') || '0 min';
+}
+
+// "2026-06-27" → "2026年6月27日（土）" (JA) / "Sat, Jun 27, 2026" (EN).
+// Built from local date parts so the weekday isn't shifted by UTC parsing.
+function fmtPlanDate(iso) {
+  const [y,m,d] = iso.split('-').map(Number);
+  const dt = new Date(y, m-1, d);
+  if (lang === 'ja') {
+    const wd = ['日','月','火','水','木','金','土'][dt.getDay()];
+    return `${y}年${m}月${d}日（${wd}）`;
+  }
+  const wd = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()];
+  const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1];
+  return `${wd}, ${mo} ${d}, ${y}`;
 }
 
 // ── Map ──

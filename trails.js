@@ -1,4 +1,4 @@
-// Trail data — 8 Washington State (USA) trails + 4 Japan trails.
+// Trail data — 8 Washington State (USA) trails + 5 Japan trails.
 // Stats sourced from AllTrails (length/gain/difficulty); geometry from bundled GPX.
 // `tiles` picks the offline basemap source: omitted = USGS topo (US), "gsi" = GSI 地理院タイル (Japan).
 window.TRAILS = [
@@ -257,5 +257,61 @@ window.TRAILS = [
       "Roughly June to October; snow lingers late and arrives early at 2,600 m.",
       "Gojō-iwa is a sacred rock pillar — enjoy it, but think twice about scrambling up it."
     ]
+  },
+  {
+    slug: "kinpu-odarumi",
+    name: "Mount Kinpu (Odarumi Pass)",
+    area: "Odarumi Pass, Yamanashi",
+    img: "images/kinpu-odarumi.webp",
+    gpx: "gpx/Mount_Kinpu_Odarumi.gpx",
+    tiles: "gsi",
+    rating: 4.7, reviews: 14,
+    lengthMi: 5.2, gainFt: 1673, diff: "Moderate",
+    route: "Out & back", time: "3 h 15 min",
+    season: "Jun – Oct", dogs: "Leashed",
+    permit: "No permit — free; parking at Odarumi Pass (大弛峠)",
+    center: [35.8733, 138.6443],
+    summary: "The gentlest way to the granite crown of Mt. Kinpu (2,599 m) — a high alpine ridge walk from Odarumi Pass, the highest road pass in Japan, over Asahidake to the iconic Gojō-iwa rock pillar with huge Mt. Fuji and Southern Alps views.",
+    description: "This is the easiest of the routes up Mt. Kinpu, one of Japan's '100 Famous Mountains.' It begins high — at Odarumi Pass (大弛峠, ≈2,360 m), the highest pass in Japan reachable by car — so most of the climbing is already behind you. The trail works through subalpine forest of moss and dwarf pine over the shoulder of Asahidake (朝日岳, 2,579 m), dips into a saddle, then rises onto a boulder-strewn alpine ridge to the summit. There the giant granite tower of Gojō-iwa (五丈岩) stands against sweeping views of Mt. Fuji, Yatsugatake, and the Southern and Central Alps. Return the way you came.",
+    tips: [
+      "Starts high at Odarumi Pass (≈2,360 m) — the most approachable way up Kinpu — but the air is thin and the weather turns fast.",
+      "The road over Odarumi Pass closes in winter; the hiking season is realistically June to October.",
+      "Boulder-hopping on the upper ridge near the summit — sturdy boots and careful footing required.",
+      "Gojō-iwa is a sacred rock pillar — enjoy the views, but think twice about scrambling up it."
+    ],
+    // Optional upcoming-hike plan shared from YAMAP. Locale-neutral data; the few
+    // text bits that differ by language carry { en, ja }. Rendered as a tappable
+    // card on the detail sheet (see renderPlanCard in app.js). Stats are the plan's
+    // own (a 瑞牆山・金峰山 round trip), shown inside the YAMAP-labelled card.
+    plan: {
+      url: "https://yamap.com/plans/code/qYx4uH75fDMQ5Sf695kWr4nNt8klIkHTwoN03pgpk5hccIVnh0FTucGyv4sHd3EZOZI",
+      dateISO: "2026-06-27",
+      party: 7,
+      distKm: 7.9,
+      gainM: 557,
+      pace: 90,
+      paceLabel: { en: "Relaxed", ja: "ややゆっくり" },
+      constant: 15,
+      by: { en: "Umeda", ja: "うめだ" },
+      totalTime: "6:22",        // 行動時間 7:00 → 13:22 (includes the 2 h summit rest)
+      sunrise: "4:30",
+      sunset: "19:06",
+      // Hour-by-hour itinerary (1日目). `depart` marks a rest/stay; leg times to the
+      // next stop are computed in renderTimeline(). Fully offline — no YAMAP needed.
+      itinerary: [
+        { time: "7:00",  type: "start",    name: { en: "Odarumi Pass (start)", ja: "大弛峠駐車場" } },
+        { time: "7:39",  type: "pass",     name: { en: "Asahi Pass",           ja: "朝日峠" } },
+        { time: "8:18",  type: "peak",     name: { en: "Asahidake",            ja: "朝日岳" } },
+        { time: "8:46",  type: "junction", name: { en: "Junction",             ja: "分岐" } },
+        { time: "8:52",  type: "junction", name: { en: "Junction",             ja: "分岐" } },
+        { time: "9:20",  depart: "11:20", type: "peak",
+                         name: { en: "Mt. Kinpu (summit)", ja: "金峰山（甲州御岳山）" } },
+        { time: "11:42", type: "junction", name: { en: "Junction",             ja: "分岐" } },
+        { time: "11:48", type: "junction", name: { en: "Junction",             ja: "分岐" } },
+        { time: "12:21", type: "peak",     name: { en: "Asahidake",            ja: "朝日岳" } },
+        { time: "12:49", type: "pass",     name: { en: "Asahi Pass",           ja: "朝日峠" } },
+        { time: "13:22", type: "goal",     name: { en: "Odarumi Pass",         ja: "大弛峠" } }
+      ]
+    }
   }
 ];

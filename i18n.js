@@ -9,7 +9,7 @@ window.I18N = {
   ui: {
     en: {
       appName: "Ume-chan's Trails",
-      subtitle: "12 trails · tap to explore",
+      subtitle: "13 trails · tap to explore",
       filterAll: "All",
       filterModerate: "Moderate",
       filterHard: "Hard",
@@ -31,6 +31,15 @@ window.I18N = {
       secHike: "The hike",
       secTips: "Tips & need-to-know",
       secDetails: "Details",
+      secPlan: "Planned hike",
+      planBy: "Planned by",
+      planCourse: "Course rating",
+      planYamap: "View on YAMAP",
+      planYamapAria: "Open this hike plan on YAMAP (opens in a new tab)",
+      secSchedule: "Schedule",
+      schedRise: "Sunrise",
+      schedSet: "Sunset",
+      schedTotal: "Total time",
       factRoute: "Route type",
       factSeason: "Best season",
       factDogs: "Dogs",
@@ -46,7 +55,7 @@ window.I18N = {
     },
     ja: {
       appName: "梅ちゃんのトレイル",
-      subtitle: "12のコース · タップして探索",
+      subtitle: "13のコース · タップして探索",
       filterAll: "すべて",
       filterModerate: "中級",
       filterHard: "上級",
@@ -68,6 +77,15 @@ window.I18N = {
       secHike: "コース紹介",
       secTips: "ヒント・注意点",
       secDetails: "詳細情報",
+      secPlan: "山行予定",
+      planBy: "計画者",
+      planCourse: "コース定数",
+      planYamap: "YAMAPで見る",
+      planYamapAria: "この山行計画をYAMAPで開く（新しいタブ）",
+      secSchedule: "コースタイム",
+      schedRise: "日の出",
+      schedSet: "日の入り",
+      schedTotal: "行動時間",
       factRoute: "ルートタイプ",
       factSeason: "ベストシーズン",
       factDogs: "犬",
@@ -84,11 +102,10 @@ window.I18N = {
   },
 
   // ── Functions producing locale-aware dynamic strings ──
-  // (Reserved for dynamic strings via tf(); the offline-download UI now shows a
-  //  bare percentage on the global button, so no entries are needed here today.)
+  // (Used via tf(); e.g. planParty renders the hike-plan party size with its unit.)
   fn: {
-    en: {},
-    ja: {},
+    en: { planParty: n => `${n} hikers` },
+    ja: { planParty: n => `${n}人` },
   },
 
   // ── Enum / token tables ──
@@ -273,6 +290,19 @@ window.I18N = {
         "標高差のある長い一日。早出を心がけ、岩がちな稜線は慎重に。",
         "山頂付近は花崗岩の岩場。しっかりした登山靴と確実な足運びを。",
         "おおむね6〜10月。標高2,600m級のため、雪は早く来て遅くまで残ります。",
+        "五丈岩は信仰の対象の岩塔。眺めて楽しみ、よじ登るのは控えめに。",
+      ],
+    }},
+    "kinpu-odarumi": { ja: {
+      name: "金峰山（大弛峠）",
+      area: "大弛峠（山梨県）",
+      summary: "日本一標高の高い車道峠・大弛峠から、朝日岳を越えて金峰山（2,599m）の花崗岩の頂と象徴的な五丈岩へと至る、金峰山で最も登りやすいルート。富士山や南アルプスの大展望が広がります。",
+      description: "金峰山は日本百名山のひとつ。この大弛峠ルートは、その中でも最も登りやすい道です。出発点の大弛峠（おおだるみとうげ、標高約2,360m）は車で行ける峠としては日本一高く、登りの大半をすでに終えた状態からスタートします。苔と針葉樹の亜高山帯の森を抜けて朝日岳（2,579m）の肩を越え、いったん鞍部へ下ったのち、岩の積み重なる高山的な稜線を登って山頂へ。頂上には遠くからも見える巨大な花崗岩の塔「五丈岩（ごじょういわ）」がそびえ、富士山、八ヶ岳、南・中央アルプスまで大展望が広がります。下りは往路を戻ります。",
+      permit: "許可証不要・無料 ／ 大弛峠に駐車場あり",
+      tips: [
+        "標高約2,360mの大弛峠からのスタートで、金峰山で最も手軽なルート。とはいえ空気は薄く、天候の急変に注意を。",
+        "大弛峠を越える林道は冬季通行止め。登山適期はおおむね6〜10月です。",
+        "山頂付近の稜線は花崗岩の岩場。しっかりした登山靴と確実な足運びを。",
         "五丈岩は信仰の対象の岩塔。眺めて楽しみ、よじ登るのは控えめに。",
       ],
     }},
