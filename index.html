@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Lake 22">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <title>Lake 22 Trail</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: rgba(15,23,42,0.95);
+      --blue: #3b82f6;
+      --red: #ef4444;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --text: #f1f5f9;
+      --muted: rgba(148,163,184,0.7);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+
+    #app { display: flex; flex-direction: column; height: 100%; height: 100dvh; }
+
+    /* ── Header ── */
+    #header {
+      flex-shrink: 0;
+      height: calc(44px + env(safe-area-inset-top, 0px));
+      padding: env(safe-area-inset-top, 0px) 12px 0;
+      background: var(--panel);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      display: flex; align-items: center; justify-content: space-between;
+      z-index: 1000;
+    }
+    #trail-name { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
+    #header-btns { display: flex; gap: 8px; }
+    .hbtn {
+      border: none; border-radius: 8px; padding: 5px 10px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      background: rgba(255,255,255,0.12); color: var(--text);
+      display: flex; align-items: center; gap: 4px;
+      transition: background 0.15s;
+    }
+    .hbtn.on { background: var(--blue); }
+
+    /* ── Install banner ── */
+    #install-banner {
+      flex-shrink: 0; background: var(--blue);
+      padding: 9px 14px; font-size: 13px;
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    #install-banner.hide { display: none; }
+    #install-banner button { background: rgba(255,255,255,0.25); border: none; border-radius: 5px; color: #fff; padding: 2px 8px; font-size: 13px; cursor: pointer; flex-shrink: 0; }
+
+    /* ── Map ── */
+    #map { flex: 1; min-height: 0; }
+
+    /* ── Stats bar ── */
+    #stats {
+      flex-shrink: 0; background: var(--panel);
+      display: flex; justify-content: space-around;
+      padding: 7px 8px 6px;
+    }
+    .stat { text-align: center; }
+    .stat-v { font-size: 15px; font-weight: 700; line-height: 1.1; }
+    .stat-l { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-top: 1px; }
+
+    /* ── Elevation profile ── */
+    #elev-wrap {
+      flex-shrink: 0;
+      background: var(--panel);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    #elev-svg { display: block; width: 100%; height: 76px; }
+
+    /* ── GPS dot ── */
+    .gps-dot {
+      width: 14px; height: 14px;
+      background: var(--blue); border: 2.5px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 0 0 0 rgba(59,130,246,0.5);
+      animation: gpspulse 2s infinite;
+    }
+    @keyframes gpspulse {
+      0%   { box-shadow: 0 0 0 0   rgba(59,130,246,0.5); }
+      70%  { box-shadow: 0 0 0 8px rgba(59,130,246,0); }
+      100% { box-shadow: 0 0 0 0   rgba(59,130,246,0); }
+    }
+
+    /* ── Download modal ── */
+    #dl-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+      z-index: 9000; display: flex; align-items: center; justify-content: center;
+    }
+    #dl-modal.hide { display: none; }
+    #dl-card {
+      background: #1e293b; border-radius: 16px; padding: 22px;
+      width: min(310px, calc(100vw - 40px));
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    }
+    #dl-card h3 { font-size: 17px; margin-bottom: 6px; }
+    #dl-card p  { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+    #dl-bar-wrap { height: 5px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; margin-bottom: 10px; }
+    #dl-bar { height: 100%; background: var(--blue); border-radius: 3px; width: 0; transition: width 0.25s; }
+    #dl-status { font-size: 12px; color: var(--muted); text-align: center; margin-bottom: 18px; }
+    .modal-btns { display: flex; gap: 10px; }
+    .mbtn { flex: 1; padding: 11px; border-radius: 10px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; }
+    .mbtn-p { background: var(--blue); color: #fff; }
+    .mbtn-s { background: rgba(255,255,255,0.1); color: var(--text); }
+
+    /* ── Leaflet overrides ── */
+    .leaflet-control-attribution { font-size: 9px !important; background: rgba(255,255,255,0.45) !important; }
+    .leaflet-popup-content-wrapper { background: #1e293b !important; color: var(--text) !important; border-radius: 8px !important; box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important; }
+    .leaflet-popup-tip { background: #1e293b !important; }
+    .leaflet-popup-close-button { color: var(--muted) !important; }
+    .wp-popup { font-size: 13px; font-weight: 600; padding: 1px 2px; white-space: nowrap; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <span id="trail-name">Lake 22 Trail</span>
+    <div id="header-btns">
+      <button class="hbtn" id="btn-gps" onclick="toggleGPS()">GPS</button>
+      <button class="hbtn" id="btn-dl" onclick="dlShow()">⬇ Map</button>
+    </div>
+  </div>
+
+  <div id="install-banner" class="hide">
+    <span>Offline: <strong>Share → Add to Home Screen</strong> in Safari</span>
+    <button onclick="installDismiss()">✕</button>
+  </div>
+
+  <div id="map"></div>
+
+  <div id="stats">
+    <div class="stat"><div class="stat-v" id="sv-dist">—</div><div class="stat-l">Distance</div></div>
+    <div class="stat"><div class="stat-v" id="sv-gain">—</div><div class="stat-l">Gain</div></div>
+    <div class="stat"><div class="stat-v" id="sv-alt">—</div><div class="stat-l">Altitude</div></div>
+    <div class="stat"><div class="stat-v" id="sv-prog">—</div><div class="stat-l">Progress</div></div>
+  </div>
+
+  <div id="elev-wrap">
+    <svg id="elev-svg" preserveAspectRatio="none" viewBox="0 0 390 76"></svg>
+  </div>
+</div>
+
+<div id="dl-modal" class="hide">
+  <div id="dl-card">
+    <h3>Download Map</h3>
+    <p>Save map tiles for offline use. Takes ~10 seconds on Wi-Fi.</p>
+    <div id="dl-bar-wrap"><div id="dl-bar"></div></div>
+    <div id="dl-status">Ready</div>
+    <div class="modal-btns">
+      <button class="mbtn mbtn-s" onclick="dlHide()">Cancel</button>
+      <button class="mbtn mbtn-p" id="btn-dl-start" onclick="dlStart()">Download</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+
+// ─── Config ──────────────────────────────────────────────────────────────────
+const TILE_URL   = 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}';
+const GPX_FILE   = 'Lake_22_Trail.gpx';
+const TILE_CACHE = 'lake22-tiles-v1';
+const BOUNDS     = { n: 48.07887, s: 48.06105, e: -121.74586, w: -121.76725 };
+const PAD        = 0.006;
+const ZOOMS      = [10,11,12,13,14,15,16];
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let map, pts = [], wpts = [], totalDist = 0, elevGain = 0;
+let gpsWid = null, gpsMk = null, gpsAcc = null, gpsFollowing = false;
+let curPos = null, wakeLock = null;
+
+// ─── Boot ────────────────────────────────────────────────────────────────────
+window.addEventListener('load', async () => {
+  checkInstall();
+  initMap();
+  await loadGPX();
+  drawProfile();
+  checkCache();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+  window.addEventListener('resize', drawProfile);
+});
+
+// ─── Install banner ──────────────────────────────────────────────────────────
+function checkInstall() {
+  const standalone = window.navigator.standalone || matchMedia('(display-mode:standalone)').matches;
+  if (!standalone && !localStorage.installOk) {
+    document.getElementById('install-banner').classList.remove('hide');
+  }
+}
+function installDismiss() {
+  document.getElementById('install-banner').classList.add('hide');
+  localStorage.installOk = '1';
+}
+
+// ─── Map ─────────────────────────────────────────────────────────────────────
+function initMap() {
+  map = L.map('map', { zoomControl: false, center: [48.069, -121.757], zoom: 13 });
+  L.tileLayer(TILE_URL, {
+    maxZoom: 16, minZoom: 8,
+    attribution: '© USGS National Map',
+    crossOrigin: true
+  }).addTo(map);
+  map.on('dragstart', () => { gpsFollowing = false; });
+}
+
+// ─── GPX ─────────────────────────────────────────────────────────────────────
+async function loadGPX() {
+  let text;
+  try { text = await (await fetch(GPX_FILE)).text(); }
+  catch (e) { console.error('GPX load failed', e); return; }
+  const xml = new DOMParser().parseFromString(text, 'text/xml');
+  parseWaypoints(xml);
+  parseTrack(xml);
+  updateStats();
+}
+
+function parseWaypoints(xml) {
+  xml.querySelectorAll('wpt').forEach(w => {
+    const lat  = +w.getAttribute('lat');
+    const lon  = +w.getAttribute('lon');
+    const name = (w.querySelector('name')?.textContent || '').trim().replace(/\s+/g,' ');
+    const mk = L.marker([lat,lon], { icon: dotIcon('#f59e0b', 10) });
+    mk.bindPopup(`<div class="wp-popup">${name}</div>`, { maxWidth: 220 });
+    mk.addTo(map);
+    wpts.push({ lat, lon, name, d: null });
+  });
+}
+
+function parseTrack(xml) {
+  const nodes = xml.querySelectorAll('trkpt');
+  let prevLat = null, prevLon = null, prevEle = null, dist = 0;
+  elevGain = 0;
+
+  nodes.forEach(n => {
+    const lat = +n.getAttribute('lat');
+    const lon = +n.getAttribute('lon');
+    const ele = +(n.querySelector('ele')?.textContent ?? 0);
+    if (prevLat !== null) dist += hav(prevLat, prevLon, lat, lon);
+    if (prevEle !== null && ele > prevEle) elevGain += ele - prevEle;
+    pts.push({ lat, lon, ele, d: dist });
+    prevLat = lat; prevLon = lon; prevEle = ele;
+  });
+
+  totalDist = dist;
+
+  // snap waypoints to nearest trail point
+  wpts.forEach(w => {
+    let best = Infinity;
+    pts.forEach(p => {
+      const dd = hav(w.lat, w.lon, p.lat, p.lon);
+      if (dd < best) { best = dd; w.d = p.d; }
+    });
+  });
+
+  // draw track (subsample to ≤1000 pts)
+  const step = Math.max(1, Math.floor(pts.length / 1000));
+  const coords = pts.filter((_,i) => i % step === 0 || i === pts.length-1).map(p => [p.lat, p.lon]);
+  L.polyline(coords, { color:'#ef4444', weight:4, opacity:0.92, lineJoin:'round' }).addTo(map);
+
+  // trailhead / summit markers
+  if (pts.length) {
+    markEnd(pts[0],                '#22c55e', 'Trailhead');
+    markEnd(pts[pts.length-1],     '#ef4444', 'Summit / Lake 22');
+  }
+
+  map.fitBounds(L.polyline(coords).getBounds(), { padding:[40,80] });
+}
+
+function markEnd(p, color, label) {
+  L.marker([p.lat,p.lon], { icon: dotIcon(color, 14) })
+   .bindPopup(`<div class="wp-popup">${label}</div>`)
+   .addTo(map);
+}
+
+function dotIcon(color, size) {
+  const half = size/2;
+  return L.divIcon({
+    html: `<div style="width:${size}px;height:${size}px;background:${color};border:2px solid #fff;border-radius:50%;box-shadow:0 1px 5px rgba(0,0,0,.5)"></div>`,
+    iconSize: [size,size], iconAnchor: [half,half], className: ''
+  });
+}
+
+// ─── Stats ───────────────────────────────────────────────────────────────────
+function updateStats() {
+  document.getElementById('sv-dist').textContent = toMi(totalDist).toFixed(1) + ' mi';
+  document.getElementById('sv-gain').textContent = '+' + toFt(elevGain).toFixed(0) + ' ft';
+}
+
+function updateAlt(altM) {
+  if (altM != null && !isNaN(altM))
+    document.getElementById('sv-alt').textContent = toFt(altM).toFixed(0) + ' ft';
+}
+
+function updateProg(posIdx) {
+  const pct = ((pts[posIdx].d / totalDist) * 100).toFixed(0);
+  document.getElementById('sv-prog').textContent = pct + '%';
+}
+
+// ─── Elevation profile ───────────────────────────────────────────────────────
+function drawProfile() {
+  if (pts.length < 2) return;
+  const svg = document.getElementById('elev-svg');
+  const W = svg.clientWidth || window.innerWidth || 390;
+  const H = 76;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  const eles = pts.map(p => p.ele);
+  const lo = Math.min(...eles), hi = Math.max(...eles), range = hi - lo || 1;
+  const step = Math.max(1, Math.floor(pts.length / 600));
+  const sub  = pts.filter((_,i) => i % step === 0 || i === pts.length-1);
+  const toX  = d => (d / totalDist) * W;
+  const toY  = e => H - 4 - ((e - lo) / range) * (H - 14);
+
+  let path = `M0,${H}`;
+  sub.forEach(p => { path += ` L${toX(p.d).toFixed(1)},${toY(p.ele).toFixed(1)}`; });
+  path += ` L${W},${H}Z`;
+
+  const wpLines = wpts.filter(w => w.d != null).map(w => {
+    const x = toX(w.d).toFixed(1);
+    return `<line x1="${x}" y1="2" x2="${x}" y2="${H}" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3,2" opacity="0.7"/>`;
+  }).join('');
+
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="eg" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"   stop-color="#3b82f6" stop-opacity="0.75"/>
+        <stop offset="100%" stop-color="#1e3a8a" stop-opacity="0.25"/>
+      </linearGradient>
+    </defs>
+    ${wpLines}
+    <path d="${path}" fill="url(#eg)" stroke="#60a5fa" stroke-width="1.5"/>
+    <text x="4"     y="11" fill="rgba(148,163,184,.6)" font-size="9" font-family="-apple-system,sans-serif">${toFt(lo).toFixed(0)} ft</text>
+    <text x="${W-4}" y="11" fill="rgba(148,163,184,.6)" font-size="9" font-family="-apple-system,sans-serif" text-anchor="end">${toFt(hi).toFixed(0)} ft</text>
+    <g id="epos"></g>
+  `;
+}
+
+function updateProfilePos(idx) {
+  const svg = document.getElementById('elev-svg');
+  const W = svg.viewBox.baseVal.width || window.innerWidth;
+  const H = 76;
+  const eles = pts.map(p => p.ele);
+  const lo = Math.min(...eles), hi = Math.max(...eles), range = hi - lo || 1;
+  const p = pts[idx];
+  const x = ((p.d / totalDist) * W).toFixed(1);
+  const y = (H - 4 - ((p.ele - lo) / range) * (H - 14)).toFixed(1);
+  const g = document.getElementById('epos');
+  if (g) g.innerHTML = `
+    <line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="rgba(255,255,255,.7)" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <circle cx="${x}" cy="${y}" r="4" fill="${'#3b82f6'}" stroke="#fff" stroke-width="2"/>
+  `;
+}
+
+// ─── GPS ─────────────────────────────────────────────────────────────────────
+function toggleGPS() {
+  if (gpsWid !== null) {
+    if (gpsFollowing) {
+      // already following — stop
+      stopGPS();
+    } else {
+      // re-center
+      gpsFollowing = true;
+      if (curPos) map.setView([curPos.lat, curPos.lon], Math.max(map.getZoom(), 14));
+    }
+    return;
+  }
+  startGPS();
+}
+
+function startGPS() {
+  if (!navigator.geolocation) { alert('Geolocation not available.'); return; }
+  reqWakeLock();
+  gpsFollowing = true;
+  document.getElementById('btn-gps').classList.add('on');
+  document.getElementById('btn-gps').textContent = 'GPS ●';
+
+  gpsWid = navigator.geolocation.watchPosition(onPos, onPosErr,
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+}
+
+function stopGPS() {
+  if (gpsWid !== null) { navigator.geolocation.clearWatch(gpsWid); gpsWid = null; }
+  relWakeLock();
+  gpsFollowing = false;
+  if (gpsMk)  { gpsMk.remove();  gpsMk  = null; }
+  if (gpsAcc) { gpsAcc.remove(); gpsAcc = null; }
+  curPos = null;
+  document.getElementById('btn-gps').classList.remove('on');
+  document.getElementById('btn-gps').textContent = 'GPS';
+  document.getElementById('sv-alt').textContent  = '—';
+  document.getElementById('sv-prog').textContent = '—';
+  document.getElementById('epos').innerHTML = '';
+}
+
+function onPos(pos) {
+  const { latitude: lat, longitude: lon, accuracy, altitude } = pos.coords;
+  curPos = { lat, lon };
+
+  if (!gpsMk) {
+    gpsMk  = L.marker([lat,lon], { icon: L.divIcon({ html:'<div class="gps-dot"></div>', iconSize:[14,14], iconAnchor:[7,7], className:'' }), zIndexOffset:1000 }).addTo(map);
+    gpsAcc = L.circle([lat,lon], { radius: accuracy, fillColor:'#3b82f6', fillOpacity:0.08, color:'#3b82f6', weight:1 }).addTo(map);
+  } else {
+    gpsMk.setLatLng([lat,lon]);
+    gpsAcc.setLatLng([lat,lon]);
+    gpsAcc.setRadius(accuracy);
+  }
+
+  if (gpsFollowing) map.setView([lat,lon], Math.max(map.getZoom(), 14), { animate: true });
+
+  updateAlt(altitude);
+
+  // find nearest trail point for progress + profile
+  if (pts.length) {
+    let best = Infinity, idx = 0;
+    pts.forEach((p,i) => { const dd = hav(lat,lon,p.lat,p.lon); if (dd < best) { best=dd; idx=i; } });
+    updateProg(idx);
+    updateProfilePos(idx);
+  }
+}
+
+function onPosErr(err) {
+  if (err.code === 1) {
+    alert('Location access denied. Enable it in Settings → Privacy → Location Services.');
+    stopGPS();
+  }
+}
+
+// ─── Wake lock ───────────────────────────────────────────────────────────────
+async function reqWakeLock() {
+  if ('wakeLock' in navigator) {
+    try { wakeLock = await navigator.wakeLock.request('screen'); return; } catch(_) {}
+  }
+  // Fallback: keep alive with a no-op audio context trick on older iOS
+}
+async function relWakeLock() {
+  if (wakeLock) { try { await wakeLock.release(); } catch(_) {} wakeLock = null; }
+}
+// Re-acquire if released while tab is visible
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && gpsWid !== null && !wakeLock) reqWakeLock();
+});
+
+// ─── Tile download ───────────────────────────────────────────────────────────
+async function checkCache() {
+  if (!('caches' in window)) return;
+  try {
+    const c = await caches.open(TILE_CACHE);
+    const k = await c.keys();
+    if (k.length > 20) document.getElementById('btn-dl').textContent = '✓ Map';
+  } catch(_) {}
+}
+
+function dlShow() {
+  document.getElementById('dl-modal').classList.remove('hide');
+  document.getElementById('dl-bar').style.width = '0%';
+  document.getElementById('dl-status').textContent = `~${countTiles()} tiles to download`;
+  const b = document.getElementById('btn-dl-start');
+  b.disabled = false; b.textContent = 'Download';
+}
+
+function dlHide() { document.getElementById('dl-modal').classList.add('hide'); }
+
+let dlRunning = false;
+async function dlStart() {
+  if (dlRunning) return;
+  dlRunning = true;
+  const btn = document.getElementById('btn-dl-start');
+  btn.disabled = true; btn.textContent = 'Downloading…';
+
+  const urls = buildTileURLs();
+  const total = urls.length;
+  let done = 0;
+
+  const cache = await caches.open(TILE_CACHE);
+  const BATCH = 8;
+
+  for (let i = 0; i < urls.length; i += BATCH) {
+    await Promise.allSettled(urls.slice(i, i+BATCH).map(async url => {
+      try {
+        if (await cache.match(url)) { done++; return; }
+        const r = await fetch(url);
+        if (r.ok) await cache.put(url, r);
+      } catch(_) {}
+      done++;
+      const pct = Math.round((done/total)*100);
+      document.getElementById('dl-bar').style.width = pct + '%';
+      document.getElementById('dl-status').textContent = `${done} / ${total} (${pct}%)`;
+    }));
+  }
+
+  dlRunning = false;
+  document.getElementById('dl-status').textContent = `Done — ${done} tiles saved.`;
+  btn.textContent = 'Done';
+  document.getElementById('btn-dl').textContent = '✓ Map';
+  setTimeout(dlHide, 2000);
+}
+
+function countTiles() {
+  let n = 0;
+  const b = { n:BOUNDS.n+PAD, s:BOUNDS.s-PAD, e:BOUNDS.e+PAD, w:BOUNDS.w-PAD };
+  ZOOMS.forEach(z => { const r = tileRange(b,z); n += (r.x1-r.x0+1)*(r.y1-r.y0+1); });
+  return n;
+}
+
+function buildTileURLs() {
+  const urls = [];
+  const b = { n:BOUNDS.n+PAD, s:BOUNDS.s-PAD, e:BOUNDS.e+PAD, w:BOUNDS.w-PAD };
+  ZOOMS.forEach(z => {
+    const r = tileRange(b,z);
+    for (let x = r.x0; x <= r.x1; x++)
+      for (let y = r.y0; y <= r.y1; y++)
+        urls.push(TILE_URL.replace('{z}',z).replace('{y}',y).replace('{x}',x));
+  });
+  return urls;
+}
+
+function tileRange(b, z) {
+  const sw = ll2tile(b.s, b.w, z), ne = ll2tile(b.n, b.e, z);
+  return { x0:Math.min(sw.x,ne.x), x1:Math.max(sw.x,ne.x), y0:Math.min(sw.y,ne.y), y1:Math.max(sw.y,ne.y) };
+}
+
+function ll2tile(lat, lon, z) {
+  const n = 1 << z;
+  const x = Math.floor(n * (lon + 180) / 360);
+  const lr = lat * Math.PI / 180;
+  const y = Math.floor(n * (1 - Math.log(Math.tan(lr) + 1/Math.cos(lr)) / Math.PI) / 2);
+  return { x, y };
+}
+
+// ─── Utilities ───────────────────────────────────────────────────────────────
+function hav(lat1,lon1,lat2,lon2) {
+  const R = 6371000, d2r = Math.PI/180;
+  const φ1=lat1*d2r, φ2=lat2*d2r, Δφ=(lat2-lat1)*d2r, Δλ=(lon2-lon1)*d2r;
+  const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function toMi(m) { return m / 1609.344; }
+function toFt(m) { return m * 3.28084; }
+</script>
+</body>
+</html>
