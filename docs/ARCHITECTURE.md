@@ -294,14 +294,15 @@ and the browser back/forward buttons work for free.
 ### Markup & rendering
 
 The list screen (`#list`) contains a header (`#list-header`) whose top row is a `.head-row`
-holding the `<h1 data-i18n="appName">梅ちゃんのトレイル</h1>` and the **language toggle button
-`#lang-toggle`** (§1a), followed by the `#list-sub` subtitle. Below the header is a
+holding the `<h1 data-i18n="appName">梅ちゃんのトレイル</h1>` and a `.head-actions` wrapper
+with the global **"download all maps" button `#dl-all`** (§12) and the **language toggle
+button `#lang-toggle`** (§1a), followed by the `#list-sub` subtitle. Below the header is a
 horizontally-scrolling `#filter-bar` of `.chip` buttons, and an empty `#trail-list` container
-that JS fills (`index.html:21-37`). The filter chips are **All / Moderate / Hard / Very Hard**
+that JS fills (`index.html:21-40`). The filter chips are **All / Moderate / Hard / Very Hard**
 plus two sort chips (**↕ Distance**, **↕ Elevation**) — there is **no "Easy" chip** because no
-trail is Easy-rated (`index.html:29-36`); each chip label carries a `data-i18n` key.
+trail is Easy-rated (`index.html:33-38`); each chip label carries a `data-i18n` key.
 
-**`renderList()`** (`app.js:114-147`) is the single render function:
+**`renderList()`** (`app.js:131-161`) is the single render function:
 
 1. Copies `TRAILS` (`.slice()`), applies the active **filter** and **sort** (below).
 2. Maps each trail to a **`<article class="card" data-slug="…">`** built via template literal.
@@ -310,17 +311,16 @@ trail is Easy-rated (`index.html:29-36`); each chip label carries a `data-i18n` 
    - `.card-img-wrap` holding the lazy-loaded `<img class="card-img">`,
    - a difficulty badge `<span class="card-badge-diff <diffClass>">` whose label is
      `trDiff(diff)`,
-   - an optional offline check (`offIcon`, below),
    - a `.card-titlebar` overlay with `.card-title` (`tr.name`) and `.card-area` (`tr.area`),
    - a `.card-stats` row: distance (`↔ fmtDist(lengthMi)`), gain (`▲ fmtGain(gainFt)`), route
      (`⟳ trRoute(route)`), and a right-aligned `.star` rating.
 3. Joins the HTML, writes it into `#trail-list`, then wires each `.card`'s click to set
-   `location.hash = '#/trail/' + slug` (`app.js:145-146`).
+   `location.hash = '#/trail/' + slug` (`app.js:159-160`).
 
-`renderList()` is intentionally idempotent and is called several times: once on boot, again
-after `refreshCacheStatus()` so offline badges appear (`app.js:81,84`), after each filter/sort
-change, after a **language switch** (from `setLang()`), and after a successful tile download
-(`app.js:159`, `app.js:556`).
+`renderList()` is intentionally idempotent and is called several times: once on boot, after
+each filter/sort change, and after a **language switch** (from `setLang()`). It no longer
+renders any per-card offline badge — offline state is now surfaced by the single global
+download button (§12), not per card.
 
 ### Difficulty badge classes
 
@@ -328,35 +328,40 @@ Two small lookup helpers map the human-readable English `diff` token (note: they
 **raw** token, not the translated label):
 
 - **`diffClass(d)`** → CSS class: `Easy→d-easy`, `Moderate→d-moderate`, `Hard→d-hard`,
-  `Very Hard→d-veryhard` (default `d-moderate`) (`app.js:104-106`). Those classes set the
-  badge's tinted background + text color (`app.css:99-102`).
-- **`diffKey(d)`** → filter token: `Easy→easy`, … `Very Hard→veryhard` (`app.js:107-109`),
+  `Very Hard→d-veryhard` (default `d-moderate`) (`app.js:121-123`). Those classes set the
+  badge's tinted background + text color (`app.css:108-111`).
+- **`diffKey(d)`** → filter token: `Easy→easy`, … `Very Hard→veryhard` (`app.js:124-126`),
   matching the chips' `data-filter` values.
 
 ### Filter & sort state
 
 Module-level state holds the current view config: **`listFilter`** (default `'all'`) and
-**`listSort`** (default `null`) (`app.js:102`). `bindGlobal()` wires the `#filter-bar` chips
-(`app.js:150-161`):
+**`listSort`** (default `null`) (`app.js:119`). `bindGlobal()` wires the `#filter-bar` chips
+(`app.js:164-175`):
 
 - A chip with `data-filter` sets `listFilter` and toggles the `.active` class among the filter
   chips.
 - A chip with `data-sort` **toggles** that sort on/off (clicking the active one clears it back
   to `null`) and toggles `.active` accordingly.
 - Either way it calls `renderList()`. Filtering uses `diffKey(t.diff) === listFilter`; sorting
-  is ascending by `lengthMi` (`'dist'`) or `gainFt` (`'gain'`) (`app.js:117-119`).
+  is ascending by `lengthMi` (`'dist'`) or `gainFt` (`'gain'`) (`app.js:134-136`).
 
-`bindGlobal()` also wires the language toggle (`#lang-toggle` → `setLang`, `app.js:163`), the
-back button, the GPS FAB, the sheet drag, and the download-modal buttons.
+`bindGlobal()` also wires the language toggle (`#lang-toggle` → `setLang`, `app.js:177`), the
+global download button (`#dl-all` → `downloadAll`, `app.js:180`), the back button, the GPS
+FAB, and the sheet drag.
 
-### Offline badge driven by `cacheStatus`
+### Offline state on the global download button (`dlState`)
 
-`cacheStatus` is a module-level map of `slug → bool` (`app.js:19`). In `renderList()`, a trail
-whose tiles are cached renders `offIcon` =
-`<div class="card-offline ready" title="…">✓</div>` (a green check, top-right of the card;
-the `title` uses the localized `t('dlSaved')`); otherwise nothing (`app.js:123-124`, styled at
-`app.css:80-86`). `cacheStatus` is populated by `refreshCacheStatus()` on boot and flipped to
-`true` after a download (`app.js:554`).
+Offline status is no longer shown per card. It lives entirely on the single global
+**`#dl-all`** button in the header, driven by the module-level **`dlState`** string
+(`'idle' | 'busy' | 'done'`, `app.js:35`). **`updateDlBtn()`** (`app.js:562-569`) reflects it:
+in `idle` the label is `t('dlAll')` ("⬇ Save maps" / "⬇ 地図を保存"); in `busy` the label is a
+live `"NN%"` percentage with a CSS gradient fill driven by a `--p` custom property
+(`.dl-all-btn.busy`, `app.css:53-56`); in `done` the label is `t('dlAllDone')` ("✓ Maps saved")
+and the button turns green (`.dl-all-btn.done`, `app.css:57`). On boot,
+`refreshCacheStatus()` (§12) probes one sample tile per trail and sets `dlState` to `'done'`
+only if **every** trail's sample is already cached, else `'idle'`. The full download/progress
+machinery is documented in §12.
 
 ---
 
@@ -364,7 +369,7 @@ the `title` uses the localized `t('dlSaved')`); otherwise nothing (`app.js:123-1
 
 ### `openDetail()` flow
 
-`openDetail(t)` (`app.js:183-194`) is the detail-screen entry point, invoked only by the
+`openDetail(t)` (`app.js:195-206`) is the detail-screen entry point, invoked only by the
 router:
 
 1. `curTrail = t` and swap screens (`#list` hidden, `#detail` shown).
@@ -382,17 +387,17 @@ map.
 ### The peek / meta header — `renderPeek()`
 
 The bottom sheet's always-visible "peek" region is `#sheet-peek`, containing `#pk-title` and
-`#pk-meta` (`index.html:51-54`). Tapping it toggles the sheet open/closed; it is hidden in
+`#pk-meta` (`index.html:54-56`). Tapping it toggles the sheet open/closed; it is hidden in
 landscape (§11, §14).
 
-**`renderPeek(trail)`** (`app.js:196-203`) fills it: `#pk-title` = `loc(trail).name`; `#pk-meta`
+**`renderPeek(trail)`** (`app.js:208-215`) fills it: `#pk-title` = `loc(trail).name`; `#pk-meta`
 = `<span>` chips for `fmtDist(lengthMi)`, `▲ fmtGain(gainFt)`, a difficulty span (the label is
 `trDiff(diff)`, colored via `diffClass` but with `background:none;padding:0` so it reads as
 colored text, not a pill), and a `.star` rating with review count.
 
 ### `renderSheetBody()`
 
-`renderSheetBody(t)` (`app.js:205-259`) writes the entire scrollable sheet body (`#sheet-body`)
+`renderSheetBody(t)` (`app.js:217-264`) writes the entire scrollable sheet body (`#sheet-body`)
 in one `innerHTML` assignment. It first computes `const tr = loc(trail)` for the localized prose
 fields. All section headings and labels come from `t(...)`:
 
@@ -402,57 +407,72 @@ fields. All section headings and labels come from `t(...)`:
   The last two use a smaller inline `font-size:13px`.
 - **Elevation card** — `#elev-card` with a header (`t('elevation')` + `#elev-range` span) and an
   empty `<svg id="elev-svg" preserveAspectRatio="none">` that `drawProfile()` fills (§9).
-- **Download button** — `<button class="dl-btn" id="sheet-dl">` whose label/`ready` class
-  depend on `cacheStatus[t.slug]` (`t('dlDownload')` vs `t('dlSaved')`), plus a `.dl-prog` bar
-  element. Its click opens the download modal (`openDownloadModal(t)`, `app.js:257`).
 - **Prose sections** (`.section`): **Overview** (`tr.summary`), **The hike** (`tr.description`),
   **Tips & need-to-know** (`tr.tips` → `<ul class="tips">`), and **Details** — section titles
   via `t('secOverview'/'secHike'/'secTips'/'secDetails')`.
 - **Details table** — a `<dl class="facts">` with rows: Route type (`trRoute(route)`), Best
   season (`trSeason(season)`), Dogs (`trDogs(dogs)`), Permit (`tr.permit`), Location (`tr.area`)
-  (`app.js:245-251`); the `<dt>` labels come from `t('factRoute')` … `t('factLocation')`.
-- A small attribution footer (`t('attribution')`) crediting AllTrails (info/photo) and USGS
-  (map).
+  (`app.js:252-256`); the `<dt>` labels come from `t('factRoute')` … `t('factLocation')`.
+- A small attribution footer crediting AllTrails (info/photo) **plus the trail's basemap
+  source**: `${t('attribTrail')} ／ ${t(trailSource(trail).creditKey)}` (`app.js:260`), so a US
+  trail credits USGS (`attribUsgs`) and a Japan trail credits GSI (`attribGsi`, §7).
+
+There is **no longer a download button in the sheet** — downloading is a single global action
+in the header (§12).
 
 ---
 
 ## 7. Map subsystem
 
-**`initMap()`** (`app.js:269-276`) (re)builds the Leaflet map each time a detail screen opens:
+**`initMap()`** (`app.js:274-282`) (re)builds the Leaflet map each time a detail screen opens:
 
 1. If a map already exists, `map.remove()` it and null it out — every detail view gets a fresh
    map instance bound to the `#map` div.
-2. `L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center,
+2. Resolve the trail's basemap with `const src = trailSource(curTrail)` (below).
+3. `L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center,
    zoom:13, tap:true })` — the default zoom control is suppressed so it can be re-added in a
    custom position; `tap:true` enables Leaflet's tap handler for touch.
-3. Add a **zoom control at `topright`** (`L.control.zoom({ position:'topright' })`,
-   `app.js:272`).
-4. Add the **USGS topo tile layer** (below).
-5. `map.on('dragstart', …)` disables GPS follow mode and clears the FAB's `.on` highlight when
-   the user pans (`app.js:274`) — see §10.
-6. Nudge the zoom control down so it clears the floating header:
-   `marginTop = calc(54px + env(safe-area-inset-top,0px))` (`app.js:275`).
+4. Add a **zoom control at `topright`** (`L.control.zoom({ position:'topright' })`,
+   `app.js:278`).
+5. Add the **tile layer for that source** (below).
+6. `map.on('dragstart', …)` disables GPS follow mode and clears the FAB's `.on` highlight when
+   the user pans (`app.js:280`) — see §10.
+7. Nudge the zoom control down so it clears the floating header:
+   `marginTop = calc(54px + env(safe-area-inset-top,0px))` (`app.js:281`).
 
-### USGS tile layer
+### Per-trail tile sources — `TILE_SOURCES` / `trailSource()`
 
-The base map is the **USGS National Map "USGSTopo"** service. The template URL
-(`TILE_URL`, `app.js:7`) is:
+The base map is **per trail**. The single old `TILE_URL` constant is gone; instead `app.js`
+defines a **`TILE_SOURCES`** table (`app.js:17-26`) with two entries, and a tiny resolver
+**`trailSource(trail) = TILE_SOURCES[trail.tiles] || TILE_SOURCES.usgs`** (`app.js:27`) — so a
+trail's optional `tiles` field (§3) picks the basemap (absent ⇒ `usgs`, `"gsi"` ⇒ GSI).
+`initMap()` then builds the layer from the resolved source's fields:
+`L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:8, attribution:src.leaflet,
+crossOrigin:true })` (`app.js:279`). `crossOrigin:true` is what lets the offline download read
+the tiles back out of the Cache API, and the **attribution is now dynamic per source**.
 
-```
-https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}
-```
+The two sources:
 
-Note the **`{z}/{y}/{x}`** (row-before-column) ordering used by this ArcGIS service. The layer
-is added with `maxZoom:16, minZoom:8, attribution:'© USGS', crossOrigin:true` (`app.js:273`);
-`crossOrigin:true` is what lets the offline download read the tiles back out of the Cache API.
+| Key | Service | URL template | `maxZoom` | Leaflet attribution / credit key |
+|---|---|---|---|---|
+| `usgs` | USGS National Map "USGSTopo" (US trails) | `…/USGSTopo/MapServer/tile/{z}/{y}/{x}` | 16 | `© USGS` / `attribUsgs` |
+| `gsi` | GSI 地理院タイル (Geospatial Information Authority of Japan; Japan trails) | `https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png` | 16 | `地理院タイル © 国土地理院` / `attribGsi` |
+
+**Key token-order detail:** the USGS template is **`{z}/{y}/{x}`** (row/y **before** column/x,
+the ArcGIS convention), while the GSI template is **`{z}/{x}/{y}`** (x before y). Both are
+ordinary 256-px Web-Mercator (EPSG:3857) XYZ tiles, and the download/probe code substitutes
+tokens **by name** (`.replace('{z}',z).replace('{y}',y).replace('{x}',x)`, §12), so the *same*
+slippy-map tile math works unchanged for both despite the differing URL order. GSI tiles serve
+CORS-open (`Access-Control-Allow-Origin: *`) with native zoom z0–18; the app caps display at
+z16 and downloads z10–16. GSI's `std` layer labels are in Japanese.
 
 ### Cache-first behavior
 
 Tiles are **not** loaded by the page directly from the network when cached. The service worker
-intercepts any request whose URL `includes('nationalmap.gov')` and serves **cache-first** from
-the `TILE_V` cache, only hitting the network on a miss and storing the response (§12, §15;
-`sw.js:44-51`). So a previously-visited or pre-downloaded trail renders its map from cache with
-no connectivity.
+intercepts any tile request — i.e. any URL whose host is `nationalmap.gov` **or**
+`cyberjapandata.gsi.go.jp` — and serves **cache-first** from the `TILE_V` cache, only hitting
+the network on a miss and storing the response (§12, §15; `sw.js:50-57`). So a previously-visited
+or pre-downloaded trail renders its map from cache with no connectivity.
 
 ---
 
@@ -704,67 +724,86 @@ debounced handler also re-runs `setSheet(sheetState)` so the FAB and sheet heigh
 
 ## 12. Offline tile download subsystem
 
-This lets a user **pre-cache a trail's USGS tiles** so the map works with no connectivity. It is
-driven from the sheet's download button and the `#dl-modal` dialog (`index.html:60-71`).
+A single global button **pre-caches the map tiles for *all* trails** (across both tile
+sources) so every map works with no connectivity. It is driven from one button in the list
+header — **`#dl-all`** (`.dl-all-btn`, `index.html:26`) — bound to `downloadAll` in
+`bindGlobal()` (`app.js:180`). There is **no per-trail download button and no download modal**
+anymore; iOS has no background fetch, so this is a single foreground, user-initiated action
+with inline progress on the button itself.
 
-### Opening the modal — `openDownloadModal()`
+### Button state — `dlState` / `updateDlBtn()` / `updateDlProgress()`
 
-`openDownloadModal(t)` (`app.js:502-509`) stores `dlTrail = t`, computes the estimated tile count
-via `countTiles(t)`, writes a localized description (`tf('dlDesc')(loc(t).name, n)`), resets the
-progress bar/status (`tf('dlTiles')(n)`), sets the button label to `t('dlGo')`, and unhides the
-modal.
+The button's appearance is driven by the module-level **`dlState`** (`'idle' | 'busy' |
+'done'`, `app.js:35`):
 
-### Bounding box — `trailBox()`
-
-`trailBox(t)` (`app.js:510-518`) computes the lat/lon box to cover:
-
-- **Prefer the live track bounds** — if `trackPts` is loaded **and** `t === curTrail`, it takes
-  the min/max lat & lon over all track points.
-- **Fallback to center ± 0.02°** — otherwise it boxes `t.center` by ±0.02 degrees.
-- Either way it pads the result by **`PAD = 0.01`°** on all sides (`app.js:10`, `app.js:517`).
+- **`updateDlBtn()`** (`app.js:562-569`) toggles the `.busy` / `.done` classes and sets the
+  static label — `t('dlAll')` in `idle`, `t('dlAllDone')` in `done`. `applyStaticI18n()` calls
+  it so the label tracks the language (§1a).
+- **`updateDlProgress(done,total)`** (`app.js:570-575`) computes a percentage, writes it to the
+  button's **`--p` CSS custom property** (which drives the gradient fill of `.dl-all-btn.busy`,
+  `app.css:53-56`), and — while `busy` — sets the button text to the live `"NN%"`.
 
 ### Web Mercator tile math
 
-The download converts the box to **XYZ tile ranges** at each zoom:
+The download converts a lat/lon box to **XYZ tile ranges** at each zoom:
 
-- **`ll2t(lat, lon, z)`** (`app.js:533-535`) is the standard slippy-map projection:
+- **`ll2t(lat, lon, z)`** (`app.js:511-513`) is the standard slippy-map projection:
   `n = 2^z`, `x = floor(n*(lon+180)/360)`, and
   `y = floor(n*(1 - ln(tan(φ) + sec(φ))/π)/2)` with `φ = lat·π/180`. Returns `{x, y}`.
-- **`tRange(b, z)`** (`app.js:531-532`) projects the SW and NE corners and returns the inclusive
+- **`tRange(b, z)`** (`app.js:509-510`) projects the SW and NE corners and returns the inclusive
   `{x0,x1,y0,y1}` tile range (min/max-ed so corner order doesn't matter).
-- **`DL_ZOOMS = [10,11,12,13,14,15,16]`** (`app.js:9`) — tiles are fetched for **zoom 10
+- **`DL_ZOOMS = [10,11,12,13,14,15,16]`** (`app.js:8`) — tiles are fetched for **zoom 10
   through 16**.
-- **`countTiles(t)`** (`app.js:519-523`) sums `(x1-x0+1)*(y1-y0+1)` over all `DL_ZOOMS`.
-- **`tileURLs(t)`** (`app.js:524-530`) expands every `(z,x,y)` into a concrete tile URL by
-  substituting into `TILE_URL`.
 
-### Batched fetch into the Cache API — `startDownload()`
+### Per-trail bounding box — `gpxBox()`
 
-`startDownload()` (`app.js:537-558`), bound to `#dl-go` (`app.js:170`):
+**`gpxBox(trail)`** (`app.js:517-529`) is **async**: it fetches the trail's GPX (served from the
+SW precache, so it works offline too), parses it, and computes the min/max lat/lon over all
+`<trkpt>` elements. If parsing yields no track points it **falls back** to `trail.center ±
+0.02°`. Either way it pads the box by **`PAD = 0.01°`** on all sides (`app.js:9`). This replaces
+the old `trailBox()`/`countTiles()`/`tileURLs()` trio, which depended on the *currently open*
+trail's live `trackPts`; `gpxBox()` works for any trail without it being open.
 
-1. Guards against re-entry (`dlRunning`) and disables the button (`t('dlDownloading')`).
-2. Builds the URL list and opens the **`TILE_CACHE`** cache (`'wa-trails-tiles-v1'`,
-   `app.js:8` / `app.js:542`).
-3. Iterates in **batches of 8** (`BATCH = 8`). For each URL in a batch it skips ones already
-   cached (`cache.match`), otherwise `fetch(u, {mode:'cors'})` and `cache.put` it if the response
-   is `ok` **or** `opaque`. Each settled request bumps `done` and updates the progress bar width
-   and the status text via `tf('dlProgress')(done, total, pct)` (`app.js:543-550`).
-   `Promise.allSettled` ensures one failed tile doesn't abort the batch.
-4. On completion: set the status to `tf('dlDone')(done)`, mark `cacheStatus[dlTrail.slug] = true`,
-   flip the sheet button to its `ready` `t('dlSaved')` state, `renderList()` (so the list badge
-   updates), and auto-dismiss the modal after 1.4 s (`app.js:551-557`).
+### Expanding a box to URLs — `tileURLsFor()`
+
+**`tileURLsFor(box, urlTpl)`** (`app.js:532-538`) expands a box into every concrete tile URL
+across `DL_ZOOMS`, substituting tokens **by name** into the given template
+(`urlTpl.replace('{z}',z).replace('{y}',y).replace('{x}',x)`). Because it substitutes by name,
+the same routine builds both the USGS `{z}/{y}/{x}` and the GSI `{z}/{x}/{y}` URLs correctly
+(§7).
+
+### Batched fetch into the Cache API — `downloadAll()`
+
+**`downloadAll()`** (`app.js:540-559`) is the whole flow:
+
+1. Bail if already `busy` or `caches` is unavailable; set `dlState='busy'`, `updateDlBtn()`,
+   and seed the progress bar (`updateDlProgress(0,1)`).
+2. **Gather every tile URL across all trails.** For each `trail` of `TRAILS`, `await
+   gpxBox(trail)` and push `tileURLsFor(box, trailSource(trail).url)` — i.e. each trail
+   contributes tiles from **its own** source URL (USGS or GSI). The combined list is then
+   **deduped** with a `Set` (`app.js:549`), so tiles shared by overlapping trails are fetched
+   once.
+3. Open the **`TILE_CACHE`** cache (`'wa-trails-tiles-v1'`, `app.js:7` / `app.js:551`) and
+   iterate the URLs in **batches of 8** (`BATCH = 8`). For each URL it skips ones already cached
+   (`cache.match`), otherwise `fetch(u, {mode:'cors'})` and `cache.put` it if the response is
+   `ok` **or** `opaque`. Each settled request bumps `done` and calls `updateDlProgress(done,
+   total)`. `Promise.allSettled` ensures one failed tile doesn't abort the batch.
+4. On completion set `dlState='done'` and `updateDlBtn()` (green "✓ Maps saved" label).
 
 > Because the page writes into the **same cache name** (`wa-trails-tiles-v1`) the service worker
-> reads from, a pre-downloaded trail is served cache-first by the SW with zero further network
-> use (see §15).
+> reads from, every pre-downloaded trail — US or Japan — is served cache-first by the SW with
+> zero further network use (see §15).
 
 ### Status sampling — `refreshCacheStatus()`
 
-`refreshCacheStatus()` (`app.js:560-570`) decides which trails already have offline tiles. For
-each trail it computes the **z14 center tile** (`ll2t(center, 14)`), builds that tile's URL, and
-sets `cacheStatus[slug]` to whether `cache.match` finds it. It runs once on boot (awaited before
-the second `renderList()`), so the green offline checks reflect reality at startup. (It samples a
-single representative tile rather than verifying the whole set.)
+**`refreshCacheStatus()`** (`app.js:579-591`) decides the button's startup state. It opens
+`TILE_CACHE` and, for **each** trail, computes the **z14 center tile** (`ll2t(center, 14)`),
+builds that tile's URL **from that trail's own source** (so the GSI trails are probed against
+the GSI URL), and checks `cache.match`. It sets `dlState='done'` **only if every trail's sample
+tile is present**, otherwise `'idle'`. It runs once on boot (awaited, then `updateDlBtn()`
+reflects the result), and skips while a download is `busy`. (It samples a single representative
+tile per trail rather than verifying the whole set — so a partially-downloaded set can still
+read as `done`; see the open caveats in `CLAUDE.md`.)
 
 ---
 
@@ -776,34 +815,33 @@ these directly and re-render by rewriting `innerHTML`.
 
 | Variable | Decl | Holds |
 |---|---|---|
-| `map` | `app.js:14` | The current Leaflet map instance (or `null`). |
-| `curTrail` | `app.js:14` | The trail object currently open in detail (or `null`). |
-| `trackLayer` | `app.js:14` | The red track polyline `L.polyline` (used for `fitBounds`). The **only** retained layer reference. |
-| `trackPts` | `app.js:15` | Parsed track points: `{lat, lon, ele, d, se}` with cumulative distance `d` and smoothed elevation `se`. |
-| `trackWpts` | `app.js:15` | Parsed waypoints: `{lat, lon, name, d, _marker}` with snapped along-track distance `d` and the retained Leaflet marker. |
-| `totalDist` | `app.js:16` | Total track length in meters (for profile x-scaling). |
-| `gpsWatch` | `app.js:16` | `watchPosition` id while GPS is active (`null` when off). |
-| `gpsMk` | `app.js:16` | The pulsing GPS-position marker (or `null`). |
-| `gpsAcc` | `app.js:16` | The GPS accuracy circle (or `null`). |
-| `gpsFollow` | `app.js:16` | Whether the map auto-recenters on the user. |
-| `curPos` | `app.js:17` | Last known `{lat, lon}` fix (or `null`). |
-| `wakeLock` | `app.js:17` | The active Screen Wake Lock sentinel (or `null`). |
-| `sheetState` | `app.js:18` | Bottom-sheet state: `'peek' | 'full'`. |
-| `cacheStatus` | `app.js:19` | `{ slug: bool }` — whether each trail's tiles are cached. |
-| `lang` | `app.js:27` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
-| `listFilter` | `app.js:102` | Active difficulty filter (`'all'` or a `diffKey`). |
-| `listSort` | `app.js:102` | Active sort (`'dist'`, `'gain'`, or `null`). |
-| `dlTrail` | `app.js:501` | Trail targeted by the open download modal. |
-| `dlRunning` | `app.js:501` | Re-entry guard for an in-flight download. |
-| `rzT` | `app.js:583` | Debounce timer handle for the resize handler. |
+| `map` | `app.js:30` | The current Leaflet map instance (or `null`). |
+| `curTrail` | `app.js:30` | The trail object currently open in detail (or `null`). |
+| `trackLayer` | `app.js:30` | The red track polyline `L.polyline` (used for `fitBounds`). The **only** retained layer reference. |
+| `trackPts` | `app.js:31` | Parsed track points: `{lat, lon, ele, d, se}` with cumulative distance `d` and smoothed elevation `se`. |
+| `trackWpts` | `app.js:31` | Parsed waypoints: `{lat, lon, name, d, _marker}` with snapped along-track distance `d` and the retained Leaflet marker. |
+| `totalDist` | `app.js:32` | Total track length in meters (for profile x-scaling). |
+| `gpsWatch` | `app.js:32` | `watchPosition` id while GPS is active (`null` when off). |
+| `gpsMk` | `app.js:32` | The pulsing GPS-position marker (or `null`). |
+| `gpsAcc` | `app.js:32` | The GPS accuracy circle (or `null`). |
+| `gpsFollow` | `app.js:32` | Whether the map auto-recenters on the user. |
+| `curPos` | `app.js:33` | Last known `{lat, lon}` fix (or `null`). |
+| `wakeLock` | `app.js:33` | The active Screen Wake Lock sentinel (or `null`). |
+| `sheetState` | `app.js:34` | Bottom-sheet state: `'peek' | 'full'`. |
+| `dlState` | `app.js:35` | Global offline-maps download state: `'idle' | 'busy' | 'done'` — drives the `#dl-all` button (§12). |
+| `lang` | `app.js:43` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
+| `listFilter` | `app.js:119` | Active difficulty filter (`'all'` or a `diffKey`). |
+| `listSort` | `app.js:119` | Active sort (`'dist'`, `'gain'`, or `null`). |
+| `rzT` | `app.js:604` | Debounce timer handle for the resize handler. |
 
 Two trivial DOM helpers are also defined globally: **`$`** (`querySelector`) and **`$$`**
-(`querySelectorAll` → array) (`app.js:21-22`). The i18n helpers `t` / `tf` / `loc` / `trDiff` /
+(`querySelectorAll` → array) (`app.js:37-38`). The i18n helpers `t` / `tf` / `loc` / `trDiff` /
 `trRoute` / `trDogs` / `trWpt` / `trSeason` and the unit formatters `fmtDist` / `fmtGain` /
 `fmtTime` / `fmtElevRange` are documented in §1a.
 
-Module-level **constants** (`app.js:7-11`): `TILE_URL`, `TILE_CACHE` (`'wa-trails-tiles-v1'`),
-`DL_ZOOMS`, `PAD` (0.01°), `FT` (3.28084).
+Module-level **constants** (`app.js:7-27`): `TILE_CACHE` (`'wa-trails-tiles-v1'`), `DL_ZOOMS`,
+`PAD` (0.01°), `FT` (3.28084), and the per-trail basemap table **`TILE_SOURCES`** with its
+resolver **`trailSource()`** (§7) — these replace the old single `TILE_URL` constant.
 
 ---
 
@@ -839,10 +877,10 @@ Four design tokens capture the device safe areas:
 also declares **both** the standard `mobile-web-app-capable` and the legacy
 `apple-mobile-web-app-capable` meta tags for standalone display, `index.html:6-7`.) They're
 applied throughout so content avoids the notch and home indicator: the list header padding
-(`app.css:29`), the list's bottom scroll padding (`app.css:59`), the detail header height/padding
-(`app.css:107-108`), the map FAB's left offset (`app.css:131`), the sheet body's bottom padding
-(`app.css:160`), and the download modal's bottom (`app.css:227`).
-The Leaflet zoom control is likewise nudged by `env(safe-area-inset-top)` in JS (`app.js:275`).
+(`app.css:29`), the list's bottom scroll padding (`app.css:75`), the detail header height/padding
+(`app.css:117`), the map FAB's left offset (`app.css:140`), and the sheet body's bottom padding
+(`app.css:169`).
+The Leaflet zoom control is likewise nudged by `env(safe-area-inset-top)` in JS (`app.js:281`).
 `#app` uses `height:100dvh` (with a `100vh` fallback) so it tracks the dynamic viewport as
 Safari's chrome shows/hides (`app.css:20`).
 
@@ -854,8 +892,8 @@ The app has **two distinct Service-Worker caches**, declared at the top of `sw.j
 
 | Cache name | Constant | Contents | Written by |
 |---|---|---|---|
-| `wa-trails-app-v3` | `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js`), manifest, icon, Leaflet CSS+JS, and **all 8 GPX files + 8 hero images**. | SW `install` (`addAll(SHELL)` + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
-| `wa-trails-tiles-v1` | `TILE_V` (`sw.js:2`) | **USGS map tiles** only. | SW `fetch` (cache-first fill on miss) **and** the page's `startDownload()` pre-cache. |
+| `wa-trails-app-v4` | `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js`), manifest, icon, Leaflet CSS+JS, and **all 12 GPX files + 12 hero images**. | SW `install` (`addAll(SHELL)` + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
+| `wa-trails-tiles-v1` | `TILE_V` (`sw.js:2`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL. | SW `fetch` (cache-first fill on miss) **and** the page's `downloadAll()` pre-cache. |
 
 > The cache **names** retain the historic `wa-trails-` prefix (an internal identifier — it is
 > not user-facing and is intentionally left unchanged so a deploy doesn't needlessly evict the
@@ -864,39 +902,41 @@ The app has **two distinct Service-Worker caches**, declared at the top of `sw.j
 
 ### Shell precache (`install`)
 
-On `install` (`sw.js:22-30`), the SW opens `APP_V`, **`addAll(SHELL)`** (which must all succeed —
+On `install` (`sw.js:28-36`), the SW opens `APP_V`, **`addAll(SHELL)`** (which must all succeed —
 `SHELL` lists `./`, `index.html`, `app.css`, `app.js`, `trails.js`, **`i18n.js`**,
 `manifest.json`, `icon.svg`, and the two Leaflet CDN URLs, `sw.js:4-9`), then **best-effort**
-caches `TRAIL_ASSETS` (the 8 GPX + 8 webp) with `Promise.allSettled` so a single failed asset
-doesn't break install. It calls `skipWaiting()`. Bundling the GPX and images means a trail's
-track and photo are available with **zero network**, even one the user has never opened.
+caches `TRAIL_ASSETS` (the **12 GPX + 12 webp** — 8 Washington + 4 Japan, `sw.js:12-26`) with
+`Promise.allSettled` so a single failed asset doesn't break install. It calls `skipWaiting()`.
+Bundling the GPX and images means a trail's track and photo are available with **zero network**,
+even one the user has never opened.
 
 ### Activation / cleanup (`activate`)
 
-On `activate` (`sw.js:32-38`), the SW deletes any cache whose name is **neither** `APP_V`
+On `activate` (`sw.js:38-44`), the SW deletes any cache whose name is **neither** `APP_V`
 **nor** `TILE_V`, then `clients.claim()`. This is the version-migration mechanism: bumping
-`APP_V` (currently `…-v3`) on a deploy evicts the previous shell cache automatically,
+`APP_V` (now `…-v4`) on a deploy evicts the previous shell cache automatically,
 while the tile cache (`TILE_V`) is deliberately preserved across shell upgrades so users don't
 lose downloaded maps.
 
 ### Fetch strategy (`fetch`)
 
-`fetch` (`sw.js:40-63`) has two branches:
+`fetch` (`sw.js:46-69`) has two branches:
 
-1. **Tiles (cache-first).** Any URL containing `nationalmap.gov` is served from `TILE_V`:
-   return the cached hit, else fetch, store the clone if `ok` **or** `opaque`, and on network
-   failure return an empty `503` (`sw.js:44-51`). This is what makes downloaded tiles render
-   offline.
+1. **Tiles (cache-first).** Any URL whose host is `nationalmap.gov` **or**
+   `cyberjapandata.gsi.go.jp` is served from `TILE_V`: return the cached hit, else fetch, store
+   the clone if `ok` **or** `opaque`, and on network failure return an empty `503`
+   (`sw.js:50-57`). This single branch covers both basemap providers, and is what makes
+   downloaded tiles render offline.
 2. **Shell + bundled assets (cache-first, fill on miss).** Everything else tries
    `caches.match` first; on a miss it fetches, and if `ok` **and** the request is same-origin or
    an `unpkg.com` host, stores the clone in `APP_V`. On a network failure it falls back to the
    cached `./index.html` for **navigations** (so the app still launches offline), or an empty
-   `503` otherwise (`sw.js:55-62`).
+   `503` otherwise (`sw.js:61-68`).
 
 ### How the page-level download ties in
 
-The crucial coupling: `app.js`'s `TILE_CACHE` (`app.js:8`) and `sw.js`'s `TILE_V` (`sw.js:2`)
-are the **same string**, `'wa-trails-tiles-v1'`. So when `startDownload()` writes tiles into the
+The crucial coupling: `app.js`'s `TILE_CACHE` (`app.js:7`) and `sw.js`'s `TILE_V` (`sw.js:2`)
+are the **same string**, `'wa-trails-tiles-v1'`. So when `downloadAll()` writes tiles into the
 cache (§12), the service worker's tile branch later finds and serves them — the page is the
 **writer**, the SW is the **reader**, sharing one named cache. The `activate` cleanup explicitly
 spares `TILE_V`, so those downloads persist across app updates.
@@ -907,8 +947,9 @@ spares `TILE_V`, so those downloads persist across app updates.
 
 ```
 boot
-   └─► load ─► applyStaticI18n() (fill [data-i18n], <title>, <html lang>)
-            ─► renderList() ─► bindGlobal() ─► refreshCacheStatus() ─► renderList()
+   └─► load ─► applyStaticI18n() (fill [data-i18n], <title>, <html lang>; updateDlBtn())
+            ─► renderList() ─► bindGlobal()
+            ─► await refreshCacheStatus() ─► updateDlBtn()  (#dl-all = idle | done)
             ─► routeFromHash() ─► register sw.js
 
 user taps card
@@ -918,15 +959,17 @@ user taps card
                ├─ #detail-title = loc(t).name
                ├─ setSheet('peek')
                ├─ renderPeek(t)       (fill #pk-title/#pk-meta, localized + units)
-               ├─ renderSheetBody(t)  (stats, empty <svg>, dl button, prose, facts)
+               ├─ renderSheetBody(t)  (stats, empty <svg>, prose, facts,
+               │                       attribution = AllTrails ／ trailSource(t).creditKey)
                ├─ initMap()
+               │     ├─ src = trailSource(t)   (usgs | gsi)
                │     ├─ L.map(center=t.center, zoom=13)
                │     ├─ zoom control @ topright
-               │     └─ USGS tileLayer ──► requests intercepted by sw.js
+               │     └─ src tileLayer (USGS or GSI) ──► requests intercepted by sw.js
                │                              └─ TILE_V cache-first
                └─ await loadTrail(t)
                      ├─ fetch(t.gpx) ──► sw.js serves from APP_V (works offline)
-                     ├─ DOMParser ─► trackPts[] (d via hav), trackWpts[]
+                     ├─ DOMParser ─► trackPts[] (d via hav), trackWpts[] (none on JP trails)
                      ├─ smoothEle()  (window 15 ─► .se)
                      ├─ snap wpts to nearest track-point distance
                      ├─ drawTrack()    (subsample ≤1200; halo+red line;
@@ -937,7 +980,7 @@ user taps card
 
 user taps EN / 日本語 (#lang-toggle)
    └─► setLang(next) ─► persist localStorage.lang
-         ─► applyStaticI18n() ─► renderList()
+         ─► applyStaticI18n() (also updateDlBtn() ─► relabels #dl-all) ─► renderList()
          ─► if curTrail: #detail-title, renderPeek(), renderSheetBody(),
                          redrawTrailLabels()  (re-bind marker popups, no map rebuild)
 
@@ -947,9 +990,11 @@ user taps ◎ (GPS)
                        ─► if follow: recenter
                        ─► nearest trackPt ─► updateProfilePos(idx)
 
-user taps "Download map for offline"
-   └─► openDownloadModal(t) ─► startDownload()
-         └─► tileURLs() over DL_ZOOMS[10..16] from trailBox()
+user taps "⬇ Save maps" (#dl-all, downloads ALL trails)
+   └─► downloadAll()  ─► dlState='busy' ─► updateDlBtn()
+         └─► for each trail: gpxBox(t) ─► tileURLsFor(box, trailSource(t).url)
+             ─► dedupe (Set) over all trails/both sources, DL_ZOOMS[10..16]
              ─► batched fetch(8) ─► caches.open('wa-trails-tiles-v1').put()
-             ─► cacheStatus[slug]=true ─► renderList() (green ✓ badge)
+             ─► updateDlProgress(done,total) (NN% + --p fill)
+             ─► dlState='done' ─► updateDlBtn() (green "✓ Maps saved")
 ```

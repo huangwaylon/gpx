@@ -35,7 +35,9 @@ to the repo.
 **Decision.**
 Use **Leaflet 1.9.4** with **raster (image) tiles**, cached per-trail into the Cache Storage API.
 
-In code, the map is a vanilla Leaflet raster setup:
+In code, the map is a vanilla Leaflet raster setup (the URL/attribution/`maxZoom` are now read from
+the trail's tile source — `trailSource(curTrail)` — rather than the literal USGS constants shown
+here; see ADR-9):
 
 ```js
 map = L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center, zoom:13, tap:true });
@@ -72,6 +74,13 @@ L.tileLayer(TILE_URL, { maxZoom:16, minZoom:8, attribution:'© USGS', crossOrigi
 
 ### ADR-2: USGS National Map topo tiles
 
+> **Updated by ADR-9 (12-trail / Japan support).** USGS is no longer *the* single basemap — it is
+> now the **default** source for the US trails and the source for any trail without a `tiles` field.
+> Japan trails use GSI 地理院タイル instead. The USGS URL template and the "topo with contours, no
+> API key, cacheable" rationale below are unchanged; ADR-9 generalizes the single-source assumption
+> into a `TILE_SOURCES` map. The cache-first host special-case is also no longer USGS-only — the
+> service worker now matches both `nationalmap.gov` **and** `cyberjapandata.gsi.go.jp` (ADR-9).
+
 **Context.**
 The basemap needs **contour lines** (essential for judging a hike), must be legal to **cache for
 offline personal use**, and should not require an API key or a paid plan that forbids offline
@@ -89,7 +98,7 @@ https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}
 
 - US federal product → **public domain**, no API key.
 - Includes **contour lines and topographic detail** — ideal for hiking.
-- Legally cacheable for offline personal use, which is exactly what the per-trail download feature
+- Legally cacheable for offline personal use, which is exactly what the offline-map download feature
   does.
 
 **Alternatives considered and rejected.**
@@ -103,7 +112,7 @@ https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}
 
 - Coverage and styling are fixed to what USGS serves (and limited here to `minZoom:8`–`maxZoom:16`).
 - The service worker special-cases this host (`url.includes('nationalmap.gov')`) for cache-first
-  tile handling (ADR-7).
+  tile handling (ADR-7) — and now the GSI host alongside it (ADR-9).
 
 ---
 
@@ -114,9 +123,9 @@ Each trail card and detail screen shows a hero photo. The trail content and phot
 AllTrails. The app must work with **no network**.
 
 **Decision.**
-Commit the eight hero images as local `.webp` files under `images/` and reference them by relative
-path (e.g. `images/lake-22.webp`). They are precached by the service worker on install
-(`TRAIL_ASSETS` in `sw.js`).
+Commit the hero images as local `.webp` files under `images/` (now **twelve**, one per trail) and
+reference them by relative path (e.g. `images/lake-22.webp`). They are precached by the service
+worker on install (`TRAIL_ASSETS` in `sw.js`).
 
 **Rationale.**
 
@@ -132,8 +141,10 @@ path (e.g. `images/lake-22.webp`). They are precached by the service worker on i
 
 **Consequences.**
 
-- Roughly **~2 MB of WebP** is committed under `images/` (eight files, ~196–315 KB each).
-- Attribution is shown in the UI ("Trail info & photo via AllTrails. Map © USGS National Map.").
+- Roughly **~2.9 MB of WebP** is committed under `images/` (twelve files, ~140–315 KB each).
+- Attribution is shown in the UI ("Trail info & photo via AllTrails." plus a per-source map credit —
+  "Map © USGS National Map" or "Map © GSI Japan (地理院タイル)", chosen by the trail's tile source;
+  see ADR-9).
 
 ---
 
@@ -275,6 +286,13 @@ window.addEventListener('hashchange', routeFromHash);
 
 ### ADR-7: Three-tier offline caching with manual per-trail tile download
 
+> **Updated by ADR-10 (one-button "download all maps").** Tier 3 below — the per-trail "Download
+> map for offline" button, its modal, and the per-card "✓ available offline" badges — was
+> **replaced** by a single global "download all maps" button that caches every trail's tiles
+> (across both sources) in one foreground action. Tiers 1 and 2 (SW-precached shell/GPX/images;
+> cache-first tiles) are unchanged, as is the underlying constraint (iOS has no Background Fetch).
+> Read this ADR for the three-tier *structure* and ADR-10 for the current *download UX*.
+
 **Context.**
 The app must be usable with **no signal on the trail**. iOS Safari PWAs have **no Background Fetch
 and no Background Sync**, so the app **cannot prefetch tiles in the background** — any tile download
@@ -285,7 +303,7 @@ A **three-tier** caching strategy:
 
 1. **Shell + GPX + hero images — precached on service-worker install.**
    `SHELL` (HTML/CSS/JS/manifest/icon + Leaflet from unpkg) is added with `cache.addAll` and
-   **must succeed**; `TRAIL_ASSETS` (the eight GPX files and eight images) are added **best-effort**
+   **must succeed**; `TRAIL_ASSETS` (the twelve GPX files and twelve images) are added **best-effort**
    with `Promise.allSettled` so one failure doesn't abort install.
 
    ```js
@@ -295,10 +313,11 @@ A **three-tier** caching strategy:
    ```
 
 2. **Map tiles — cache-first with network fallback**, in a separate cache (`TILE_V`) so they can be
-   managed independently of the shell. The fetch handler special-cases the USGS host:
+   managed independently of the shell. The fetch handler special-cases the tile hosts (now **both**
+   USGS and GSI — see ADR-9):
 
    ```js
-   if (url.includes('nationalmap.gov')) {
+   if (url.includes('nationalmap.gov') || url.includes('cyberjapandata.gsi.go.jp')) {
      e.respondWith(caches.open(TILE_V).then(cache =>
        cache.match(url).then(hit => hit || fetch(e.request).then(res => {
          if (res.ok || res.type==='opaque') cache.put(url, res.clone());
@@ -309,7 +328,8 @@ A **three-tier** caching strategy:
    }
    ```
 
-3. **Explicit per-trail tile download — user-initiated, foreground.**
+3. **Explicit per-trail tile download — user-initiated, foreground.** *(Superseded by ADR-10 — see
+   below. Kept here for the three-tier structure.)*
    The user taps "Download map for offline." The app computes the trail's bounding box (from the
    loaded track, falling back to a box around the trail center), enumerates tiles across
    `DL_ZOOMS = [10..16]`, and fetches them in **batches of 8** into `TILE_CACHE`, showing live
@@ -334,8 +354,9 @@ A **three-tier** caching strategy:
 
 **Consequences.**
 
-- Offline coverage is **explicit and per-trail** — the user must remember to download each trail
-  while online.
+- Offline coverage is **explicit and user-driven** — tiles are never prefetched automatically.
+  *(Originally per-trail; ADR-10 changed this to one all-trails download — the user no longer picks
+  trails individually.)*
 - Tile downloads can be sizeable; they run in the foreground with a progress UI. See
   `docs/IOS-PWA-GUIDE.md` for the iOS storage/background constraints behind this design.
 
@@ -353,7 +374,10 @@ and without breaking the offline-cacheable static-file model (ADR-5, ADR-7).
 A **hand-rolled i18n layer** lives in `i18n.js` as a single plain object, `window.I18N`, with:
 
 - `ui` — static UI strings, keyed `en` / `ja` (titles, buttons, section headings, alerts).
-- `fn` — locale-aware **string functions** for dynamic text (e.g. download descriptions/progress).
+- `fn` — locale-aware **string functions** for dynamic text. *(Currently an empty `{ en:{}, ja:{} }`
+  scaffold — the per-trail download descriptions/progress that once lived here were removed with the
+  download-UX overhaul (ADR-10); the global button now shows a bare percentage. `tf()` and the
+  scaffold are retained for future dynamic strings.)*
 - **enum/token tables** — `diff`, `route`, `dogs`, `months` — translating data *tokens* at render
   time (e.g. `"Hard"` → `"上級"`, `"Loop"` → `"周回"`).
 - `wpt` — GPX **waypoint name** translations (English → Japanese).
@@ -386,7 +410,7 @@ let lang = (localStorage.lang === 'en' || localStorage.lang === 'ja')
 
 - **No build step / no framework (ADR-5)** rules out an i18n library — there is nothing to compile
   message catalogs or wire up a provider.
-- The **dataset is tiny** (eight trails, a few dozen UI strings), so plain objects are more than
+- The **dataset is tiny** (twelve trails, a few dozen UI strings), so plain objects are more than
   enough and keep everything **debuggable** and **offline-cacheable** as ordinary static JS.
 - **Merging-with-fallback** means a missing Japanese field **degrades gracefully to English**
   rather than rendering blank or throwing — important while translations are filled in.
@@ -415,6 +439,137 @@ let lang = (localStorage.lang === 'en' || localStorage.lang === 'ja')
   view and **re-binding the Leaflet map marker popups** in the new language. That popup re-bind is
   `redrawTrailLabels()`, which re-sets the popup content for the endpoint markers (each carries an
   `_i18nKey`) and the waypoint markers on `setLang()`.
+
+---
+
+### ADR-9: Per-trail tile source — GSI 地理院タイル for the Japan trails (USGS stays the US/default)
+
+**Context.**
+Expanding to four Japan trails (ADR-11) broke a hidden assumption in ADR-2: that there is **one**
+basemap. USGS National Map covers only the US, so the Japan trails would render on blank tiles.
+Japan needs its own topographic raster source that is **free, key-less, CORS-enabled** (the SW
+caches cross-origin tile responses), and **tolerant of the app's per-use caching** — the same bar
+USGS cleared in ADR-2.
+
+**Decision.**
+Make the tile source **per-trail**. A `TILE_SOURCES` map in `app.js` defines two sources, and each
+trail optionally names one via a `tiles` field; **absent ⇒ `usgs`**, so the eight US trails were
+untouched. The four Japan trails set `tiles: "gsi"`, pointing at the official **GSI 地理院タイル
+"std"** raster set from the Geospatial Information Authority of Japan (国土地理院):
+
+```js
+const TILE_SOURCES = {
+  usgs: { url:'…/USGSTopo/MapServer/tile/{z}/{y}/{x}',                          maxZoom:16, leaflet:'© USGS',              creditKey:'attribUsgs' },
+  gsi:  { url:'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',       maxZoom:16, leaflet:'地理院タイル © 国土地理院', creditKey:'attribGsi' },
+};
+const trailSource = trail => TILE_SOURCES[trail.tiles] || TILE_SOURCES.usgs;
+```
+
+`initMap` builds the Leaflet tile layer from `trailSource(curTrail)`; the displayed map attribution
+is now dynamic per source (`attribUsgs` / `attribGsi` in `i18n.js`, both languages), as is the
+detail-screen attribution line.
+
+**Rationale.**
+
+- GSI "std" is the **direct analog of USGS Topo for Japan**: free, no API key, served with
+  `Access-Control-Allow-Origin: *`, with **contour lines and Japanese labels** — ideal for a
+  Japanese-default app.
+- A `tiles` field defaulting to `usgs` is the **smallest possible change** — zero edits to the US
+  trails or their offline behavior.
+
+**Alternatives considered and rejected.**
+
+- **GSI "pale" (淡色地図).** Same underlying data but muted styling — **rejected**: less topographic
+  detail; "std" is the better hiking basemap.
+- **OpenTopoMap / OSM / Esri for Japan.** **Rejected as the *download* source** for the same reason
+  ADR-2 rejected them for the US: their tile-usage policies discourage bulk pre-downloading, which
+  is exactly what the offline-save feature does. GSI tolerates the app's per-use caching.
+
+**Consequences.**
+
+- **Token order differs between the two URLs** — USGS is `{z}/{y}/{x}` (y before x) while GSI is
+  `{z}/{x}/{y}` (x before y). This is **safe** only because the download/probe code substitutes
+  tokens **by name** (`.replace('{z}',z).replace('{y}',y).replace('{x}',x)`), so the identical
+  Web-Mercator XYZ math drives both with **no branching** — see the lesson in Part 3. The one
+  invariant to protect is the correct token *order inside each template*.
+- GSI's native raster goes to z18 (USGS to z16), but the app caps both at **`maxZoom:16`** and
+  downloads `z10–16`, so offline coverage matches what's actually displayable.
+- The service worker's cache-first tile handler now matches **both** hosts (ADR-7, tier 2).
+
+---
+
+### ADR-10: One global "download all maps" button (replaces per-trail download + modal + badge)
+
+**Context.**
+ADR-7's tier 3 gave each trail its own "Download map for offline" button, a progress modal, and a
+per-card "✓ available offline" badge. With twelve trails across two tile sources that is a lot of
+surface area, and "are my maps saved?" had **twelve answers**. The user asked for a single button.
+
+**Decision.**
+Replace all of that with **one global button** (`#dl-all`) in the list header, beside the language
+toggle. One tap caches tiles for **all twelve trails across both sources** in a single foreground
+pass; the button is the **single source of truth** for download status and shows its own state:
+idle (`⬇ Save maps`) → live `NN%` → done (`✓ Maps saved`).
+
+A single `dlState` (`'idle' | 'busy' | 'done'`) replaced the per-slug `cacheStatus` map.
+`downloadAll()` gathers every tile URL across every trail (each via its own source template),
+**dedupes with a `Set`**, and fetches in batches of 8 into `TILE_CACHE`. Each trail's bounding box
+comes from `gpxBox(trail)`, which parses that trail's **precached GPX** — so the download no longer
+depends on a trail being open (the old `trailBox` read the live `trackPts`). On startup
+`refreshCacheStatus()` flips the button to `done` only if **every** trail's z14 center sample tile
+(from that trail's own source) is already cached.
+
+**Rationale.**
+
+- **One source of truth** for "are my maps saved" — far simpler than reconciling twelve badges.
+- It's a direct, explicit, user-initiated **foreground** action, which is all iOS allows (no
+  Background Fetch — unchanged from ADR-7).
+
+**Alternatives considered and rejected.**
+
+- **Keep per-trail selective download.** Rejected per the explicit product request for one button,
+  and because per-trail badges are a heuristic that was already prone to false greens.
+
+**Consequences.**
+
+- **All-or-nothing, not selective**, and it downloads more in one go: a real run cached **~2,723
+  tiles** (≈1,973 USGS + 750 GSI). Acceptable trade for the simpler model; the download is
+  deduped, batched, and shows live progress.
+- The removed per-trail button, modal, and per-card badge are noted in Part 4. The dynamic
+  download strings they used were also removed from `i18n.js` (`fn` is now empty — ADR-8).
+
+---
+
+### ADR-11: Include both Mt. Fuji routes despite "[CLOSED]" — surface the seasonal/reservation facts in content
+
+**Context.**
+The four Japan trails were sourced through the existing AllTrails pipeline (`docs/DATA-PIPELINE.md`).
+Both Mt. Fuji routes are flagged **"[CLOSED]"** on AllTrails — Fuji is climbable only ~early July to
+early September, and since 2024 the Yoshida route adds a **reservation + ¥2,000 entry fee + ~4,000/
+day cap**. The question was whether to include them at all, and how to represent the closure.
+
+**Decision.**
+**Include both Fuji routes** (the user wanted these iconic climbs), **strip the literal "[CLOSED]"**
+from the display name, and surface the **seasonal-closure and reservation/fee facts in each trail's
+`permit` / `summary` / `tips`** instead — in both languages. The two routes are `fuji-yoshida` and
+`fuji-gotemba`; the other two Japan trails are `daibosatsu` and `kinpu` (both Yamanashi).
+
+**Rationale.**
+
+- A clear, in-content seasonal note ("Climbing season only — roughly early July to early September…")
+  is **more useful to a hiker** than either hiding the trail or shouting "[CLOSED]" in its title.
+- Keeping the literal tag out of the `name` keeps card titles and the detail header clean while the
+  facts live where a user actually reads them.
+
+**Consequences.**
+
+- The two Fuji entries deliberately diverge from the raw AllTrails title (no "[CLOSED]"); the
+  closure information is **not lost**, just relocated to `permit`/`tips`/`summary`.
+- **All four Japan trails are labeled `"Hard"`**, faithful to AllTrails' `difficulty_rating`, even
+  though **Gotemba** (12.5 mi / 7,775 ft, climbing to ~3,751 m) is the **single biggest climb in the
+  app** and is arguably "Very Hard." This is kept faithful to the documented pipeline on purpose —
+  flagged here (and in Part 4) so it isn't "re-discovered" as a bug. See `docs/DATA-PIPELINE.md` for
+  the Japan-trail sourcing notes (webarchive recovery, `trailGeoStats`).
 
 ---
 
@@ -508,9 +663,10 @@ map.zoomControl.getContainer().style.marginTop = '…'; // TypeError: map.zoomCo
 After (current source, `app.js`):
 
 ```js
+const src = trailSource(curTrail);                       // per-trail tile source (ADR-9)
 map = L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center, zoom:13, tap:true });
 const zoom = L.control.zoom({ position:'topright' }).addTo(map);
-L.tileLayer(TILE_URL, { maxZoom:16, minZoom:8, attribution:'© USGS', crossOrigin:true }).addTo(map);
+L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:8, attribution:src.leaflet, crossOrigin:true }).addTo(map);
 map.on('dragstart', () => { gpsFollow = false; $('#btn-gps').classList.remove('on'); });
 // nudge zoom control below header
 zoom.getContainer().style.marginTop = 'calc(54px + env(safe-area-inset-top,0px))';
@@ -544,11 +700,12 @@ satisfied from the cache, so source edits are invisible until the cache is inval
   reload re-fetches from disk).
 - To ship updates to users: **bump the cache version** so the new SW installs a fresh shell and the
   `activate` handler deletes the stale caches. The shell cache version is `APP_V` in `sw.js`
-  (currently **`'wa-trails-app-v2'`** — already bumped past v1), while the tile cache `TILE_V`
-  (`'wa-trails-tiles-v1'`) is kept stable so downloaded tiles survive shell updates:
+  (currently **`'wa-trails-app-v4'`** — bumped each shell release; it was v2 when this bug was first
+  written up), while the tile cache `TILE_V` (`'wa-trails-tiles-v1'`) is kept stable so downloaded
+  tiles survive shell updates:
 
 ```js
-const APP_V  = 'wa-trails-app-v2';
+const APP_V  = 'wa-trails-app-v4';
 const TILE_V = 'wa-trails-tiles-v1';
 
 self.addEventListener('activate', e => {
@@ -560,7 +717,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v2'`, the shell is served
+**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v4'`, the shell is served
 cache-first, and `activate` deletes every cache except the current `APP_V` and `TILE_V`.
 
 **Lesson.** Cache-first service workers are great in production and **hostile during development**.
@@ -610,9 +767,8 @@ normally again.
 
 **Verification.** Confirmed in the current `app.js`: the helper is `function loc(trail)`, there is
 **no `function L(`** anywhere, and the call sites all use `loc(...)`
-(`loc(curTrail).name`, `loc(trail)` in `renderList`/`renderPeek`/`renderSheetBody`/`openDetail`, and
-`tf('dlDesc')(loc(trail).name, n)`). Leaflet calls (`L.map`, `L.polyline`, `L.control.zoom`, …)
-remain unshadowed.
+(`loc(curTrail).name`, and `loc(trail)` in `renderList`/`renderPeek`/`renderSheetBody`/`openDetail`).
+Leaflet calls (`L.map`, `L.polyline`, `L.control.zoom`, …) remain unshadowed.
 
 **Lesson.** **Never introduce a global single-letter `L` in a Leaflet app** — and more generally,
 watch for top-level names colliding with globals exported by CDN libraries (`L` for Leaflet, `$`
@@ -646,16 +802,20 @@ This is far faster and more precise — it's also what surfaced Bug 2 (seeing `t
 while the map looked fine) and Bug 1 (reading the ~69 px card rects).
 
 **Offline verification.**
-**Stop the dev server and reload** to prove the app shell **and a downloaded trail** work with **no
-network** (shell + GPX + images from precache; tiles from the per-trail download).
+**Stop the dev server and reload** to prove the app shell **and downloaded trails** work with **no
+network** (shell + GPX + images from precache; tiles from the global "download all maps" pass —
+ADR-10 — across both USGS and GSI).
 
 **Functional checks (verified by reading the rendered DOM, cross-checked against `trails.js`).**
 
-- **Filter:** selecting **Hard** shows **exactly 3** trails — *Mount Pilchuck*, *Bridal Veil Falls &
-  Lake Serene*, *Skyline Loop*. Confirmed: those are the only three with `diff: "Hard"`.
-- **Sort:** **distance ascending** begins **3.5 → 5.4 → 5.7 → 6.1 mi** (Talapus Lake → Mount
-  Pilchuck → Skyline Loop → Lake 22). Confirmed against the `lengthMi` values.
-- The list reports **8 trails**, matching the eight entries in `trails.js`.
+- **Filter:** selecting **Hard** shows **7** trails — the three WA *Hard* routes (*Mount Pilchuck*,
+  *Bridal Veil Falls & Lake Serene*, *Skyline Loop*) plus all four Japan trails (*Fuji Yoshida*,
+  *Fuji Gotemba*, *Daibosatsu*, *Kinpu*), all labeled `diff: "Hard"`. **Very Hard** shows exactly one
+  (*The Enchantments Traverse*).
+- **Sort:** **distance ascending** begins **3.5 → 4.2 → 5.4 → 5.4 → 5.7 mi** (Talapus Lake → Fuji
+  Yoshida → Mount Pilchuck / Mount Daibosatsu → Skyline Loop). Confirmed against the `lengthMi`
+  values.
+- The list reports **12 trails**, matching the twelve entries in `trails.js` (eight WA + four Japan).
 
 **Lessons.**
 
@@ -669,6 +829,16 @@ network** (shell + GPX + images from precache; tiles from the per-trail download
 - **Mind globals from CDN libraries.** A top-level `function L(...)` silently shadowed Leaflet's
   global `L` and broke every map call (Bug 4). Avoid single-letter top-level names that collide with
   library globals, and read the console `TypeError` rather than only the half-rendered UI.
+- **Substitute URL tokens by name, not position.** USGS tiles are `{z}/{y}/{x}` but GSI tiles are
+  `{z}/{x}/{y}` (x and y swapped). Because the tile code does
+  `.replace('{z}',z).replace('{y}',y).replace('{x}',x)` — **by name** — the same Web-Mercator math
+  serves both sources with no branching (ADR-9). The lesson generalizes: name-keyed templates absorb
+  per-source axis-order differences for free; positional formatting would have silently transposed
+  tiles. Just keep the right token order inside each template.
+- **A datacenter/CI 403 is not "the tiles are down."** GSI returns **HTTP 403 with a text error
+  page** (not a 404) from some datacenter/CI IP ranges, while the same URLs serve fine from real
+  browsers and home networks. When verifying GSI offline-download from CI, don't mistake that 403
+  for a broken tile source — confirm from a real browser before concluding anything is wrong.
 
 ---
 
@@ -690,3 +860,23 @@ Several previously-flagged items were addressed and **verified against the curre
 - **`mobile-web-app-capable` added.** `index.html` now declares
   `<meta name="mobile-web-app-capable" content="yes">` alongside the existing
   `<meta name="apple-mobile-web-app-capable" content="yes">`.
+- **Per-trail download button + modal + per-card "✓ available offline" badge removed** (ADR-10).
+  Replaced by the single global `#dl-all` button in the list header; `index.html` has **no download
+  modal** and **no per-card offline badge**, and `app.js` has **no per-slug `cacheStatus` map** (one
+  `dlState` instead).
+- **Dead download/modal i18n strings removed.** The dynamic download descriptions/progress strings
+  are **gone** from `i18n.js`; `fn` is now an empty `{ en:{}, ja:{} }` scaffold (ADR-8). The current
+  download UI uses static `dlAll` / `dlAllDone` / `dlAllAria` keys plus a bare percentage. New
+  per-source attribution keys `attribTrail` / `attribUsgs` / `attribGsi` were added in both
+  languages.
+- **`sw.js` bumped to `wa-trails-app-v4`.** `TRAIL_ASSETS` now precaches **twelve** GPX files and
+  twelve hero images (eight WA + four Japan), and the cache-first tile handler matches **both**
+  `nationalmap.gov` and `cyberjapandata.gsi.go.jp` (ADR-9). `TILE_V` stays `wa-trails-tiles-v1` so
+  downloaded tiles survive the shell bump (the cache-version-as-release-lever practice from Bug 3 is
+  unchanged).
+
+**Known-faithful, do-not-"fix":**
+
+- **All four Japan trails are `"Hard"`** per AllTrails' `difficulty_rating`, even though **Gotemba**
+  (12.5 mi / 7,775 ft, to ~3,751 m) is the biggest climb in the app and is arguably "Very Hard"
+  (ADR-11). Kept faithful to the documented pipeline on purpose — not a bug.

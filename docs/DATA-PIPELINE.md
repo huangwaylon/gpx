@@ -219,12 +219,68 @@ def extract_stat_objects(html_path):
         }
 ```
 
+### 2d. Authoritative headline stats from `trailGeoStats` (used for the Japan trails)
+
+The §2b extractor walks every embedded trail-stat object and asks you to pick
+the primary one by matching the headline length. That works for the Washington
+pages, but on the **Fuji pages it is too error-prone** (those pages cross-link
+all four Fuji routes plus many nearby trails — see the gotcha above). For the
+four Japan trails we read the headline stats from a single, unambiguous block
+the page embeds for **the trail you're actually looking at**: **`trailGeoStats`**.
+
+It is plain (not backslash-escaped) JSON, all **in metric**, and maps cleanly:
+
+| `trailGeoStats` key | Unit | Maps to | Notes |
+| --- | --- | --- | --- |
+| `length` | meters | `lengthMi` | `m / 1609.344` |
+| `elevationStart` | meters | (reference) | trailhead elevation |
+| `elevationGain` | meters | `gainFt` | DEM-based — **use this**, same philosophy as §3 (`m * 3.28084`) |
+| `elevationMax` | meters | (reference) | summit / high point |
+| `durationMinutes` | minutes | `time` | raw figure |
+| `durationFormatted` | string | `time` | e.g. `"3 h 46 min"` — copied straight into `trails.js` |
+
+`difficulty_rating` and `route_type` are **still** read the §2b way:
+`difficulty_rating` `5 → Hard` (all four Japan trails are Hard); `route_type`
+`O → Out & back`, `L → Loop`, `P → Point to point` unchanged.
+
+JSON-LD (§2a) still supplies `name`, `address.addressLocality` (→ `area`),
+`aggregateRating` `ratingValue`+`reviewCount` (→ `rating`/`reviews`), and the
+hero `image[0]` URL exactly as for the Washington trails.
+
+Verified `trailGeoStats` values that shipped (compare to the table below):
+
+| slug | `length` | = miles | `elevationGain` | = gain (ft) | `elevationMax` | `durationMinutes` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fuji-yoshida` | 6,759 m | 4.2 | 1,433 m | 4,701 | 3,704 m | 226 |
+| `fuji-gotemba` | 20,117 m | 12.5 | 2,370 m | 7,775 | 3,751 m | 710 |
+| `daibosatsu` | 8,690 m | 5.4 | 614 m | 2,014 | 2,045 m | 221 |
+| `kinpu` | 15,772 m | 9.8 | 1,312 m | 4,304 | 2,594 m | 442 |
+
+> The Yoshida GPX is a **one-way ascent** (5th Station → crater rim), and the
+> Yoshida page's `trailGeoStats` is **also** the one-way ascent (4.2 mi /
+> 4,701 ft) — they agree, which is why the route is `Point to point`. The
+> Gotemba (round-trip out & back), Daibosatsu (loop), and Kinpu (out & back)
+> GPX lengths likewise match their official `trailGeoStats` lengths.
+
 ### 2c. Hand-curated prose
+
+The `summary`, `description`, and `tips[]` fields in `trails.js` were
 **hand-written / edited** from the page's description text, official-trail
 notes, and top reviews. They are intentionally tighter and more useful than
 the raw AllTrails marketing blurb. Treat these as editorial, not mechanical
-extraction. (The map/photo attribution lines in `app.js` credit AllTrails
-for trail info and photos and USGS for the basemap.)
+extraction. (The map/photo attribution lines in `app.js` credit AllTrails for
+trail info and photos, and the per-trail basemap — USGS for US trails, GSI
+地理院タイル for Japan — via `trailSource(trail).creditKey`.)
+
+> ### The "[CLOSED]" wrinkle (both Mt. Fuji pages)
+> Both Fuji pages are flagged **`[CLOSED]`** on AllTrails — Fuji climbs only
+> run roughly **July–September**, and the Yoshida route added a **2024+
+> advance reservation + ¥2,000 entry fee + daily cap (~4,000)**. Decision: we
+> **include both** trails, **drop the literal "[CLOSED]"** from the display
+> `name`, and fold the seasonal-closure + reservation/fee facts into the
+> hand-curated `permit`, `summary`, and `tips[]` instead. Difficulty is kept
+> at AllTrails' value (**all four Japan trails are Hard**) even though Gotemba
+> (7,775 ft) is the single biggest climb in the entire app.
 
 ### Final shipped stats (reference)
 
@@ -238,6 +294,15 @@ for trail info and photos and USGS for the basemap.)
 | `bridal-veil` | Bridal Veil Falls & Lake Serene | 8.0 | 2,716 | Hard | Out & back |
 | `skyline-loop` | Skyline Loop | 5.7 | 1,781 | Hard | Loop |
 | `enchantments` | The Enchantments Traverse | 19.1 | 4,845 | Very Hard | Point to point |
+| `fuji-yoshida` | Mt. Fuji: Yoshida Trail (5th Station Ascent) | 4.2 | 4,701 | Hard | Point to point |
+| `fuji-gotemba` | Mt. Fuji: Gotemba Trail | 12.5 | 7,775 | Hard | Out & back |
+| `daibosatsu` | Mount Daibosatsu Loop | 5.4 | 2,014 | Hard | Loop |
+| `kinpu` | Mount Kinpu (Kanayama) | 9.8 | 4,304 | Hard | Out & back |
+
+The four Japan trails (`tiles:"gsi"`) additionally carry `rating`/`reviews`
+**4.6 / 448**, **4.7 / 137**, **4.6 / 29**, **4.8 / 2** and `durationFormatted`
+times **3 h 46 min**, **11 h 50 min**, **3 h 41 min**, **7 h 22 min**
+respectively (from §2a / §2d).
 
 ---
 
@@ -278,6 +343,11 @@ So the number you read and the squiggle you see come from **two different
 sources on purpose.** If someone "corrects" `gainFt` to a raw-GPX sum, the
 numbers will inflate by ~50–60 %. Don't.
 
+The same rule covers the four Japan trails: their `gainFt` comes from the
+DEM-based `trailGeoStats.elevationGain` (§2d), **not** the raw GPX. (So
+Gotemba ships at 7,775 ft, not whatever its noisy 3,233-point track would sum
+to.)
+
 > Note: the moving-average window in `app.js` (15) is for *display shape*. The
 > w11/w21/w31 figures above were from an offline calibration experiment used
 > only to confirm that smoothing converges toward the DEM value and to justify
@@ -303,6 +373,9 @@ A `.webarchive` is an Apple binary property list. Its top-level keys are
 - `WebResourceURL` — the original URL of the subresource
 - `WebResourceMIMEType` — e.g. `image/webp`
 - `WebResourceData` — the **raw bytes** of that resource
+
+(The sibling `WebMainResource` key holds the page's own HTML document — that's
+what §1 decodes for the Japan trails, which have no separate `.html` save.)
 
 Python's standard-library `plistlib` reads this directly. The Lake 22
 webarchive has 81 subresources; filtering by MIME type / host finds the
@@ -370,6 +443,14 @@ Once the images domain was allow-listed, crisp heroes were fetched by
 and download. Result: **`1200×800` WebP, ~190–310 KB each** (~2 MB total),
 saved as `images/<slug>.webp` (all eight verified at `1200×800`).
 
+> **The four Japan heroes used this same path** — and *had* to. Their
+> `.webarchive` saves embedded only **tiny thumbnails** (a few KB each), too
+> small to use as a hero, so there was nothing worth pulling from
+> `WebSubresources`. Instead the JSON-LD `image[0]` URL (§2a) was rewritten to
+> `1200×800 cover, webp` with `upscale_alltrails_url()` below and re-fetched.
+> Result: `images/{fuji-yoshida,fuji-gotemba,daibosatsu,kinpu}.webp`, all
+> `1200×800`, **~140–313 KB** each.
+
 ```python
 import base64, json, urllib.parse, urllib.request
 
@@ -429,9 +510,9 @@ committed under `gpx/` and parsed live in the browser by `app.js`
 - **Elevation smoothing:** `smoothEle()` runs (window 15) to populate `p.se`
   for the profile curve (see §3).
 - **Bounds / framing:** the GPX `<metadata><bounds>` element is present in all
-  eight files. At runtime the map actually frames the track via
+  twelve files. At runtime the map actually frames the track via
   `map.fitBounds(trackLayer.getBounds())` (computed from the drawn polyline);
-  the offline-tile bounding box (`trailBox()` in `app.js`) is computed from the
+  the offline-tile bounding box (`gpxBox()` in `app.js`) is computed from the
   track points when available, falling back to `trail.center ± 0.02°`.
 
 ### Waypoints are sparse
@@ -449,6 +530,13 @@ counts in the committed GPX:
 | `Bridal_Veil_..._Lake_Serene_Trail.gpx` | 1,823 | 0 |
 | `Skyline_Loop.gpx` | 1,258 | 0 |
 | `The_Enchantments_Traverse.gpx` | 7,153 | 0 |
+| `Mt_Fuji_Yoshida.gpx` | 366 | 0 |
+| `Mt_Fuji_Gotemba.gpx` | 3,233 | 0 |
+| `Mount_Daibosatsu_Loop.gpx` | 1,384 | 0 |
+| `Mount_Kinpu_Kanayama.gpx` | 903 | 0 |
+
+(All four Japan GPX have **0** waypoints, so they show only trailhead/end
+endpoint markers — no amber waypoint dots or dashed profile lines.)
 
 (Lake 22's five waypoints are e.g. *Bridge*, *Waterfall*, *Vista* — they
 render as amber dots on the map and dashed lines on the elevation profile.)
@@ -516,33 +604,46 @@ value.
 
 Ordered checklist to add one trail end-to-end:
 
-1. **Save the source.** From the AllTrails trail page, save **both** the
-   `.html` and the `.webarchive` (Safari → File → Save As → *Web Archive*),
-   and download the route `.gpx`. Drop all three in `alltrails/` (git-ignored).
-2. **Extract JSON-LD metadata** from the `.html` (`@type: "LocalBusiness"`):
+1. **Save the source.** From the AllTrails trail page, save the
+   `.webarchive` (Safari → File → Save As → *Web Archive*) — and ideally the
+   `.html` too — and download the route `.gpx`. Drop them in `alltrails/`
+   (git-ignored). If you only have the `.webarchive` (as with all four Japan
+   trails), recover the page HTML from its `WebMainResource.WebResourceData`
+   bytes first (§1) — every HTML-based step below then works as written.
+2. **Extract JSON-LD metadata** from the HTML (`@type: "LocalBusiness"`):
    name, geo lat/lon (→ `center`), `aggregateRating` (→ `rating`, `reviews`),
    `address.addressLocality` (→ `area`), and the hero `image` URL. (§2a)
-3. **Pull the official numeric stats** from the embedded Next/RSC payload:
-   `length` (→ miles), `elevation_gain` (→ feet), `route_type` (→ route),
-   `difficulty_rating` (→ label). **Anchor on the primary trail object** and
-   verify against the figures shown on the page — the page also embeds nearby
-   trails. (§2b)
+3. **Pull the official numeric stats.** Read length / gain / max / duration
+   from the page's **`trailGeoStats`** block (§2d) — this is the cleanest
+   source and is **required** for cross-linked pages like the Fuji routes,
+   where a naïve `length`/`elevation_gain` regex matches the wrong trail.
+   (Older WA trails used the §2b Next/RSC payload: `length` → miles,
+   `elevation_gain` → feet, **anchored on the primary trail object**.) Either
+   way: `route_type` → route, `difficulty_rating` → label; `gainFt` =
+   **DEM-based** gain. Verify against the figures shown on the page.
 4. **Get the hero image.** Either extract it from the `.webarchive` with
-   `plistlib` (no network), or — preferred for resolution — rewrite the image
-   URL's base64 config to `1200×800 cover, webp` and fetch it. Save as
+   `plistlib` (no network), or — preferred for resolution, and **required**
+   when the archive embedded only thumbnails (the Japan case) — rewrite the
+   image URL's base64 config to `1200×800 cover, webp` and fetch it. Save as
    `images/<slug>.webp`. (§4)
 5. **Write the `trails.js` entry.** Use the existing objects as the template
    (`slug`, `name`, `area`, `img`, `gpx`, `rating`, `reviews`, `lengthMi`,
    `gainFt`, `diff`, `route`, `time`, `season`, `dogs`, `permit`, `center`,
-   `summary`, `description`, `tips[]`). `gainFt` = **official DEM gain**, not
-   raw GPX (§3). Hand-curate `summary` / `description` / `tips`. (§2c)
+   `summary`, `description`, `tips[]`). For a **non-US trail add
+   `tiles:"gsi"`** so it uses the GSI 地理院タイル basemap instead of USGS topo
+   (omit the field for US trails); the tile-source mechanism lives in
+   `app.js` `TILE_SOURCES` / `trailSource()` — see `docs/ARCHITECTURE.md` and
+   `docs/I18N.md`. `gainFt` = **official DEM gain**, not raw GPX (§3).
+   Hand-curate `summary` / `description` / `tips`. (§2c)
 6. **Drop the assets in place.** GPX → `gpx/<File>.gpx`; image →
    `images/<slug>.webp`. Make sure `trails.js` `gpx:` and `img:` paths match
    the filenames exactly.
 7. **Register both in the service worker.** Add the new `gpx/...` and
    `images/...` paths to `TRAIL_ASSETS` in `sw.js` so they are precached for
-   offline. Bump `APP_V` (e.g. `wa-trails-app-v2` → `-v3`) so clients pick up
-   the new asset list.
+   offline. Bump `APP_V` (currently `wa-trails-app-v4`) so clients pick up the
+   new asset list. (`sw.js`'s tile cache-first rule already matches both
+   `nationalmap.gov` and `cyberjapandata.gsi.go.jp`, so a `tiles:"gsi"` trail's
+   tiles cache offline with no further change.)
 8. **Verify the GPX.** Run the §5 verifier. Confirm `length_mi` ≈ the
    AllTrails distance, bounds look right, and waypoint count is what you
    expect. The inflated `raw_gain_ft` is expected — do not ship it.

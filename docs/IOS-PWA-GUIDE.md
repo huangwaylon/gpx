@@ -203,37 +203,39 @@ await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.dele
 ### How this app handles it
 - **Implication:** **downloaded map tiles can simply vanish after a week of not opening the app** — exactly the scenario where a user downloads a trail on Sunday and hikes it the *next* weekend. The app must not assume cached tiles are still present.
 - **`localStorage` is evicted too.** The 7-day rule covers *all* script-writable storage, including `localStorage`. The only thing the app keeps there is the **language preference** (`localStorage.lang`), so after 7 days of non-use that preference can reset and the app falls back to its **Japanese default** on next launch — the same eviction mechanism that drops the tile cache also drops the saved language. This is benign (the user just re-toggles to English), but worth knowing when reasoning about "why did my settings reset." See *Internationalization (i18n)* and `docs/I18N.md`.
-- The app **verifies cache state on every startup** rather than trusting it. `refreshCacheStatus()` runs during boot and, for each trail, checks whether a **representative sample tile** (the trail's center tile at zoom 14) is still in the tile cache. The result drives the offline badge in the list and the download button's "✓ saved" state:
+- The app **verifies cache state on every startup** rather than trusting it. `refreshCacheStatus()` runs during boot and, for each trail, checks whether a **representative sample tile** (the trail's center tile at zoom 14, built from *that trail's* tile source) is still in the tile cache. The result drives the single global **"Save maps"** button: it is set to the **"done"** state (`✓ Maps saved` / `✓ 保存済み`) only if **every** trail's sample tile is present; if any is missing it stays **"idle"** (`⬇ Save maps` / `⬇ 地図を保存`):
 
   ```js
   async function refreshCacheStatus(){
-    if(!('caches' in window)) return;
+    if(dlState==='busy' || !('caches'in window)) return;
     try{
-      const cache = await caches.open(TILE_CACHE);
-      for(const t of TRAILS){
-        const z = 14, {x,y} = ll2t(t.center[0], t.center[1], z);
-        const u = TILE_URL.replace('{z}',z).replace('{y}',y).replace('{x}',x);
-        cacheStatus[t.slug] = !!(await cache.match(u));   // sample-tile probe
+      const cache=await caches.open(TILE_CACHE);
+      let all=true;
+      for(const trail of TRAILS){
+        const {x,y}=ll2t(trail.center[0],trail.center[1],14);
+        const u=trailSource(trail).url.replace('{z}',14).replace('{y}',y).replace('{x}',x);
+        if(!(await cache.match(u))){ all=false; break; }   // sample-tile probe (per-trail source)
       }
+      dlState = all ? 'done' : 'idle';
     }catch(_){}
   }
   ```
 
-  Boot order in `app.js` re-renders the list **after** the probe so badges reflect reality:
+  Boot order in `app.js` runs the probe **before** reflecting the button state, then updates the button label:
 
   ```js
   renderList();
   ...
   await refreshCacheStatus();
-  renderList();                 // re-render with offline badges
+  updateDlBtn();   // reflect detected offline-maps state (idle / done)
   ```
 
-  If eviction has occurred, the sample tile is missing → `cacheStatus[slug]` becomes `false` → the "✓ Available offline" badge disappears and the button reverts to "⬇ Download map for offline." So the **UI self-corrects** after eviction.
+  If eviction has occurred, at least one trail's sample tile is missing → `dlState` becomes `'idle'` → the button reverts from "✓ Maps saved" to "⬇ Save maps." So the **UI self-corrects** after eviction. (Note the all-or-nothing semantics: because the download is global, the button only shows "saved" when *every* trail is covered — there are no per-trail badges anymore.)
 
-- **GAP — no proactive re-prompt.** The app reflects eviction in badges but does **not** actively warn the user (e.g. *"Your saved map for Lake 22 has expired — re-download before you go"*) and does not auto-re-download. A user who previously downloaded a trail could arrive at the trailhead, offline, with an empty cache and no warning.
+- **GAP — no proactive re-prompt.** The app reflects eviction in the button state but does **not** actively warn the user (e.g. *"Your saved maps have expired — re-download before you go"*) and does not auto-re-download. A user who previously downloaded the maps could arrive at the trailhead, offline, with an empty cache and no warning.
   **Recommendations:**
-  1. **Persist a "user intended this offline" flag per trail** (in `localStorage`) when they download. On startup, if that flag is set but `refreshCacheStatus()` finds the sample tile gone, show a re-download prompt.
-  2. **Probe more than one tile** before declaring a trail "available offline" — a single sample tile can be a false positive (present) or false negative. A few spot-checks across zoom levels would make the badge trustworthier.
+  1. **Persist a "user intended this offline" flag** (in `localStorage`) when they tap "Save maps." On startup, if that flag is set but `refreshCacheStatus()` finds sample tiles gone, show a re-download prompt.
+  2. **Probe more than one tile** before declaring maps "saved" — a single sample tile per trail can be a false positive (present) or false negative. A few spot-checks across zoom levels would make the status trustworthier.
   3. Keep the app opened/used often enough, or simply re-download before each trip; this is the only guaranteed defense against the 7-day timer.
 
 ---
@@ -381,7 +383,7 @@ The app is **bilingual**: **Japanese by default**, with an **English toggle** in
 Ume-chan's Trails uses a **three-tier offline model**. The first two tiers are automatic; the third is the deliberate, user-controlled step that the iOS background-fetch ban forces on us.
 
 ### Tier 1 — App shell + all trail data precached on SW install
-On `install`, the service worker precaches the **app shell** (must-succeed) and, best-effort, **all 8 GPX tracks + all 8 hero images**, so the app UI and every trail's info/elevation/photo work offline **immediately after first load** — even before the user downloads any map tiles.
+On `install`, the service worker precaches the **app shell** (must-succeed) and, best-effort, **all 12 GPX tracks + all 12 hero images**, so the app UI and every trail's info/elevation/photo work offline **immediately after first load** — even before the user downloads any map tiles.
 
 ```js
 const SHELL = [
@@ -392,22 +394,25 @@ const SHELL = [
 ];
 
 const TRAIL_ASSETS = [
-  'gpx/Lake_22_Trail.gpx','gpx/Snow_Lake_Trail.gpx','gpx/Lake_Valhalla_Trail.gpx',
-  'gpx/Talapus_Lake_Trail.gpx','gpx/Mount_Pilchuck_Trail.gpx',
-  'gpx/Bridal_Veil_Falls_and_Lunch_Rock_via_Lake_Serene_Trail.gpx',
-  'gpx/Skyline_Loop.gpx','gpx/The_Enchantments_Traverse.gpx',
-  'images/lake-22.webp', /* …8 total… */ 'images/enchantments.webp',
+  // Washington (8)
+  'gpx/Lake_22_Trail.gpx', /* …6 more WA GPX… */ 'gpx/The_Enchantments_Traverse.gpx',
+  'images/lake-22.webp',   /* …6 more WA images… */ 'images/enchantments.webp',
+  // Japan (4)
+  'gpx/Mt_Fuji_Yoshida.gpx','gpx/Mt_Fuji_Gotemba.gpx',
+  'gpx/Mount_Daibosatsu_Loop.gpx','gpx/Mount_Kinpu_Kanayama.gpx',
+  'images/fuji-yoshida.webp','images/fuji-gotemba.webp',
+  'images/daibosatsu.webp','images/kinpu.webp',
 ];
 ```
 
-> Verified: the repo contains exactly **8 GPX files** and **8 `.webp` hero images**, matching the 8 trails in `trails.js` (`lake-22`, `snow-lake`, `lake-valhalla`, `talapus-lake`, `mount-pilchuck`, `bridal-veil`, `skyline-loop`, `enchantments`). The GPX/image lists in `sw.js` are bundled at install time — this is *trail metadata*, not map imagery.
+> Verified: the repo contains exactly **12 GPX files** and **12 `.webp` hero images**, matching the 12 trails in `trails.js` — 8 in Washington (`lake-22`, `snow-lake`, `lake-valhalla`, `talapus-lake`, `mount-pilchuck`, `bridal-veil`, `skyline-loop`, `enchantments`) and 4 in Japan (`fuji-yoshida`, `fuji-gotemba`, `daibosatsu`, `kinpu`). The GPX/image lists in `sw.js` are bundled at install time — this is *trail metadata*, not map imagery.
 
-### Tier 2 — USGS map tiles served cache-first with network fallback
-Any request to a USGS National Map tile is intercepted and served **cache-first**: return the cached tile if present, otherwise fetch, store (including **opaque** cross-origin responses), and return — falling back to a `503` if offline and uncached.
+### Tier 2 — Map tiles served cache-first with network fallback
+Any request to a **USGS National Map tile (US trails) or a GSI 地理院タイル tile (Japan trails)** is intercepted and served **cache-first**: return the cached tile if present, otherwise fetch, store (including any **opaque** cross-origin responses), and return — falling back to a `503` if offline and uncached. The branch matches **both** tile hosts:
 
 ```js
 // sw.js — fetch handler (tiles)
-if (url.includes('nationalmap.gov')) {
+if (url.includes('nationalmap.gov') || url.includes('cyberjapandata.gsi.go.jp')) {
   e.respondWith(caches.open(TILE_V).then(cache =>
     cache.match(url).then(hit => hit || fetch(e.request).then(res => {
       if (res.ok || res.type === 'opaque') cache.put(url, res.clone());
@@ -420,60 +425,87 @@ if (url.includes('nationalmap.gov')) {
 
 This means simply **panning the map while online warms the cache** for free — but it does **not** guarantee complete coverage at all zooms, which is what Tier 3 is for.
 
-### Tier 3 — User explicitly downloads a trail's tiles ("Download map for offline")
-The user taps **Download map for offline**, which **prefetches the trail's tile range into `wa-trails-tiles-v1`**. The range is the trail's bounding box (from its track points, with `PAD = 0.01°` padding) across **zooms 10–16**, fetched in batches of 8 with a progress bar.
+> **Two tile sources, one cache.** US trails use USGS topo (`{z}/{y}/{x}`); Japan trails use GSI 地理院タイル (`{z}/{x}/{y}.png`, Japanese labels on the `std` layer). Both are 256-px, EPSG:3857 Web-Mercator XYZ tiles and are CORS-enabled (`Access-Control-Allow-Origin: *`), so they cache as **real** (non-opaque) responses. The two URL templates put the `x`/`y` tokens in a **different order**, but `app.js` substitutes them by name (`.replace('{z}'…).replace('{y}'…).replace('{x}'…)`), so the same tile math drives both. They share the single `wa-trails-tiles-v1` cache. (Practical note: GSI works fine from real iPhones / home networks; it can `403` from some datacenter IPs, which is irrelevant to end users.)
+
+### Tier 3 — User explicitly downloads every trail's tiles ("Save maps")
+A **single global** button in the list header — **"Save maps"** (`#dl-all`, sitting next to the language toggle) — pre-caches tiles for **all 12 trails across both tile sources** into `wa-trails-tiles-v1` in one tap. There is **no** per-trail download button or download modal anymore.
+
+`downloadAll()` walks every trail, computes each trail's bounding box from its (already-precached) GPX via `gpxBox()`, builds the full tile-URL list for that trail **using its own source template** across **zooms 10–16**, dedupes everything with a `Set`, then fetches in batches of 8 with inline progress:
 
 ```js
 const DL_ZOOMS = [10, 11, 12, 13, 14, 15, 16];   // 7 zoom levels
 const PAD      = 0.01;                             // bbox padding in degrees
 
-async function startDownload(){
-  const urls = tileURLs(dlTrail), total = urls.length; let done = 0;
+// Padded bbox of one trail, parsed from its precached GPX (falls back to a small
+// box around trail.center if no track points parse).
+async function gpxBox(trail){ /* …parse trkpt min/max lat/lon, pad by PAD… */ }
+
+// Every tile URL for one box across DL_ZOOMS, built from that trail's URL template.
+function tileURLsFor(box, urlTpl){
+  const urls = [];
+  DL_ZOOMS.forEach(z => { const r = tRange(box, z);
+    for (let x=r.x0; x<=r.x1; x++) for (let y=r.y0; y<=r.y1; y++)
+      urls.push(urlTpl.replace('{z}',z).replace('{y}',y).replace('{x}',x)); });
+  return urls;
+}
+
+async function downloadAll(){
+  if (dlState === 'busy' || !('caches' in window)) return;
+  dlState = 'busy'; updateDlBtn(); updateDlProgress(0, 1);
+  let urls = [];
+  for (const trail of TRAILS){                       // every trail…
+    const box = await gpxBox(trail);
+    urls.push(...tileURLsFor(box, trailSource(trail).url));   // …via its own source
+  }
+  urls = [...new Set(urls)];                          // dedupe across trails
+  const total = urls.length || 1; let done = 0;
   const cache = await caches.open(TILE_CACHE), BATCH = 8;
   for (let i = 0; i < urls.length; i += BATCH){
     await Promise.allSettled(urls.slice(i, i+BATCH).map(async u => {
-      try{
-        if(!(await cache.match(u))){                      // skip already-cached
-          const r = await fetch(u, { mode: 'cors' });
-          if (r.ok || r.type === 'opaque') await cache.put(u, r);
-        }
-      }catch(_){}
-      done++;
-      const pct = Math.round(done/total*100);
-      $('#dl-bar').style.width = pct+'%';
-      $('#dl-status').textContent = `${done} / ${total} (${pct}%)`;
+      try{ if(!(await cache.match(u))){               // skip already-cached
+        const r = await fetch(u, { mode:'cors' });
+        if (r.ok || r.type === 'opaque') await cache.put(u, r);
+      } }catch(_){}
+      done++; updateDlProgress(done, total);
     }));
   }
-  cacheStatus[dlTrail.slug] = true;
-  renderList();   // flip the badge to "available offline"
+  dlState = 'done'; updateDlBtn();
 }
 ```
 
-The modal previews the count up front via `countTiles()` (same bbox/zoom math) before the user commits.
+**Button states** are driven by `dlState` (`'idle' | 'busy' | 'done'`) via `updateDlBtn()`/`updateDlProgress()`:
+
+| `dlState` | Label (EN / JA) | Visual |
+|---|---|---|
+| `idle` | `⬇ Save maps` / `⬇ 地図を保存` | default |
+| `busy` | live `NN%` | inline CSS gradient fill via a `--p` custom property |
+| `done` | `✓ Maps saved` / `✓ 保存済み` | "done" styling |
+
+Because the download is one tap for **everything**, there is no per-trail tile-count preview before committing — the button just shows a live percentage as it works.
 
 ### Approximate tile counts & storage footprint
-The brief cites **~130 tiles per trail**. That is the right **order of magnitude** for the spec, and it's the number to put in front of users, but be aware the **actual** count is computed per-trail from the real track bounding box, so it varies:
+Because the download is now **global**, the meaningful number is the **total across all 12 trails and both tile sources**, not a per-trail figure. Each trail's tile count is still computed at runtime from its real track bounding box × 7 zoom levels (`gpxBox` → `tileURLsFor`), so it varies a lot by trail:
 
-- A compact trail (e.g. a short out-and-back like Lake 22) lands in the low **~100–150** tiles.
-- A large, spread-out route (e.g. **The Enchantments Traverse**, which spans many miles) produces a **much larger** bounding box and therefore **substantially more** tiles — likely several hundred — because the box-area × 7 zoom levels grows with the trail's geographic extent. (Tile counts roughly **quadruple per added zoom level**, and zooms 15–16 dominate the total.)
+- A compact trail (e.g. a short out-and-back like Lake 22) contributes on the order of **~100–150** tiles.
+- A large, spread-out route (e.g. **The Enchantments Traverse** or the long **Gotemba** route on Fuji) produces a **much larger** bounding box and therefore **substantially more** tiles — likely several hundred — because box-area × 7 zooms grows with geographic extent. (Tile counts roughly **quadruple per added zoom level**, and zooms 15–16 dominate the total.)
 
-At a typical **~15–25 KB** per 256×256 USGS topo PNG tile:
+Summed across everything (and deduped), a real "Save maps" run cached **~2,723 tiles ≈ 1,973 USGS + 750 GSI**. At a typical **~15–25 KB** per 256×256 topo PNG tile:
 
-| Per-trail tiles (approx) | Approx storage |
-|---|---|
-| ~130 tiles ("typical" small trail) | **~2–3 MB** |
-| ~300 tiles (larger trail) | **~5–7 MB** |
-| All 8 trails, mixed | **roughly ~25–50 MB total** |
+| Scope | Approx tiles | Approx storage |
+|---|---|---|
+| One compact trail | ~130 | **~2–3 MB** |
+| One large trail | ~300+ | **~5–7 MB** |
+| **All 12 trails, both sources (a full "Save maps")** | **~2,700** | **roughly ~45–65 MB total** |
 
-These are well within the large installed-PWA quota on iOS 17+ (~60% of disk), so storage size is **not** the limiting factor — *eviction* (the 7-day rule) is.
+This is well within the large installed-PWA quota on iOS 17+ (~60% of disk), so storage size is **not** the limiting factor — *eviction* (the 7-day rule) is.
 
-### Why per-trail manual download instead of caching everything
+### Why a single foreground download instead of background prefetch
 This is the central design decision, and it's driven by both platform limits and product sense:
 
-1. **No background fetch on iOS (hard constraint).** iOS has no Background Fetch/Sync, so tiles can only be pulled while the app is open and in the foreground. Bulk-caching every trail's imagery would have to happen during an active session anyway — there's no "download overnight" option — so it must be an explicit, visible action with a progress bar.
-2. **Bandwidth.** Hikers often set up at home on Wi-Fi or at a trailhead on a weak/metered LTE connection. Downloading *only the chosen trail* (a few MB) respects metered data; downloading all 8 (tens of MB) on cell signal would be hostile.
-3. **Storage & the 7-day eviction rule.** Since tiles can be evicted after a week of inactivity anyway, eagerly caching everything would repeatedly waste bandwidth re-downloading maps the user may never open. Downloading **on intent** keeps the cache aligned with what the user actually needs *this* trip.
-4. **User control & predictability.** An explicit button with a tile count and progress bar makes storage use transparent and consensual — the user decides what lives on their phone, and the offline badge tells them exactly which trails are ready.
+1. **No background fetch on iOS (hard constraint).** iOS has no Background Fetch/Sync, so tiles can only be pulled while the app is open and in the foreground. Bulk-caching every trail's imagery has to happen during an active session anyway — there's no "download overnight" option — so it must be an explicit, visible action with progress. This rationale is **unchanged**; what changed is that it's now **one tap for everything** rather than a per-trail button.
+2. **All-or-nothing, by design (a deliberate trade-off).** The old per-trail downloads let a user fetch *only the chosen trail* (a few MB) to respect metered data. The single button trades that selectivity for simplicity: it grabs **all 12 trails across both sources** (tens of MB) in one go. The assumption is that the user sets this up on Wi-Fi at home before a trip; on a weak/metered trailhead LTE connection the full download is heavier than the old per-trail option would have been.
+3. **Storage & the 7-day eviction rule.** Since tiles can be evicted after a week of inactivity anyway, the cache will drift out of date regardless; the "Save maps" button is the user's one-tap way to refresh **all** maps right before a trip, which keeps the whole set current at once.
+4. **User control & predictability.** The button is explicit and visible, with a live percentage and a clear "✓ Maps saved" end state, so storage use is consensual and the user always knows whether the maps are ready. The trade-off versus the old design is that the status is now **global** (all trails saved, or not) rather than a per-trail badge.
 
 ---
 
@@ -481,14 +513,14 @@ This is the central design decision, and it's driven by both platform limits and
 
 | Concern | File(s) |
 |---|---|
-| Meta tags (both capability tags), manifest link, download modal markup, `[data-i18n]` hooks | `index.html` |
+| Meta tags (both capability tags), manifest link, global "Save maps" button (`#dl-all`), `[data-i18n]` hooks | `index.html` |
 | Manifest (iOS-respected fields; Japanese identity) | `manifest.json` |
-| Caching strategy, two named caches, precache lists | `sw.js` |
-| Geolocation, Wake Lock, language preference, cache-status probe, tile download | `app.js` |
+| Caching strategy, two named caches, precache lists (12 GPX + 12 images), two-host tile match | `sw.js` |
+| Geolocation, Wake Lock, language preference, cache-status probe, global tile download (`downloadAll`/`gpxBox`), tile sources | `app.js` |
 | i18n string tables, per-trail localized content, unit/date formatting | `i18n.js` (design: `docs/I18N.md`) |
 | Safe-area variables, dynamic viewport height, display font sizes | `app.css` |
-| Trail metadata (8 trails) | `trails.js` |
-| Bundled offline assets | `gpx/` (8 GPX), `images/` (8 `.webp`) |
+| Trail metadata (12 trails: 8 WA + 4 Japan) | `trails.js` |
+| Bundled offline assets | `gpx/` (12 GPX), `images/` (12 `.webp`) |
 
 ---
 
@@ -496,7 +528,7 @@ This is the central design decision, and it's driven by both platform limits and
 
 - [ ] **In-app browser / no-SW detection** → "Open in Safari" hint.
 - [ ] **Wake Lock fallback** for iOS 16.4–18.3 standalone → silent looping `<video>`; plus Auto-Lock tip.
-- [ ] **Eviction re-prompt** → persist per-trail "wanted offline" intent; warn + offer re-download when the sample-tile probe fails; probe more than one tile.
+- [ ] **Eviction re-prompt** → persist a "wanted offline" intent; warn + offer re-download when the sample-tile probe fails; probe more than one tile per trail (the "Save maps" button is global all-or-nothing — no per-trail badge to nudge from).
 - [ ] **Offline status chip** via `navigator.onLine` + `online`/`offline` events.
 - [ ] **Geolocation error UX** for codes `2`/`3` (position unavailable / timeout).
 - [ ] **16px font-size** on any future text input.

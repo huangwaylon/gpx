@@ -1,20 +1,21 @@
 # Ume-chan's Trails 梅ちゃんのトレイル
 
-An offline-capable hiking PWA for iPhone. Browse 8 trails (in Washington State, USA), view
-topographic maps with GPX tracks, see live GPS position, elevation profiles, and full trail
-details — all working offline once cached. The interface is **bilingual: Japanese by default,
-with a one-tap toggle to English**.
+An offline-capable hiking PWA for iPhone. Browse 12 trails — 8 in Washington State (USA) and
+4 in Japan (Mt. Fuji and the Yamanashi mountains) — view topographic maps with GPX tracks, see
+live GPS position, elevation profiles, and full trail details — all working offline once cached.
+The interface is **bilingual: Japanese by default, with a one-tap toggle to English**.
 
 ## Features
 
 - **Bilingual UI (日本語 / English)** — Japanese by default; everything is translated,
   including trail descriptions, map labels, and units (km/m in JA, mi/ft in EN)
-- **8 curated trails** with stats, descriptions, tips, and photos (data via AllTrails)
-- **USGS topographic maps** (public domain) with the trail route, waypoints, and trailhead
+- **12 curated trails** (8 USA + 4 Japan) with stats, descriptions, tips, and photos (data via AllTrails)
+- **Topographic maps** — USGS National Map for US trails, GSI 地理院タイル (Geospatial
+  Information Authority of Japan) for Japan trails, with the route, waypoints, and trailhead
 - **Live GPS** — your location plotted on the map and the elevation profile
 - **Elevation profiles** drawn from the GPX track
 - **Offline first** — app shell, trail data, GPX, and hero images are cached on install;
-  tap *Download map for offline* on a trail to cache its map tiles for no-signal use
+  tap *Save maps* once to cache every trail's map tiles for no-signal use
 - **Responsive** — works in portrait and landscape on iPhone
 
 ## Install on iPhone
@@ -23,8 +24,8 @@ with a one-tap toggle to English**.
 2. Tap **Share → Add to Home Screen**
 3. Launch from the home screen for full-screen, offline use
 
-Before heading out: open each trail you'll hike and tap **Download map for offline**
-while on Wi-Fi. Set *Auto-Lock* to a longer interval (Settings → Display & Brightness)
+Before heading out: tap **Save maps** (in the list header) while on Wi-Fi to cache every
+trail's tiles. Set *Auto-Lock* to a longer interval (Settings → Display & Brightness)
 so the screen stays on while navigating.
 
 ## Tech
@@ -33,7 +34,7 @@ Static site — no build step, no server. Plain HTML/CSS/JS + [Leaflet](https://
 Deployable to GitHub Pages as-is.
 
 - `index.html` — app shell (list + detail screens)
-- `app.js` — i18n, routing, map, GPX parsing, GPS, elevation, tile download
+- `app.js` — i18n, routing, map (per-trail tile source), GPX parsing, GPS, elevation, global tile download
 - `i18n.js` — UI strings, unit formatting, and per-trail Japanese translations
 - `app.css` — dark, mobile-first, responsive styles
 - `trails.js` — trail metadata (English base content)
@@ -46,4 +47,5 @@ Thorough docs live in [`docs/`](docs/) — architecture, internationalization, d
 guide, iOS PWA constraints, the data pipeline, and decisions/lessons. See [`CLAUDE.md`](CLAUDE.md)
 for a quick orientation and the golden rules. Start at [`docs/README.md`](docs/README.md).
 
-Map tiles © USGS National Map. Trail info & photos via AllTrails.
+Map tiles © USGS National Map (US) and © 国土地理院 / 地理院タイル — GSI Japan (Japan trails).
+Trail info & photos via AllTrails.

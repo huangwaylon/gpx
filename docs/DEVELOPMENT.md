@@ -1,10 +1,11 @@
 # Development Guide — Ume-chan's Trails (梅ちゃんのトレイル)
 
 Developer guide for **Ume-chan's Trails** (梅ちゃんのトレイル), a static,
-offline-capable hiking PWA for iPhone. It shows 8 Washington State trails with
-USGS topographic maps, GPX tracks, live GPS, and elevation profiles. The UI is
-**bilingual — Japanese by default, with a one-tap toggle to English** (all text
-and units; see [`docs/I18N.md`](./I18N.md)).
+offline-capable hiking PWA for iPhone. It shows 12 trails — **8 in Washington
+State, USA, and 4 in Japan** — on topographic maps (**USGS** for the US trails,
+**GSI 地理院タイル** for the Japan trails) with GPX tracks, live GPS, and
+elevation profiles. The UI is **bilingual — Japanese by default, with a one-tap
+toggle to English** (all text and units; see [`docs/I18N.md`](./I18N.md)).
 
 - **Live site:** <https://huangwaylon.github.io/gpx/>
 - **Repo:** <https://github.com/huangwaylon/gpx>
@@ -142,7 +143,7 @@ For **returning users**, the correct way to force everyone onto a new version on
 deploy is to bump the cache version constant at the top of `sw.js`:
 
 ```js
-const APP_V  = 'wa-trails-app-v3';   // ← bump this (…-v4, …-v5) when you ship shell changes
+const APP_V  = 'wa-trails-app-v4';   // ← bump this (…-v5, …-v6) when you ship shell changes
 const TILE_V = 'wa-trails-tiles-v1'; // map-tile cache; bump only if tile handling changes
 ```
 
@@ -159,7 +160,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-So changing `APP_V` from `wa-trails-app-v3` to `wa-trails-app-v4` invalidates
+So changing `APP_V` from `wa-trails-app-v4` to `wa-trails-app-v5` invalidates
 the old app-shell cache for all users and re-precaches the new shell on next
 load. **Bump `APP_V` whenever you change shell files** (`index.html`, `app.css`,
 `app.js`, `trails.js`, `i18n.js`, or the bundled asset lists). Leave `TILE_V`
@@ -208,7 +209,7 @@ the codebase:
   Use `$('#id')` for a single element and `$$('.sel')` for an array of elements.
 - **Module-level state.** App state lives in a block of `let`/`const` near the
   top of `app.js` (e.g. `map`, `curTrail`, `trackPts`, `trackWpts`, `totalDist`,
-  `gpsWatch`, `sheetState`, `cacheStatus`). Functions read and mutate these
+  `gpsWatch`, `sheetState`, `dlState`). Functions read and mutate these
   directly. There is no state-management library and no classes — it's plain
   functions over shared module-scope variables.
 - **Rendering is string templating.** Screens are (re)rendered by building HTML
@@ -216,8 +217,9 @@ the codebase:
   (e.g. `renderList()`, `renderSheetBody()`), then wiring up event listeners
   afterward.
 - **Constants up top.** Tunables live as `const`s at the top of `app.js`:
-  `TILE_URL`, `TILE_CACHE`, `DL_ZOOMS`, `PAD`, `FT`. Reuse them rather than
-  hard-coding values.
+  `TILE_CACHE`, `DL_ZOOMS`, `PAD`, `FT`, plus the `TILE_SOURCES` map (the two
+  basemaps — `usgs` and `gsi`) and the `trailSource(trail)` helper that picks one
+  per trail. Reuse them rather than hard-coding values.
 - **CSS custom properties** drive theming in `app.css` (`:root { --bg-0, --blue,
   --safe-t, … }`), including iOS safe-area insets. The design is dark,
   mobile-first, and responsive (portrait + landscape).
@@ -249,10 +251,10 @@ offline and counts against the [GitHub Pages limits](#8-github-pages-constraints
 ## 5. Adding a new trail
 
 This is the most important contributor workflow. A trail is the sum of several
-coordinated edits: a GPX file, a hero image, an English data object, a
-**Japanese translation block**, and a service-worker precache entry. Miss any
-one and the trail will look broken, won't work offline, or shows English text in
-Japanese mode.
+coordinated edits: a GPX file, a hero image, an English data object (with a
+`tiles` field for non-US trails), a **Japanese translation block**, and a
+service-worker precache entry. Miss any one and the trail will look broken,
+won't work offline, or shows English text in Japanese mode.
 
 > The detailed data-extraction / sourcing pipeline (how trail stats, GPX, and
 > photos are obtained and processed) lives in
@@ -294,8 +296,9 @@ images/<slug>.webp
 ### c. Add the trail object to `window.TRAILS`
 
 Append an object to the `window.TRAILS` array in **`trails.js`**. **Every field
-below is required** — the list cards and detail screen read all of them, and a
-missing field renders as `undefined`. Copy an existing entry and edit it.
+below is required** (except `tiles`, which is optional — see the row) — the list
+cards and detail screen read all of them, and a missing field renders as
+`undefined`. Copy an existing entry and edit it.
 
 | Field | Type | Description / allowed values |
 | --- | --- | --- |
@@ -304,6 +307,7 @@ missing field renders as `undefined`. Copy an existing entry and edit it.
 | `area` | string | Location label (e.g. `"Granite Falls, WA"`). |
 | `img` | string | Path to hero image — `"images/<slug>.webp"` (matches step b). |
 | `gpx` | string | Path to GPX — `"gpx/My_New_Trail.gpx"` (matches step a). |
+| `tiles` | string | **Optional.** Basemap source. **Omit for US trails** (defaults to USGS topo). Set to `"gsi"` for trails **outside the US** (e.g. Japan) to use the **GSI 地理院タイル** basemap. `app.js` resolves it via `trailSource(trail)` (the `TILE_SOURCES` map), so both the live map and the offline tile download use the chosen source automatically. |
 | `rating` | number | Star rating, e.g. `4.7`. |
 | `reviews` | number | Review count, e.g. `18454` (rendered with thousands separators). |
 | `lengthMi` | number | Length in miles, e.g. `6.1`. Used for the **Distance** sort. |
@@ -328,6 +332,7 @@ Example skeleton:
   area: "Somewhere, WA",
   img: "images/my-new-trail.webp",
   gpx: "gpx/My_New_Trail.gpx",
+  // tiles: "gsi",   // ← add this ONLY for a non-US (e.g. Japan) trail; omit for US (USGS)
   rating: 4.6, reviews: 1234,
   lengthMi: 5.0, gainFt: 1200, diff: "Moderate",
   route: "Out & back", time: "3 h 00 min",
@@ -343,13 +348,19 @@ Example skeleton:
 }
 ```
 
+> **Non-US trails:** set `tiles: "gsi"` so the map and the offline download use
+> the **GSI 地理院タイル** basemap (free, no API key, CORS-enabled, with Japanese
+> topographic labels) instead of USGS topo. The four Japan trails
+> (`fuji-yoshida`, `fuji-gotemba`, `daibosatsu`, `kinpu`) all carry `tiles:
+> "gsi"`; the eight Washington trails omit `tiles` and fall back to USGS.
+
 > The trail count in the list header is **not** computed from `TRAILS.length`.
 > The live string is the `subtitle` key in `i18n.js`, in **both** `ui.en`
-> (`"8 trails · tap to explore"`) and `ui.ja` (`"8つのコース · タップして探索"`);
+> (`"12 trails · tap to explore"`) and `ui.ja` (`"12のコース · タップして探索"`);
 > `index.html` carries the Japanese default inline on the
 > `data-i18n="subtitle"` node for first paint. If you change the number of
-> trails, update the count in **both** `ui.en` and `ui.ja` in `i18n.js` (and the
-> `README.md` copy).
+> trails, update the count in **both** `ui.en` and `ui.ja` in `i18n.js` (the
+> inline default in `index.html`, and the `README.md` copy).
 
 ### d. Add the Japanese translation block to `i18n.js`
 
@@ -385,7 +396,8 @@ entries to `I18N.wpt`.
 ### e. Precache the new assets in `sw.js`
 
 So the trail works **offline**, add **both** the GPX path and the image path to
-the `TRAIL_ASSETS` array in **`sw.js`**:
+the `TRAIL_ASSETS` array in **`sw.js`** (it currently lists all **12** trails'
+GPX + images, grouped Washington then Japan):
 
 ```js
 const TRAIL_ASSETS = [
@@ -405,11 +417,12 @@ but its GPX/photo won't be guaranteed available offline.
 ### f. (Optional but recommended) bump `APP_V`
 
 Editing `trails.js`, `i18n.js`, and the precache list is a shell change. To make
-returning users pick it up on deploy, bump `APP_V` in `sw.js` (see
+returning users pick it up on deploy, bump `APP_V` in `sw.js` (currently
+`wa-trails-app-v4`, so bump to the next version — see
 [the SW section](#3-the-service-worker-gotcha-read-this)):
 
 ```js
-const APP_V = 'wa-trails-app-v4';
+const APP_V = 'wa-trails-app-v5';
 ```
 
 ### Verify the new trail locally
@@ -420,7 +433,9 @@ const APP_V = 'wa-trails-app-v4';
    includes it (All / Moderate / Hard / Very Hard), and both sorts place it
    correctly.
 4. Open it and confirm the map draws the track, the elevation profile renders,
-   and the hero image loads.
+   and the hero image loads. For a `tiles: "gsi"` trail, confirm the **GSI 地理院
+   タイル** basemap renders (Japanese topo labels) rather than USGS, and that the
+   map attribution line in the Details section shows the GSI credit.
 5. **Toggle to Japanese** (the EN/日本語 button) and confirm the name, area,
    summary, description, tips, and any waypoint labels render in Japanese (no
    English fallback). The app defaults to Japanese, so also confirm the EN
@@ -446,22 +461,27 @@ its own branch in the bottom-sheet code, so test it explicitly.)
 **Test both languages.** The app is **Japanese by default**; use the EN/日本語
 toggle (top-right of the list) to switch and re-check the screens in **both**
 languages — text, units (km/m vs mi/ft), difficulty/route labels, marker
-popups, and the download modal all change. Dev tip: the chosen language is
-persisted in `localStorage.lang`, so to test the first-run default, reset it
-with `localStorage.removeItem('lang')` (in the DevTools console) and reload — it
-should come up in Japanese.
+popups, and the global "Save maps" button label all change. Dev tip: the chosen
+language is persisted in `localStorage.lang`, so to test the first-run default,
+reset it with `localStorage.removeItem('lang')` (in the DevTools console) and
+reload — it should come up in Japanese.
 
 ### Functional checklist
 
 **List screen**
 
-- [ ] The list renders **8 cards** (one per trail in `TRAILS`).
+- [ ] The list renders **12 cards** (one per trail in `TRAILS` — 8 Washington +
+      4 Japan).
 - [ ] Difficulty filter chips (**All / Moderate / Hard / Very Hard** — there is
       no "Easy" chip) filter correctly; "All" shows everything.
 - [ ] **↕ Distance** and **↕ Elevation** sorts reorder the cards; tapping an
       active sort chip again clears the sort.
-- [ ] Cards show distance, gain, route, rating; offline-ready cards show the ✓
-      badge.
+- [ ] Cards show distance, gain, route, and rating. (There is **no** per-card
+      offline ✓ badge anymore — offline maps are handled by one global button,
+      below.)
+- [ ] The header's global **⬇ Save maps** button (`#dl-all`, next to the
+      language toggle) downloads tiles for **all 12 trails across both sources**:
+      it goes idle → a live `NN%` → **✓ Maps saved**.
 
 **Detail screen**
 
@@ -469,17 +489,19 @@ should come up in Japanese.
 - [ ] The GPX loads — i.e. `trackPts` is populated (the red track line appears
       on the map). If `trackPts` is empty, the GPX failed to fetch/parse.
 - [ ] The **elevation profile** SVG draws, with the elevation range label.
-- [ ] **Map tiles load** (USGS topo).
-- [ ] Trailhead/endpoint and waypoint markers appear.
+- [ ] **Map tiles load** — USGS topo for Washington trails, **GSI 地理院タイル**
+      for Japan trails (`tiles: "gsi"`).
+- [ ] Trailhead/endpoint and waypoint markers appear. (The four Japan trails
+      have **no GPX waypoints** — only trailhead/end markers, and Loop routes
+      suppress the separate "End" marker.)
 - [ ] The bottom sheet drags between peek and full; the GPS FAB repositions
       correctly in both orientations.
 - [ ] **GPS dot:** tap the ◎ button → location permission prompt → blue GPS dot
       + accuracy circle appear and follow your position; tapping again
       recenters, then stops. (GPS needs a real location source; the simulated
       sensors in DevTools can stand in.)
-- [ ] **Download for offline:** the "Download map for offline" button opens the
-      modal, shows a tile count, runs the progress bar to 100%, and flips to
-      "✓ Map saved for offline" (and the list card gains its ✓ badge).
+- [ ] The Details section's attribution line shows the correct map credit for
+      the trail's source (USGS for US, GSI for Japan).
 
 **Language (run the above in both EN and JA)**
 
@@ -493,19 +515,29 @@ should come up in Japanese.
 
 ### Offline verification (do this — it's the whole point of the app)
 
-1. With the app loaded and a trail's tiles **downloaded** (run the download flow
-   first), **stop the local server** (`Ctrl+C`).
-2. **Reload** the page.
-3. Confirm the **app still loads** — the shell (HTML/CSS/JS), trail data, GPX,
+1. With the app loaded, tap the header's global **⬇ Save maps** button
+   (`#dl-all`) and **wait for it to read ✓ Maps saved**. This downloads tiles
+   for **all 12 trails** across **both** sources (USGS + GSI) into the tile
+   cache in one pass.
+2. Go offline: either **stop the local server** (`Ctrl+C`) or, in Chrome
+   DevTools, **Network → Offline**.
+3. **Reload** the page.
+4. Confirm the **app still loads** — the shell (HTML/CSS/JS), trail data, GPX,
    and hero images all come from the service-worker cache.
-4. Open the trail you downloaded and confirm its **map tiles still render** from
-   the tile cache (other, non-downloaded trails will show blank tiles offline —
-   that's expected).
-5. Restart the server when done.
+5. Open **any** trail (a Washington one *and* a Japan one) and confirm its **map
+   tiles still render** from the tile cache — USGS topo for the US trail, GSI
+   地理院タイル for the Japan trail.
+6. Go back online (restart the server / untick Offline) when done.
 
 If the app fails to load with the server stopped, the service worker isn't
 caching the shell correctly — check `SHELL` / `TRAIL_ASSETS` in `sw.js` and the
 DevTools **Application → Cache Storage** entries.
+
+> **GSI tiles in local dev:** the GSI 地理院タイル endpoint is free, keyless, and
+> CORS-enabled, and loads fine from a normal browser on a home/office network.
+> It may return **HTTP 403 from datacenter IPs**, but that won't affect local
+> dev on a residential connection. If GSI tiles fail to download, check you're
+> not on a flagged network before suspecting the code.
 
 > **Optional:** a Lighthouse PWA/perf pass in DevTools is a reasonable
 > additional smoke test, but it is not part of the required flow.
@@ -555,23 +587,24 @@ Stay within GitHub Pages' published limits:
 | Limit | Value | Implication |
 | --- | --- | --- |
 | **Per-file size** | **100 MB hard limit** | No single committed file may exceed this. (Largest current file is `gpx/The_Enchantments_Traverse.gpx` at ~626 KB — comfortably fine.) |
-| **Repository size** | **1 GB soft limit** | Keep the repo lean. The deployed app is **only ~3.4 MB**. |
+| **Repository size** | **1 GB soft limit** | Keep the repo lean. The deployed app is **only ~5 MB**. |
 | **Bandwidth** | **100 GB / month (soft)** | Fine for this app's traffic; just don't host huge downloads here. |
 
 The reason the repo stays tiny: the **`alltrails/` source folder (~166 MB** of
 AllTrails HTML/webarchive source material) **is git-ignored and must never be
-committed.** Only the ~3.4 MB app (HTML/CSS/JS + `gpx/` + `images/` + a few small
+committed.** Only the ~5 MB app (HTML/CSS/JS + `gpx/` + `images/` + a few small
 files) is deployed. Before committing, sanity-check that you're not about to add
 large source files:
 
 ```bash
 git status                       # alltrails/ should NOT appear
-du -sh --exclude=.git --exclude=alltrails .   # deployed app size (~3.4 MB)
+du -sh --exclude=.git --exclude=alltrails .   # deployed app size (~5 MB)
 ```
 
-> Map **tiles are not in the repo.** They're fetched on demand from USGS and
-> cached client-side (in the browser's Cache Storage) when a user taps
-> "Download map for offline." They never count against repo size.
+> Map **tiles are not in the repo.** They're fetched on demand from **USGS**
+> (US trails) and **GSI 地理院タイル** (Japan trails) and cached client-side (in
+> the browser's Cache Storage) when a user taps the global **Save maps** button.
+> They never count against repo size.
 
 ---
 
