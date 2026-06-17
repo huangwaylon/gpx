@@ -1,8 +1,9 @@
-const APP_V  = 'wa-trails-app-v14';
-const TILE_V = 'wa-trails-tiles-v1';
+const APP_V = 'wa-trails-app-v15';   // bumped: tiles moved out of Cache Storage into IndexedDB
+
+importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 
 const SHELL = [
-  './', './index.html', './app.css', './app.js', './trails.js', './i18n.js',
+  './', './index.html', './app.css', './app.js', './trails.js', './i18n.js', './tiles-db.js',
   './manifest.json', './icon-180.png', './icon-192.png', './icon-512.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
@@ -26,42 +27,68 @@ const TRAIL_ASSETS = [
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const c = await caches.open(APP_V);
-    // shell must succeed; trail assets best-effort
-    await c.addAll(SHELL);
-    await Promise.allSettled(TRAIL_ASSETS.map(u => c.add(u)));
+    // Precache bypassing the HTTP cache ({cache:'reload'}) so a new version never stores a STALE
+    // copy of a shell file — e.g. an index.html missing a freshly-added script. Shell must
+    // succeed; trail assets are best-effort so one failure can't abort install.
+    await Promise.all(SHELL.map(async u => {
+      const res = await fetch(u, { cache: 'reload' });
+      if (!res.ok) throw new Error('precache failed: ' + u);
+      await c.put(u, res);
+    }));
+    await Promise.allSettled(TRAIL_ASSETS.map(async u => {
+      const res = await fetch(u, { cache: 'reload' });
+      if (res.ok) await c.put(u, res);
+    }));
     self.skipWaiting();
   })());
 });
 
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
+    // The shell cache is now the ONLY cache — drop everything else, including the old
+    // wa-trails-tiles-v1 tile cache (tiles live in IndexedDB now). Freeing that big cache
+    // is also what restores fast launch for users upgrading from a tiles-in-Cache build.
     const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.delete(k)));
+    await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
     self.clients.claim();
   })());
 });
 
+const isTile = url => url.includes('nationalmap.gov') || url.includes('cyberjapandata.gsi.go.jp');
+
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  // Map tiles (USGS topo for US trails, GSI 地理院タイル for Japan) — cache-first
-  if (url.includes('nationalmap.gov') || url.includes('cyberjapandata.gsi.go.jp')) {
-    e.respondWith(caches.open(TILE_V).then(cache =>
-      cache.match(url).then(hit => hit || fetch(e.request).then(res => {
-        if (res.ok || res.type==='opaque') cache.put(url, res.clone());
+  // Map tiles (USGS topo for US trails, GSI 地理院タイル for Japan) — IndexedDB-first, fill on miss.
+  // Stored bytes are replayed as a fresh Response; both sources are CORS so the body is readable.
+  if (isTile(url)) {
+    e.respondWith((async () => {
+      try {
+        const rec = await TileStore.get(url);
+        if (rec) return new Response(rec.body, { headers: { 'Content-Type': rec.type } });
+      } catch (_) {}
+      try {
+        const res = await fetch(e.request);
+        if (res.ok) {                                   // keep the SW alive to finish the write
+          const type = res.headers.get('Content-Type') || 'image/png';
+          e.waitUntil(res.clone().arrayBuffer().then(body => TileStore.put(url, { body, type })).catch(() => {}));
+        }
         return res;
-      }).catch(() => new Response('', {status:503})))
-    ));
+      } catch (_) { return new Response('', { status: 503 }); }
+    })());
     return;
   }
 
-  // App shell + bundled assets — cache-first, fill on miss
-  e.respondWith(caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
-    if (res.ok) {
-      const u = new URL(url);
-      if (u.origin === self.location.origin || u.hostname.includes('unpkg.com'))
-        caches.open(APP_V).then(c => c.put(e.request, res.clone()));
-    }
-    return res;
-  }).catch(() => e.request.mode === 'navigate' ? caches.match('./index.html') : new Response('', {status:503}))));
+  // App shell + bundled assets — cache-first, scoped to APP_V. (A global caches.match() can make
+  // WebKit open/scan unrelated caches; scoping keeps shell serving off any large store.)
+  e.respondWith(caches.open(APP_V).then(cache =>
+    cache.match(e.request).then(hit => hit || fetch(e.request).then(res => {
+      if (res.ok) {
+        const u = new URL(url);
+        if (u.origin === self.location.origin || u.hostname.includes('unpkg.com'))
+          cache.put(e.request, res.clone());
+      }
+      return res;
+    }).catch(() => e.request.mode === 'navigate' ? cache.match('./index.html') : new Response('', { status: 503 })))
+  ));
 });

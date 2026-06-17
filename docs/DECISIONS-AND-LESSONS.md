@@ -589,6 +589,80 @@ from the display name, and surface the **seasonal-closure and reservation/fee fa
 
 ---
 
+### ADR-12: Saved map tiles in IndexedDB, not the Cache API (fix the slow PWA launch)
+
+**Context.**
+A full "Save maps" run now caches **~5,200 tiles (~100 MB)** — the z17–18 GSI levels added for the
+Japan trails roughly doubled the count. On iOS/WebKit, **opening a Cache Storage cache that holds
+thousands of records is slow**, and that open sat on the **launch critical path** in two places: the
+service worker served every app-shell asset via a **global** `caches.match()`, and the app boot
+**`await`ed** `refreshCacheStatus()` (which opens the tile cache and probes ten tiles) *before*
+routing the first screen. Result: once maps were saved, relaunching the installed PWA showed a
+**multi-second black screen** before first paint; with no tiles saved (or online with an empty
+cache) launch was fast. The symptom scaled **purely with tile-cache size** — the tell that the cost
+was Cache Storage open/scan, a known WebKit characteristic. A Chrome/Blink repro showed *no*
+per-operation slowdown at 5k entries, confirming the bottleneck is engine-specific to WebKit.
+
+**Decision.**
+Move saved tiles **out of Cache Storage into IndexedDB** (`tiles-db.js`, exposing
+`window.TileStore` = `get`/`has`/`put`, shared by the page and the SW via `importScripts`). Cache
+Storage now holds only the ~20 shell files, so it opens instantly no matter how many tiles are
+saved. Alongside that move:
+
+- The SW tile branch is **IndexedDB-first** (`TileStore.get` → replay the bytes as a `Response`; on
+  a network miss it stores the fetched bytes via `e.waitUntil`).
+- The SW serves the shell **scoped to `APP_V`** (`caches.open(APP_V).then(c => c.match(…))`) instead
+  of a global `caches.match()`, so it never opens or scans any other store.
+- `refreshCacheStatus()` is taken **off the boot critical path** — `routeFromHash()` paints first and
+  the saved-maps button state updates a tick later (`refreshCacheStatus().then(updateDlBtn)`).
+- `install` **precaches with `{cache:'reload'}`** so a new version never stores a stale shell file
+  from the HTTP cache — important now that `tiles-db.js` is a *required* shell file.
+- `activate` deletes **every** cache except `APP_V` (including the old `wa-trails-tiles-v1`), freeing
+  the big cache on upgrade.
+
+**Rationale.**
+
+- IndexedDB does an **indexed key lookup (O(log n))**, so neither launch nor offline tile reads
+  degrade as the tile set grows — and offline map panning gets quicker too (it no longer `match`es
+  against a huge cache per tile).
+- It works in the **service worker** on every iOS the app targets, stores **readable bytes** (both
+  tile sources are CORS, never opaque), shares the same per-origin quota, and is subject to the
+  **same 7-day eviction** as the Cache API (no regression).
+- Keeps the **vanilla, no-build** model — one small shared script, no library (ADR-5).
+
+**Alternatives considered and rejected.**
+
+- **Keep the Cache API, cap the offline download zoom** (drop GSI z17–18, ~38% fewer entries).
+  Rejected as the *primary* fix: it only *reduces* the cost, doesn't remove it, and sacrifices the
+  max-zoom Japan detail just added. Still a valid future lever.
+- **Structural fixes only** (scoped match + non-blocking status). Necessary and kept — but the SW
+  must still open *some* cache to serve the shell, so on their own they may not fully remove the
+  WebKit open cost once a large cache exists.
+- **OPFS.** Faster for blobs, but unavailable before iOS 17; IndexedDB has broader support for the
+  target audience.
+
+**Consequences.**
+
+- **Two storage systems now:** Cache Storage (shell) + IndexedDB (tiles). The earlier "no
+  IndexedDB / exactly two caches" notes in `docs/IOS-PWA-GUIDE.md` are **superseded** by this ADR.
+- **One-time re-download for existing users:** upgrading drops the old `wa-trails-tiles-v1` cache, so
+  the "Save maps" button reverts to idle until tapped again (tiles were always disposable under the
+  7-day rule).
+- Tile persistence lives in **one place** (the SW tile branch); `downloadAll()` just requests the
+  misses and lets the SW store them, with a direct-store fallback for the brief window before the SW
+  controls the page.
+- An opt-in boot timer (`localStorage.perf === '1'`) logs `sw-served shell …ms` for on-device
+  before/after measurement.
+
+**Verification.** Chrome DevTools against the local server: a clean install leaves **only**
+`wa-trails-app-v15` in Cache Storage (old tile cache purged); the full SW tile round-trip
+(miss → network → IndexedDB → hit) round-trips bytes + content-type for both a real GSI host and a
+synthetic URL; and **offline** (network emulation off) the app shell launches, a previously-saved
+tile serves from IndexedDB, `refreshCacheStatus()` runs without throwing, and a trail's track +
+elevation render from the precached GPX.
+
+---
+
 ## Part 2 — Bugs found during build & testing
 
 All four bugs below are **fixed in the current source**; each entry notes the verification.

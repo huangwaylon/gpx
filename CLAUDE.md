@@ -46,7 +46,8 @@ is fully translated.
    Japan trails use GSI 地理院タイル — selected per trail via the `tiles` field and the
    `TILE_SOURCES` map in `app.js`. USGS templates are `{z}/{y}/{x}`, GSI is `{z}/{x}/{y}`; the
    tile math substitutes tokens by name, so keep the right order in each template. Any new tile
-   host must also be added to the cache-first branch in `sw.js`.
+   host must also be added to the tile branch (`isTile`) in `sw.js` so its tiles are served from
+   (and saved to) the IndexedDB tile store (`tiles-db.js`).
 8. **One global "download all maps" button — don't reintroduce per-trail downloads.** Offline
    tiles are fetched by the single `#dl-all` button (next to the language toggle), which caches
    every trail across both sources. The old per-trail download button, the download modal, and
@@ -62,7 +63,8 @@ is fully translated.
 | `i18n.js` | `window.I18N` — UI strings, dynamic-string fns, enum tables, waypoint names, and per-trail Japanese content |
 | `app.css` | Light (paper-cool), mobile-first, responsive styles (custom properties, safe-area insets, CJK font stack) |
 | `trails.js` | The data model — `window.TRAILS` array of 10 trail objects (8 US + 2 Japan; English base content). Optional `tiles` field picks the basemap (USGS default; `"gsi"` for Japan) |
-| `sw.js` | Service worker — precaches shell+i18n+GPX+images; cache-first map tiles (USGS + GSI) |
+| `sw.js` | Service worker — precaches shell+i18n+GPX+images (scoped, cache-first); serves map tiles (USGS + GSI) **from IndexedDB** via `tiles-db.js` |
+| `tiles-db.js` | Tiny IndexedDB tile store (`window.TileStore` = get/has/put), shared by the page and the SW (`importScripts`). Saved tiles live here, **not** in Cache Storage, so launch stays fast no matter how many are saved |
 | `manifest.json`, `icon-{180,192,512}.png` | PWA install metadata + Home-Screen icon (cropped from the Enchantments photo) |
 | `gpx/` | 10 GPX tracks (committed, parsed at runtime) |
 | `images/` | 10 WebP hero photos (1200×800) |
@@ -87,10 +89,12 @@ doesn't un-color). The tracking session is **mirrored to `localStorage`** (with 
 time) so it survives an iOS reload/eviction mid-hike: reopening the trail offers a **resume** (the
 elapsed clock counted through the gap), and after a few rejected fixes a **stale-window re-acquire**
 re-snaps your position — built for the pocket-the-phone-then-check-at-the-summit pattern. Offline is
-three tiers: SW precache (shell+i18n+GPX+images) →
-cache-first tiles (both hosts) → a **single global "download all maps" button** (`downloadAll`)
-in the list header that pre-caches every trail's tiles across both sources. Full detail in
-`docs/ARCHITECTURE.md`.
+three tiers: SW precache (shell+i18n+GPX+images, in Cache Storage) →
+tiles served from **IndexedDB** (cache-first, both hosts; see `tiles-db.js`) → a **single global
+"download all maps" button** (`downloadAll`) in the list header that fills that tile store for every
+trail across both sources. Saved tiles live in IndexedDB rather than Cache Storage so the app shell
+launches fast even with ~5k tiles saved (WebKit is slow to open a Cache holding thousands of
+entries — see ADR-12). Full detail in `docs/ARCHITECTURE.md`.
 
 ## Internationalization (i18n)
 
@@ -126,7 +130,7 @@ Paste into the DevTools console:
 ```
 
 (Or DevTools → Application → Storage → **Clear site data**.) To ship an update to returning
-users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v11`) — the `activate` handler purges
+users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v15`) — the `activate` handler purges
 old caches. Reset language during testing with `localStorage.removeItem('lang')`.
 
 ## Adding a trail (short version)
@@ -194,6 +198,12 @@ These were flagged earlier and have since been addressed; noted so they don't ge
 - The per-trail "Download map for offline" button, the `#dl-modal` download modal, and the
   per-card offline ✓ badge were all removed in favor of one global "download all maps" button
   (`#dl-all`) in the header — it downloads every trail's tiles across both sources at once.
+- **Saved map tiles moved from Cache Storage to IndexedDB** (`tiles-db.js`; `APP_V` bumped to
+  `wa-trails-app-v15`). A full "Save maps" caches ~5k tiles; on WebKit a Cache holding that many
+  entries is slow to open, and that open sat on the launch critical path → a multi-second black
+  screen on every relaunch once maps were saved. Tiles now live in IndexedDB (fast keyed lookup),
+  Cache Storage holds only the ~20 shell files, `refreshCacheStatus()` no longer blocks first
+  paint, and the SW serves the shell scoped to `APP_V` (no global `caches.match`). See ADR-12.
 
 Still open: the global download button's "✓ saved" state is a heuristic
 (`refreshCacheStatus()` samples one z14 center tile per trail and requires all of them to be

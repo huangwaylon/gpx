@@ -17,7 +17,7 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | **Service workers** | Supported in Safari tabs + Home-Screen PWAs since iOS 11.1. **Not** available in WKWebView / in-app browsers. | Registers `./sw.js` (classic SW) on `load`. Offline breaks inside in-app browsers — **recommend "Open in Safari"** (GAP: not detected/surfaced in-app). |
 | **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** via a single global **"Save maps"** button — never background prefetch. |
 | **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
-| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v11`) and map tiles (`wa-trails-tiles-v1`, holding both USGS + GSI tiles). No IndexedDB. |
+| **Cache API** | Fully supported since iOS 11.1. | App **shell** only (`wa-trails-app-v15`). **Map tiles moved to IndexedDB** (`tiles-db.js`) — opening a Cache holding thousands of tile records is slow on WebKit and stalled launch (ADR-12). |
 | **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded. | GPS only works screen-on, foreground. App re-acquires Wake Lock on `visibilitychange`. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
 | **`navigator.wakeLock` (standalone)** | Broken in standalone on iOS 16.4–18.3; works in standalone only from **18.4+**. | Calls `wakeLock.request('screen')`, re-acquires on visibility change. **GAP: no video-loop fallback.** Advise raising Auto-Lock. |
@@ -68,7 +68,15 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 The **Cache API** (`caches.open`, `cache.put`, `cache.match`, `cache.addAll`) is **fully supported since iOS 11.1** and is the storage primitive of choice for PWAs. It can store opaque cross-origin responses (important for third-party tiles).
 
 ### How this app handles it
-The app uses the Cache API for **everything** persistent and uses **no IndexedDB**. There are exactly **two caches**, both keyed by version string so they can be rotated independently:
+
+> **Updated by ADR-12.** Map **tiles moved out of the Cache API into IndexedDB** (`tiles-db.js`).
+> On WebKit, opening a Cache that holds thousands of tile records is slow, and that open sat on the
+> launch critical path → a multi-second black screen on relaunch once maps were saved. Cache Storage
+> now holds **only the app shell**; saved tiles live in IndexedDB (fast keyed lookup). The
+> "two caches / no IndexedDB" description below is **historical** — kept for the shell-cache details.
+
+The app uses the Cache API for **the app shell**, and **IndexedDB** for saved map tiles. The shell
+cache is keyed by version string so it can be rotated cleanly:
 
 | Cache name (constant) | Contents | Population strategy |
 |---|---|---|
@@ -78,8 +86,7 @@ The app uses the Cache API for **everything** persistent and uses **no IndexedDB
 `sw.js` declarations:
 
 ```js
-const APP_V  = 'wa-trails-app-v11';
-const TILE_V = 'wa-trails-tiles-v1';
+const APP_V = 'wa-trails-app-v15';   // tiles now live in IndexedDB (tiles-db.js), not a cache
 ```
 
 **App-shell cache (`APP_V`).** On `install` the SW precaches the shell (HTML, CSS, JS, manifest, icon, and Leaflet's JS/CSS from unpkg). The shell `addAll` is treated as **must-succeed**; the bundled trail assets are added **best-effort** so a single failed asset cannot abort installation:
@@ -396,6 +403,12 @@ The app is **bilingual**: **Japanese by default**, with an **English toggle** in
 
 Ume-chan's Trails uses a **three-tier offline model**. The first two tiers are automatic; the third is the deliberate, user-controlled step that the iOS background-fetch ban forces on us.
 
+> **Updated by ADR-12.** Saved tiles now live in **IndexedDB** (`tiles-db.js`), not the Cache API.
+> The three-tier *model* is unchanged; only tier-2/3 *storage* changed — in the service worker tiles
+> are read **IndexedDB-first** and written there on a network miss / by "Save maps" (`downloadAll`
+> requests the misses and lets the SW store them). The Cache-API code shown in the tier-2/3 snippets
+> below is **historical**; see ADR-12 in `docs/DECISIONS-AND-LESSONS.md` for the current handlers.
+
 ### Tier 1 — App shell + all trail data precached on SW install
 On `install`, the service worker precaches the **app shell** (must-succeed) and, best-effort, **all 10 GPX tracks + all 10 hero images**, so the app UI and every trail's info/elevation/photo work offline **immediately after first load** — even before the user downloads any map tiles.
 
@@ -532,7 +545,7 @@ This is the central design decision, and it's driven by both platform limits and
 |---|---|
 | Meta tags (both capability tags), manifest link, global "Save maps" button (`#dl-all`), `[data-i18n]` hooks | `index.html` |
 | Manifest (iOS-respected fields; Japanese identity) | `manifest.json` |
-| Caching strategy, two named caches, precache lists (10 GPX + 10 images), two-host tile match | `sw.js` |
+| Caching strategy, shell precache (`{cache:'reload'}`), two-host tile match → IndexedDB | `sw.js`, `tiles-db.js` |
 | Geolocation, Wake Lock, language preference, cache-status probe, global tile download (`downloadAll`/`gpxBox`), tile sources | `app.js` |
 | i18n string tables, per-trail localized content, unit/date formatting | `i18n.js` (design: `docs/I18N.md`) |
 | Safe-area variables, full-screen `#app` pinning (`position:fixed`), display font sizes | `app.css` |

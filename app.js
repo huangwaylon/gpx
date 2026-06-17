@@ -4,7 +4,7 @@
    Ume-chan's Trails — offline hiking PWA (JA default, EN toggle)
    ════════════════════════════════════════════════════════════ */
 
-const TILE_CACHE = 'wa-trails-tiles-v1';
+// Saved offline tiles live in IndexedDB (see tiles-db.js → window.TileStore), not Cache Storage.
 // Offline pre-caching spans z10 (overview) up to each source's own maxZoom — USGS tops out at
 // z16 (its native ceiling; z17+ 404s), GSI serves to z18 — so Japan trails cache the extra
 // z17–18 detail while US trails stop where the USGS cache ends.
@@ -179,14 +179,20 @@ function setLang(next) {
 // ════════════════════════════════════════════════════════════
 //  Boot
 // ════════════════════════════════════════════════════════════
-window.addEventListener('load', async () => {
-  applyStaticI18n();
+window.addEventListener('load', () => {
+  const t0 = performance.now();
+  applyStaticI18n();              // also calls updateDlBtn() → button shows its idle label at once
   renderList();
   bindGlobal();
-  await refreshCacheStatus();
-  updateDlBtn();                  // reflect detected offline-maps state (idle / done)
-  routeFromHash();
+  routeFromHash();                // paint the first screen immediately — nothing above waits on storage
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  // Detect saved-maps state OFF the critical path. It opens IndexedDB and probes tiles; awaiting it
+  // before the first paint is what used to stall launch once many tiles were saved.
+  refreshCacheStatus().then(updateDlBtn);
+  if (localStorage.perf === '1') requestAnimationFrame(() => {
+    const n = performance.getEntriesByType('navigation')[0];
+    if (n) console.info(`[perf] sw-served shell ~${n.responseStart|0}ms · DOMContentLoaded ${n.domContentLoadedEventEnd|0}ms · load ${n.loadEventStart|0}ms · boot+route ${(performance.now()-t0)|0}ms`);
+  });
 });
 window.addEventListener('hashchange', routeFromHash);
 
@@ -1068,7 +1074,7 @@ function tileURLsFor(box, src){
 }
 
 async function downloadAll(){
-  if(dlState==='busy' || !('caches'in window)) return;
+  if(dlState==='busy' || !('indexedDB'in window)) return;
   dlState='busy'; updateDlBtn(); updateDlProgress(0,1);
   // Gather every tile URL across all trails (each via its own source), then dedupe.
   let urls=[];
@@ -1077,11 +1083,19 @@ async function downloadAll(){
     urls.push(...tileURLsFor(box, trailSource(trail)));
   }
   urls=[...new Set(urls)];
-  const total=urls.length || 1; let done=0;
-  const cache=await caches.open(TILE_CACHE), BATCH=8;
+  const total=urls.length || 1; let done=0; const BATCH=8;
+  // When the service worker controls the page it stores each fetched tile in IndexedDB (its tile
+  // fetch handler), so we just request the misses. Before the SW has claimed the page (rare — a
+  // first-ever load) it won't, so store directly then, keeping the download reliable either way.
+  const swStores = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
   for(let i=0;i<urls.length;i+=BATCH){
     await Promise.allSettled(urls.slice(i,i+BATCH).map(async u=>{
-      try{ if(!(await cache.match(u))){ const r=await fetch(u,{mode:'cors'}); if(r.ok||r.type==='opaque') await cache.put(u,r); } }catch(_){}
+      try{
+        if(!(await TileStore.has(u))){
+          const r=await fetch(u,{mode:'cors'});
+          if(!swStores && r.ok){ const type=r.headers.get('Content-Type')||'image/png'; await TileStore.put(u,{body:await r.arrayBuffer(), type}); }
+        }
+      }catch(_){}
       done++; updateDlProgress(done,total);
     }));
   }
@@ -1108,14 +1122,13 @@ function updateDlProgress(done,total){
 // On startup decide the button state: 'done' only if a sample tile for EVERY trail
 // (its z14 center tile, from that trail's own source) is already cached; else 'idle'.
 async function refreshCacheStatus(){
-  if(dlState==='busy' || !('caches'in window)) return;
+  if(dlState==='busy' || !('indexedDB'in window)) return;
   try{
-    const cache=await caches.open(TILE_CACHE);
     let all=true;
     for(const trail of TRAILS){
       const {x,y}=ll2t(trail.center[0],trail.center[1],14);
       const u=trailSource(trail).url.replace('{z}',14).replace('{y}',y).replace('{x}',x);
-      if(!(await cache.match(u))){ all=false; break; }
+      if(!(await TileStore.has(u))){ all=false; break; }
     }
     dlState = all ? 'done' : 'idle';
   }catch(_){}

@@ -5,6 +5,16 @@
 > Every claim below is grounded in the source as of this writing; `file:line` references
 > point at the exact code.
 
+> ⚠️ **Superseded in part by ADR-12 (tile storage).** Saved map tiles now live in **IndexedDB**
+> (`tiles-db.js` → `window.TileStore`), **not** the Cache API. So throughout this document, the
+> `TILE_V` / `TILE_CACHE` (`wa-trails-tiles-v1`) cache, the "tiles served cache-first from a tile
+> cache", `downloadAll()` writing to a Cache, and the `app.js`↔`sw.js` same-cache-name coupling are
+> **historical** for tile storage. Current behavior: the SW serves tiles **IndexedDB-first** and
+> stores on miss; the shell is served **scoped to `APP_V`** (now `wa-trails-app-v15`); and `activate`
+> deletes **every** cache except `APP_V` — i.e. it **no longer preserves** the old tile cache, it
+> drops it (tiles re-download into IndexedDB). The shell-caching and all non-tile subsystems below
+> remain accurate. See ADR-12 in `docs/DECISIONS-AND-LESSONS.md`.
+
 ---
 
 ## 1. High-level overview
