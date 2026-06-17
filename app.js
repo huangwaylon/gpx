@@ -18,10 +18,36 @@ const MI_PER_KM  = 1.609344;
 // height in app.css, and PROF_PAD_B/T are the px reserved below/above the plotted area.
 const PROF_H = 96, PROF_PAD_B = 14, PROF_PAD_T = 12;
 
-// Track / marker palette — mirrors the --red/--green/--blue/--violet/--amber custom properties
-// in app.css (SVG strings and Leaflet options can't read CSS vars without getComputedStyle).
-// Keep in sync with :root in app.css.
-const C = { red:'#ef4444', green:'#22c55e', blue:'#3b82f6', violet:'#d946ef', amber:'#f59e0b' };
+// Track / marker palette — mirrors the map-semantic custom properties in app.css
+// (SVG strings and Leaflet options can't read CSS vars without getComputedStyle).
+// Keep in sync with :root in app.css. `pine` is the brand accent (elevation fill).
+const C = { red:'#d4442e', green:'#1f9d63', blue:'#2f6fe0', violet:'#7b5bff', amber:'#d6861c',
+            pine:'#1f6f5c', ink:'#16231d' };
+
+// ── Inline SVG icons (offline-safe, scale with currentColor) ──
+// Replaces emoji throughout. Stroke icons use the shared attrs in icon(); the two
+// filled action glyphs (play/pause for the tracking FAB) are full strings.
+const ICON_PATHS = {
+  dist:    '<path d="m18 8 4 4-4 4"/><path d="m6 8-4 4 4 4"/><path d="M2 12h20"/>',
+  gain:    '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>',
+  route:   '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+  clock:   '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
+  pin:     '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+  download:'<path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/>',
+  check:   '<path d="M20 6 9 17l-5-5"/>',
+  users:   '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  calendar:'<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2.5"/><path d="M3 10h18"/>',
+  sunrise: '<path d="M12 2v8"/><path d="m4.93 10.93 1.41 1.41"/><path d="M2 18h2"/><path d="M20 18h2"/><path d="m19.07 10.93-1.41 1.41"/><path d="M22 22H2"/><path d="m8 6 4-4 4 4"/><path d="M16 18a4 4 0 0 0-8 0"/>',
+  sunset:  '<path d="M12 10V2"/><path d="m4.93 10.93 1.41 1.41"/><path d="M2 18h2"/><path d="M20 18h2"/><path d="m19.07 10.93-1.41 1.41"/><path d="M22 22H2"/><path d="m16 6-4 4-4-4"/><path d="M16 18a4 4 0 0 0-8 0"/>',
+  ext:     '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+  chevDown:'<path d="m6 9 6 6 6-6"/>',
+};
+function icon(name, cls){
+  return `<svg class="ic${cls?' '+cls:''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" `+
+         `stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
+}
+const ICON_PLAY  = '<svg class="ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5.14a1 1 0 0 1 1.5-.87l11 6.86a1 1 0 0 1 0 1.74l-11 6.86A1 1 0 0 1 7 18.86Z"/></svg>';
+const ICON_PAUSE = '<svg class="ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6.5" y="5.5" width="3.7" height="13" rx="1.3"/><rect x="13.8" y="5.5" width="3.7" height="13" rx="1.3"/></svg>';
 
 // Live-tracking tuning. Per GPS fix we snap the position to the nearest track vertex,
 // searching only a forward window around the last snapped index so an out-and-back's
@@ -176,26 +202,22 @@ function renderList() {
   wrap.innerHTML = trails.map(trail => {
     const tr = loc(trail);
     return `
-    <article class="card" data-slug="${trail.slug}">
+    <a class="card" href="#/trail/${trail.slug}">
       <div class="card-img-wrap">
         <img class="card-img" src="${trail.img}" alt="${tr.name}" loading="lazy">
-        <span class="card-badge-diff ${diffClass(trail.diff)}">${trDiff(trail.diff)}</span>
+        <span class="card-badge ${diffClass(trail.diff)}">${trDiff(trail.diff)}</span>
         <div class="card-titlebar">
           <div class="card-title">${tr.name}</div>
-          <div class="card-area">${tr.area}</div>
+          <div class="card-area">${icon('pin')}${tr.area}</div>
         </div>
       </div>
       <div class="card-stats">
-        <span class="s"><span class="ic">↔</span>${fmtDist(trail.lengthMi)}</span>
-        <span class="s"><span class="ic">▲</span>${fmtGain(trail.gainFt)}</span>
-        <span class="s"><span class="ic">⟳</span>${trRoute(trail.route)}</span>
-        <span class="s time">⏱ ${fmtTime(trail.time)}</span>
+        <span class="s">${icon('dist')}<span>${fmtDist(trail.lengthMi)}</span></span>
+        <span class="s">${icon('gain')}<span>${fmtGain(trail.gainFt)}</span></span>
+        <span class="s time">${icon('clock')}<span>${fmtTime(trail.time)}</span></span>
       </div>
-    </article>`;
+    </a>`;
   }).join('');
-
-  $$('#trail-list .card').forEach(c =>
-    c.addEventListener('click', () => { location.hash = `#/trail/${c.dataset.slug}`; }));
 }
 
 function bindGlobal() {
@@ -253,9 +275,10 @@ function renderPeek(trail) {
   const tr = loc(trail);
   $('#pk-title').textContent = tr.name;
   $('#pk-meta').innerHTML =
-    `<span>${fmtDist(trail.lengthMi)}</span><span>▲ ${fmtGain(trail.gainFt)}</span>` +
-    `<span class="${diffClass(trail.diff)}" style="background:none;padding:0">${trDiff(trail.diff)}</span>` +
-    `<span>⏱ ${fmtTime(trail.time)}</span>`;
+    `<span class="s">${icon('dist')}${fmtDist(trail.lengthMi)}</span>` +
+    `<span class="s">${icon('gain')}${fmtGain(trail.gainFt)}</span>` +
+    `<span class="s ${diffClass(trail.diff)}" style="font-weight:700">${trDiff(trail.diff)}</span>` +
+    `<span class="s">${icon('clock')}${fmtTime(trail.time)}</span>`;
 }
 
 function renderSheetBody(trail) {
@@ -292,15 +315,15 @@ function renderSheetBody(trail) {
       </dl>
     </div>
     <div class="section">
-      <p style="font-size:11px;color:var(--muted)">${t('attribTrail')} ／ ${t(trailSource(trail).creditKey)}</p>
+      <p class="attrib">${t('attribTrail')} ／ ${t(trailSource(trail).creditKey)}</p>
     </div>
   `;
   drawProfile();
 }
 
-// "3 h 17 min" → "3時間17分" (JA); strip spaces in EN as before
+// "3 h 17 min" → "3時間17分" (JA); "3h 17m" / "10–13h" (EN — compact but readable)
 function fmtTime(s) {
-  if (lang !== 'ja') return s.replace(/ /g,'');
+  if (lang !== 'ja') return s.replace(/\s*–\s*/g,'–').replace(/\s*h\b/g,'h').replace(/\s*min\b/g,'m');
   return s.replace(/~/g,'約').replace(/(\d+)\s*h(?:r)?/g,'$1時間').replace(/(\d+)\s*min/g,'$1分')
           .replace(/\s*[–-]\s*/g,'～').replace(/時間(?=～|$)/,'時間').replace(/ /g,'');
 }
@@ -318,16 +341,16 @@ function renderPlanCard(plan) {
   return `
     <section class="plan-card">
       <div class="plan-head">
-        <span class="ic" aria-hidden="true">📅</span>
+        ${icon('calendar')}
         <span class="lbl">${t('secPlan')}</span>
         <a class="plan-yamap" href="${plan.url}" target="_blank" rel="noopener"
-           aria-label="${t('planYamapAria')}">${t('planYamap')} ↗</a>
+           aria-label="${t('planYamapAria')}">${t('planYamap')}${icon('ext')}</a>
       </div>
       <div class="plan-date">${fmtPlanDate(plan.dateISO)}</div>
       <div class="plan-chips">
-        <span class="pc">👥 ${tf('planParty')(plan.party)}</span>
-        <span class="pc">↔ ${dist}</span>
-        <span class="pc">▲ ${gain}</span>
+        <span class="pc">${icon('users')}${tf('planParty')(plan.party)}</span>
+        <span class="pc">${icon('dist')}${dist}</span>
+        <span class="pc">${icon('gain')}${gain}</span>
       </div>
       ${plan.itinerary ? renderTimeline(plan) : ''}
       <div class="plan-foot">${pace} ${plan.pace}% · ${t('planCourse')} ${plan.constant} · ${t('planBy')} ${by}</div>
@@ -352,12 +375,12 @@ function renderTimeline(plan) {
     return stop + `<li class="tl-leg"><span>${fmtDur(leg)}</span></li>`;
   }).join('');
   const meta = `<div class="tl-meta">` +
-    `<span><span aria-hidden="true">🌅</span> ${plan.sunrise}<span class="sr-only"> ${t('schedRise')}</span></span>` +
-    `<span><span aria-hidden="true">🌇</span> ${plan.sunset}<span class="sr-only"> ${t('schedSet')}</span></span>` +
-    (plan.totalTime ? `<span><span aria-hidden="true">⏱</span> ${plan.totalTime}<span class="sr-only"> ${t('schedTotal')}</span></span>` : '') +
+    `<span>${icon('sunrise')} ${plan.sunrise}<span class="sr-only"> ${t('schedRise')}</span></span>` +
+    `<span>${icon('sunset')} ${plan.sunset}<span class="sr-only"> ${t('schedSet')}</span></span>` +
+    (plan.totalTime ? `<span>${icon('clock')} ${plan.totalTime}<span class="sr-only"> ${t('schedTotal')}</span></span>` : '') +
     `</div>`;
   return `<details class="tl-wrap" open>
-      <summary class="tl-title">${t('secSchedule')}</summary>
+      <summary class="tl-title">${t('secSchedule')}<span class="tl-caret">${icon('chevDown')}</span></summary>
       ${meta}<ol class="tl">${rows}</ol>
     </details>`;
 }
@@ -471,8 +494,8 @@ function drawTrack() {
   const coords = renderPts.map(p=>[p.lat,p.lon]);
   walkedLayer = null;            // recreated lazily by recolorProgress() while tracking
 
-  L.polyline(coords, { color:'#000', weight:7, opacity:0.25, lineJoin:'round' }).addTo(map); // halo
-  trackLayer = L.polyline(coords, { color:C.red, weight:4, opacity:0.95, lineJoin:'round' }).addTo(map);
+  L.polyline(coords, { color:'#fff', weight:7.5, opacity:0.85, lineJoin:'round' }).addTo(map); // halo
+  trackLayer = L.polyline(coords, { color:C.red, weight:4, opacity:0.98, lineJoin:'round' }).addTo(map);
 
   if (trackPts.length) {
     endMarker(trackPts[0], C.green, 'markerTrailhead');
@@ -544,12 +567,12 @@ function drawProfile() {
 
   svg.innerHTML = `
     <defs><linearGradient id="eg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="${C.blue}" stop-opacity="0.7"/>
-      <stop offset="100%" stop-color="#1e3a8a" stop-opacity="0.15"/>
+      <stop offset="0%" stop-color="${C.pine}" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="${C.pine}" stop-opacity="0.03"/>
     </linearGradient></defs>
     ${wp}
     <path d="${path}" fill="url(#eg)"/>
-    <path d="${line}" fill="none" stroke="#60a5fa" stroke-width="1.5"/>
+    <path d="${line}" fill="none" stroke="${C.pine}" stroke-width="1.75"/>
     <g id="epos"></g>`;
   $('#elev-range').textContent = fmtElevRange(eleLo, eleHi);
 }
@@ -593,7 +616,7 @@ function drawProfileCursor(p, scrub){
   const W=svg.viewBox.baseVal.width||340, H=PROF_H;
   const x=(p.d/totalDist)*W, y=profY(p.se);
   g.innerHTML=
-    `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${H}" stroke="#fff" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.85"/>`+
+    `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${H}" stroke="${C.ink}" stroke-opacity="0.5" stroke-width="1.5" stroke-dasharray="4,3"/>`+
     `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${scrub?C.violet:C.blue}" stroke="#fff" stroke-width="2"/>`;
   const tip=$('#scrub-tip');
   if(tip && scrub){
@@ -743,7 +766,7 @@ function updateTrackBtn(){
   const b=$('#btn-track'); if(!b) return;
   const live = tracking && !paused;
   b.classList.toggle('tracking', live);
-  b.textContent = live ? '⏸' : '▶';
+  b.innerHTML = live ? ICON_PAUSE : ICON_PLAY;
   b.setAttribute('aria-label', t(live ? 'trackPauseAria' : 'trackStartAria'));
 }
 
@@ -808,7 +831,7 @@ function updateHUD(){
   const pct = total>0 ? Math.min(100, Math.round(walkedDist/total*100)) : 0;
   $('.th-fill').style.width = pct+'%';
   $('.th-pct').textContent = pct+'%';
-  $('.th-time').textContent = fmtElapsed(elapsedMs());
+  $('.th-num').textContent = fmtElapsed(elapsedMs());
   const msg=$('.th-msg'), m = pct>=100 ? t(isOutAndBack ? 'trackTurnaround' : 'trackComplete') : '';
   msg.textContent=m; msg.hidden=!m;
 }
@@ -923,20 +946,21 @@ async function downloadAll(){
   dlState='done'; updateDlBtn();
 }
 
-// Reflect the current state + language on the global download button.
+// Reflect the current state + language on the global download button (icon + label).
 function updateDlBtn(){
   const b=$('#dl-all'); if(!b) return;
+  const icEl=b.querySelector('.dl-ic'), lblEl=b.querySelector('.dl-lbl');
   b.classList.toggle('busy', dlState==='busy');
   b.classList.toggle('done', dlState==='done');
-  if(dlState==='idle') b.textContent=t('dlAll');
-  else if(dlState==='done') b.textContent=t('dlAllDone');
+  if(dlState==='done'){ icEl.innerHTML=icon('check'); lblEl.textContent=t('dlAllDone'); }
+  else { icEl.innerHTML=icon('download'); if(dlState==='idle') lblEl.textContent=t('dlAll'); }
   // 'busy' label is the live percentage, set by updateDlProgress()
 }
 function updateDlProgress(done,total){
   const b=$('#dl-all'); if(!b) return;
   const pct=Math.round(done/total*100);
   b.style.setProperty('--p', pct+'%');
-  if(dlState==='busy') b.textContent=pct+'%';
+  if(dlState==='busy') b.querySelector('.dl-lbl').textContent=pct+'%';
 }
 
 // On startup decide the button state: 'done' only if a sample tile for EVERY trail
