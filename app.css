@@ -112,6 +112,25 @@ img { display:block; }
 .chip.active .ic { color:#fff; }
 .chip-div { flex-shrink:0; width:1px; height:20px; background:var(--line); margin:0 2px; }
 
+/* List "resume hike" banner — a one-tap way back into a saved session after a relaunch */
+.list-resume {
+  flex-shrink:0; margin:2px 20px 8px; padding:10px 14px; width:auto; text-align:left;
+  display:flex; align-items:center; gap:11px; font-family:inherit;
+  border:1px solid var(--pine-ring); border-radius:14px;
+  background:var(--pine-soft); color:var(--ink); cursor:pointer;
+  transition:transform .1s, background .15s;
+}
+.list-resume[hidden] { display:none; }
+.list-resume:active { transform:scale(0.99); }
+.list-resume .lr-ic { flex:none; width:30px; height:30px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center; background:var(--pine); color:#fff; }
+.list-resume .lr-ic .ic { width:15px; height:15px; }
+.list-resume .lr-text { flex:1; min-width:0; font-size:14px; font-weight:700;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.list-resume .lr-label { color:var(--pine-d); }
+.list-resume .lr-time { flex:none; font-size:13px; font-weight:800; color:var(--pine-d);
+  font-variant-numeric:tabular-nums; }
+
 #trail-list {
   flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; width:100%;
   padding:6px 20px calc(28px + var(--safe-b));
@@ -244,6 +263,21 @@ img { display:block; }
 .tr-actions button:active { transform:scale(0.94); }
 .tr-dismiss { background:var(--surface-2); color:var(--muted); }
 .tr-resume { background:var(--pine); border-color:var(--pine); color:#fff; }
+
+/* Transient "locating…" indicator (dark pill) shown while acquiring a fresh GPS fix. Sits below the
+   HUD's top slot so it doesn't cover the elapsed/percent readout during a screen-on refresh. */
+#gps-locating {
+  position:absolute; z-index:555;
+  top:calc(52px + var(--safe-t) + 86px); left:50%; transform:translateX(-50%);
+  display:flex; align-items:center; gap:7px;
+  background:var(--ink); color:#fff; border-radius:999px; padding:7px 14px;
+  font-size:12.5px; font-weight:700; white-space:nowrap; box-shadow:var(--sh-pop);
+}
+#gps-locating[hidden] { display:none; }
+.loc-spin { flex:none; width:13px; height:13px; border-radius:50%;
+  border:2px solid rgba(255,255,255,0.3); border-top-color:#fff; animation:locspin .7s linear infinite; }
+@keyframes locspin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loc-spin { animation:none; } }
 
 /* Violet marker that follows the elevation scrub point (distinct from the blue GPS dot) */
 .scrub-dot { width:16px; height:16px; background:var(--scrub); border:3px solid #fff; border-radius:50%;
@@ -414,7 +448,7 @@ html[lang="ja"] .plan-date { font-weight:700; }
 /* ════════════════════ RESPONSIVE / WIDE ════════════════════ */
 /* center content on wider viewports so it never stretches awkwardly */
 @media (min-width:640px) {
-  #list-header, #filter-bar, #trail-list { max-width:760px; margin-inline:auto; }
+  #list-header, #filter-bar, #list-resume, #trail-list { max-width:760px; margin-inline:auto; }
   #trail-list { display:grid; grid-template-columns:1fr 1fr; grid-auto-rows:min-content; align-items:start; }
   #sheet-body > * , #sheet-peek { max-width:680px; margin-inline:auto; }
 }
@@ -422,7 +456,7 @@ html[lang="ja"] .plan-date { font-weight:700; }
 /* ════════════════════ LANDSCAPE PHONE ════════════════════ */
 @media (orientation:landscape) and (max-height:560px) {
   /* List: 2-column card grid */
-  #list-header, #filter-bar, #trail-list { max-width:none; margin-inline:0; }
+  #list-header, #filter-bar, #list-resume, #trail-list { max-width:none; margin-inline:0; }
   #trail-list { display:grid; grid-template-columns:1fr 1fr; grid-auto-rows:min-content; align-items:start; gap:14px; }
   #list-header { padding-top:calc(var(--safe-t) + 12px); padding-bottom:10px; }
   #list-header h1 { font-size:26px; }
@@ -439,5 +473,5 @@ html[lang="ja"] .plan-date { font-weight:700; }
   #sheet-body > * { max-width:none; }
   #map { right:min(360px,42%); }
   /* keep the progress HUD / resume prompt centered over the (left) map area, not under the docked sheet */
-  #track-hud, #track-resume { left:calc((100% - min(360px,42%)) / 2); }
+  #track-hud, #track-resume, #gps-locating { left:calc((100% - min(360px,42%)) / 2); }
 }

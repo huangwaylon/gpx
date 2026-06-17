@@ -61,6 +61,8 @@ window.I18N = {
       trackResumeMsg: "Resume tracking?",
       trackResume: "Resume",
       trackDismiss: "Dismiss",
+      resumeHike: "Resume hike",
+      locating: "Locating…",
     },
     ja: {
       appName: "梅ちゃんのトレイル",
@@ -116,6 +118,8 @@ window.I18N = {
       trackResumeMsg: "記録を再開しますか？",
       trackResume: "再開",
       trackDismiss: "破棄",
+      resumeHike: "登山を再開",
+      locating: "現在地を更新中…",
     },
   },
 

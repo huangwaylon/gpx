@@ -58,6 +58,11 @@
         <span data-i18n="sortGain">標高</span>
       </button>
     </div>
+    <button id="list-resume" class="list-resume" hidden>
+      <span class="lr-ic" aria-hidden="true"></span>
+      <span class="lr-text"><span class="lr-label"></span> · <span class="lr-trail"></span></span>
+      <span class="lr-time"></span>
+    </button>
     <div id="trail-list"></div>
   </section>
 
@@ -98,6 +103,11 @@
         <button class="tr-dismiss" id="tr-dismiss" data-i18n="trackDismiss">破棄</button>
         <button class="tr-resume" id="tr-resume" data-i18n="trackResume">再開</button>
       </div>
+    </div>
+
+    <!-- Transient "locating…" indicator while waiting for a fresh GPS fix -->
+    <div id="gps-locating" hidden role="status" aria-live="polite">
+      <span class="loc-spin" aria-hidden="true"></span><span data-i18n="locating">現在地を更新中…</span>
     </div>
 
     <div id="sheet">

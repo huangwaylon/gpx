@@ -131,7 +131,10 @@ await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.dele
   start timestamp. If iOS reloads or evicts the PWA mid-hike, reopening the trail offers to
   **resume**: the elapsed time is still correct (it counted through the gap), and after a few fixes
   a **stale-window re-acquire** re-snaps your position and fills progress to where you stand —
-  measured against the known GPX, not a recorded track. See `ARCHITECTURE.md` §10a.
+  measured against the known GPX, not a recorded track. On wake the app also forces a fresh fix
+  (`getCurrentPosition`) and arms an immediate re-acquire, so a quick glance refreshes the dot and
+  progress within ~a second rather than waiting on iOS to resume the frozen watch. See
+  `ARCHITECTURE.md` §10a.
 
 - Instead of pre-checking permission (impossible on iOS), the app **reacts to the error**. `watchPosition`'s error callback inspects the standard `GeolocationPositionError` code; **code `1` is `PERMISSION_DENIED`**:
 

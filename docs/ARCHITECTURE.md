@@ -829,6 +829,17 @@ therefore mirrored to `localStorage` under **`SESSION_KEY`** (`app.js:114`):
   restored `progIdx`, the **stale-window re-acquire** (above) snaps you to your real position within
   a few fixes.
 
+**Faster checks (screen-on refresh).** The common case for a "check the screen" hiker is a *short*
+lock where the page survives (no reload → no resume prompt). For that, the `visibilitychange`
+handler does more than re-acquire the wake lock: when the page returns to visible and GPS was live,
+it **arms an immediate re-acquire** (`reacqMiss = REACQUIRE_AFTER`) and **kicks a fresh fix** via
+`getCurrentPosition({maximumAge:0})`, so the dot and progress refresh within ~a second of looking
+rather than after several windowed misses — and regardless of whether iOS resumed the frozen watch.
+A `#gps-locating` "Locating…" pill (`setLocating()`) covers the brief GPS cold-start, and a
+`#list-resume` banner (`updateListResume()`, bound in `bindGlobal`) surfaces a fresh saved session on
+the **list** screen after a full relaunch (where `start_url: "./"` drops the trail hash) as a one-tap
+way back in — `resumeOnOpen` makes that tap resume directly instead of re-showing the prompt.
+
 This does **not** add background tracking (impossible on iOS web — see `IOS-PWA-GUIDE.md`): no GPS
 fixes are captured while the screen is off, and no breadcrumb path is recorded. It makes the
 *session* — the progress high-water mark and the elapsed clock — survive the gap, so reopening at

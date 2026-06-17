@@ -107,6 +107,9 @@ let walkedDist = 0, progIdx = -1;   // monotonic distance-along reached (m); las
 let walkedLayer = null;             // green polyline drawn over the red base track
 let reacqMiss = 0;                  // consecutive off-window fixes (triggers a full re-acquire)
 let pendingResume = null;           // a saved session offered for resume on the current trail
+let resumeOnOpen = false;           // set by the list "resume hike" banner → auto-resume on open
+let gpsWasHidden = false;           // GPS was live when last backgrounded (→ refresh fix on return)
+let locatingTimer = null;           // safety auto-hide for the "locating…" indicator
 
 // A tracking session is mirrored to localStorage so it survives a page reload / iOS tab eviction
 // (progress + an absolute start timestamp, so the elapsed clock keeps counting across the gap).
@@ -162,6 +165,7 @@ function setLang(next) {
   localStorage.lang = next;
   applyStaticI18n();
   renderList();
+  updateListResume();
   if (curTrail) {            // re-render the open detail view in the new language
     $('#detail-title').textContent = loc(curTrail).name;
     renderPeek(curTrail);
@@ -259,6 +263,10 @@ function bindGlobal() {
   $('#tr-resume').addEventListener('click', () => { const s=pendingResume; hideResumePrompt(); if(s) resumeSession(s); });
   $('#tr-dismiss').addEventListener('click', () => { clearSession(); hideResumePrompt(); });
   $('#dl-all').addEventListener('click', downloadAll);
+  $('#list-resume').addEventListener('click', () => {
+    const slug = $('#list-resume').dataset.slug; if(!slug) return;
+    resumeOnOpen = true; location.hash = '#/trail/' + slug;
+  });
 
   initSheetDrag();
   initProfileScrub();
@@ -270,7 +278,8 @@ function showList() {
   if (gpsWatch !== null) stopGPS();
   stopTracking(); hideResumePrompt();
   scrubbing = false; clearScrub();
-  curTrail = null;
+  curTrail = null; resumeOnOpen = false;
+  updateListResume();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -288,7 +297,14 @@ async function openDetail(trail) {
   setSheet('peek');
   initMap();
   await loadTrail(trail);
-  maybeOfferResume(trail);    // a saved session for this trail (survived a reload) can be resumed
+  if(resumeOnOpen){           // arrived via the list "resume hike" banner → resume straight away
+    resumeOnOpen=false;
+    const s=readSession();
+    if(s && s.slug===trail.slug && (Date.now()-(s.savedAt||0)<=SESSION_MAX_AGE_MS) && savedElapsedMs(s)>=60000) resumeSession(s);
+    else maybeOfferResume(trail);
+  } else {
+    maybeOfferResume(trail);  // a saved session for this trail (survived a reload) can be resumed
+  }
 }
 
 function renderPeek(trail) {
@@ -716,18 +732,19 @@ function startGPS(){
   if (!navigator.geolocation){ alert(t('alertNoGeo')); return; }
   reqWake(); gpsFollow=true;
   $('#btn-gps').classList.add('on');
+  setLocating(true);                       // waiting for the first fix
   gpsWatch = navigator.geolocation.watchPosition(onPos,onPosErr,{enableHighAccuracy:true,maximumAge:4000,timeout:30000});
 }
 function stopGPS(){
   if (gpsWatch!==null){ navigator.geolocation.clearWatch(gpsWatch); gpsWatch=null; }
-  relWake(); gpsFollow=false; curPos=null;
+  relWake(); gpsFollow=false; curPos=null; setLocating(false);
   if(gpsMk){gpsMk.remove();gpsMk=null;} if(gpsAcc){gpsAcc.remove();gpsAcc=null;}
   $('#btn-gps').classList.remove('on');
   const ep=$('#epos'); if(ep) ep.innerHTML='';
 }
 function onPos(pos){
   const {latitude:lat,longitude:lon,accuracy}=pos.coords;
-  curPos={lat,lon};
+  curPos={lat,lon}; setLocating(false);   // a fresh fix landed
   if(!gpsMk){
     gpsMk=L.marker([lat,lon],{icon:L.divIcon({className:'',html:'<div class="gps-dot"></div>',iconSize:[16,16],iconAnchor:[8,8]}),zIndexOffset:1000}).addTo(map);
     gpsAcc=L.circle([lat,lon],{radius:accuracy,fillColor:C.blue,fillOpacity:0.08,color:C.blue,weight:1}).addTo(map);
@@ -741,13 +758,34 @@ function onPos(pos){
     drawProfileCursor(trackPts[i], false);
   }
 }
-function onPosErr(err){ if(err.code===1){ alert(t('alertDenied')); stopGPS(); } }
+function onPosErr(err){ setLocating(false); if(err.code===1){ alert(t('alertDenied')); stopGPS(); } }
+
+// "Locating…" indicator — shown while waiting for a fresh fix (GPS start, or a screen-on refresh),
+// hidden the moment a fix lands or the attempt errors. A safety timer hides it if neither fires.
+function setLocating(on){
+  const el=$('#gps-locating'); if(!el) return;
+  clearTimeout(locatingTimer); locatingTimer=null;
+  if(on){ el.hidden=false; locatingTimer=setTimeout(()=>{ el.hidden=true; }, 30000); }
+  else el.hidden=true;
+}
 
 async function reqWake(){ if('wakeLock'in navigator){try{wakeLock=await navigator.wakeLock.request('screen');}catch(_){}}}
 async function relWake(){ if(wakeLock){try{await wakeLock.release();}catch(_){}wakeLock=null;} }
 document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){ persistSession(); return; }   // snapshot session state before iOS suspends us
-  if(gpsWatch!==null && !wakeLock) reqWake();
+  if(document.hidden){ persistSession(); gpsWasHidden = gpsWatch!==null; return; }  // snapshot before iOS suspends us
+  if(gpsWatch!==null){
+    if(!wakeLock) reqWake();
+    if(gpsWasHidden){
+      // Back from a screen-off gap: the watch can be slow to redeliver (or not resume at all), and
+      // the snap window is stale. Kick a fresh fix and arm an immediate re-acquire so the dot +
+      // progress refresh within ~a second of looking, not after several windowed misses.
+      reacqMiss = REACQUIRE_AFTER;
+      setLocating(true);
+      navigator.geolocation.getCurrentPosition(onPos, ()=>setLocating(false),
+        {enableHighAccuracy:true, maximumAge:0, timeout:30000});
+    }
+  }
+  gpsWasHidden = false;
 });
 
 // ════════════════════════════════════════════════════════════
@@ -922,6 +960,22 @@ function resumeSession(s){
   clearInterval(hudTimer); hudTimer=setInterval(updateHUD,1000);
   updateTrackBtn(); updateHUD();
   persistSession();                                 // re-stamp savedAt now that we're live again
+}
+
+// List-screen "resume hike" banner — after a full relaunch the user lands on the list (start_url is
+// "./", so the trail hash is gone), so surface a saved, fresh session there as a one-tap way back in.
+function updateListResume(){
+  const el=$('#list-resume'); if(!el) return;
+  const s=readSession();
+  const ok = s && (Date.now()-(s.savedAt||0) <= SESSION_MAX_AGE_MS) && savedElapsedMs(s) >= 60000;
+  const trail = ok ? TRAILS.find(x=>x.slug===s.slug) : null;
+  if(!trail){ el.hidden=true; delete el.dataset.slug; return; }
+  el.querySelector('.lr-ic').innerHTML = ICON_PLAY;
+  el.querySelector('.lr-label').textContent = t('resumeHike');
+  el.querySelector('.lr-trail').textContent = loc(trail).name;
+  el.querySelector('.lr-time').textContent = fmtElapsed(savedElapsedMs(s));
+  el.dataset.slug = trail.slug;
+  el.hidden=false;
 }
 
 // ════════════════════════════════════════════════════════════
