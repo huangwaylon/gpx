@@ -143,7 +143,7 @@ For **returning users**, the correct way to force everyone onto a new version on
 deploy is to bump the cache version constant at the top of `sw.js`:
 
 ```js
-const APP_V  = 'wa-trails-app-v9';   // ← bump this (…-v10, …-v11) when you ship shell changes
+const APP_V  = 'wa-trails-app-v11';  // ← bump this (…-v12, …-v13) when you ship shell changes
 const TILE_V = 'wa-trails-tiles-v1'; // map-tile cache; bump only if tile handling changes
 ```
 
@@ -160,7 +160,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-So changing `APP_V` from `wa-trails-app-v9` to `wa-trails-app-v10` invalidates
+So changing `APP_V` from `wa-trails-app-v11` to `wa-trails-app-v12` invalidates
 the old app-shell cache for all users and re-precaches the new shell on next
 load. **Bump `APP_V` whenever you change shell files** (`index.html`, `app.css`,
 `app.js`, `trails.js`, `i18n.js`, or the bundled asset lists). Leave `TILE_V`
@@ -221,9 +221,9 @@ the codebase:
   basemaps — `usgs` at `maxZoom` 16, `gsi` at 18) and the `trailSource(trail)` helper that
   picks one per trail; downloads run z10 up to each source's `maxZoom`. Reuse them rather than
   hard-coding values.
-- **CSS custom properties** drive theming in `app.css` (`:root { --bg-0, --blue,
-  --safe-t, … }`), including iOS safe-area insets. The design is dark,
-  mobile-first, and responsive (portrait + landscape).
+- **CSS custom properties** drive theming in `app.css` (`:root { --paper, --pine,
+  --gps, --safe-t, … }`), including iOS safe-area insets. The design is
+  light/"paper", mobile-first, and responsive (portrait + landscape).
 - **Bilingual by construction (`i18n.js`).** The app is Japanese-by-default with
   an EN toggle, and all text/units live in `window.I18N` (`i18n.js`). **Hard
   rule: any user-facing string must be added to BOTH `en` and `ja`** in
@@ -352,11 +352,11 @@ Example skeleton:
 > (`fuji-yoshida`, `kinpu-odarumi`) carry `tiles: "gsi"`; the eight Washington
 > trails omit `tiles` and fall back to USGS.
 
-> The list header `subtitle` no longer shows a trail count. It is a static
-> string — `ui.en` `"Tap a trail to explore"` / `ui.ja` `"タップして探索"` in
-> `i18n.js`, with the Japanese default inlined on the `data-i18n="subtitle"`
+> The list header `tagline` no longer shows a trail count. It is a static
+> string — `ui.en` `"Field guide"` / `ui.ja` `"山と渓谷の道しるべ"` in
+> `i18n.js`, with the Japanese default inlined on the `data-i18n="tagline"`
 > node in `index.html` for first paint — so adding or removing a trail needs no
-> subtitle edit.
+> header edit.
 
 ### d. Add the Japanese translation block to `i18n.js`
 
@@ -392,8 +392,8 @@ entries to `I18N.wpt`.
 ### e. Precache the new assets in `sw.js`
 
 So the trail works **offline**, add **both** the GPX path and the image path to
-the `TRAIL_ASSETS` array in **`sw.js`** (it currently lists all **12** trails'
-GPX + images, grouped Washington then Japan):
+the `TRAIL_ASSETS` array in **`sw.js`** (it currently lists all **10** trails'
+GPX + images — 20 paths, grouped Washington then Japan):
 
 ```js
 const TRAIL_ASSETS = [
@@ -414,11 +414,11 @@ but its GPX/photo won't be guaranteed available offline.
 
 Editing `trails.js`, `i18n.js`, and the precache list is a shell change. To make
 returning users pick it up on deploy, bump `APP_V` in `sw.js` (currently
-`wa-trails-app-v9`, so bump to the next version — see
+`wa-trails-app-v11`, so bump to the next version — see
 [the SW section](#3-the-service-worker-gotcha-read-this)):
 
 ```js
-const APP_V = 'wa-trails-app-v10';
+const APP_V = 'wa-trails-app-v12';
 ```
 
 ### Verify the new trail locally
@@ -617,7 +617,7 @@ find . -path ./.git -prune -o -type f -size +90M -print   # anything near the 10
 ```
 gpx/                     # ← repo root, served as-is by GitHub Pages
 ├── index.html           # App shell: list + detail screens (data-i18n keys, JA inline)
-├── app.css              # Dark, mobile-first, responsive styles (CSS custom props)
+├── app.css              # Light/"paper", mobile-first, responsive styles (CSS custom props)
 ├── app.js               # Routing, Leaflet map, GPX parsing, GPS, elevation, tile download, i18n helpers
 ├── i18n.js              # UI strings + per-trail Japanese translations (window.I18N)
 ├── trails.js            # window.TRAILS — trail metadata, English base content (edit to add trails)

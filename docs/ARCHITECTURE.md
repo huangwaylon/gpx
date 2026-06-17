@@ -17,7 +17,7 @@ one, and lands on a full-screen trail-detail view with:
 
 - a **topographic** base map (Leaflet) — **USGS** topo for the US trails, **GSI 地理院タイル**
   (Geospatial Information Authority of Japan) for the Japan trails, chosen per trail (§7),
-- the trail's **GPX track** overlaid as a red polyline with a black halo,
+- the trail's **GPX track** overlaid as a red polyline with a white halo,
 - **trailhead / endpoint / waypoint** markers,
 - **live GPS position** (pulsing blue dot + accuracy circle) with optional follow mode,
 - an **SVG elevation profile** that tracks the hiker's position along the route,
@@ -44,7 +44,7 @@ with `.screen[hidden]{display:none}` (`app.css:23-25`).
 | Logic | One plain ES (`'use strict'`) script (`app.js`), no modules/bundler |
 | Data | A global array literal, `window.TRAILS` (`trails.js`) |
 | i18n | A global object literal, `window.I18N` (`i18n.js`) — UI strings + per-trail Japanese (see §1a) |
-| Mapping | **Leaflet 1.9.4** loaded from the **unpkg CDN** (`index.html:14`, `index.html:75`) |
+| Mapping | **Leaflet 1.9.4** loaded from the **unpkg CDN** (`index.html:15`, `index.html:106`) |
 | Offline | A Service Worker (`sw.js`) + Web App Manifest (`manifest.json`) |
 | Hosting | Static files on **GitHub Pages** (note the `.nojekyll` marker) |
 
@@ -103,15 +103,15 @@ map marker labels, the difficulty/route/dog enums, seasons, times, and measureme
 
 ### The `window.I18N` object (`i18n.js`)
 
-`i18n.js` loads **before** `trails.js` and `app.js` (`index.html:76`) and assigns a single
+`i18n.js` loads **before** `trails.js` and `app.js` (`index.html:107`) and assigns a single
 global, `window.I18N` (`i18n.js:6`), holding all UI strings and the Japanese overrides:
 
-- **`ui.{en,ja}`** — static UI strings keyed by name (`appName`, `subtitle`, filter labels,
+- **`ui.{en,ja}`** — static UI strings keyed by name (`appName`, `tagline`, filter labels,
   section headings, the download-button labels `dlAll`/`dlAllDone`, the attribution credits
   `attribTrail`/`attribUsgs`/`attribGsi`, marker labels, alerts, …) (`i18n.js:9-83`).
-- **`fn.{en,ja}`** — reserved for functions producing locale-aware **dynamic** strings, called
-  via `tf()`. **Both are currently empty `{}`** (`i18n.js:89-92`): the offline-download UI now
-  shows a bare percentage on the global button, so no dynamic-string entries are needed today.
+- **`fn.{en,ja}`** — functions producing locale-aware **dynamic** strings, called via `tf()`.
+  Currently one entry, `planParty(n)` (EN `"<n> hikers"` / JA `"<n>人"`), used by the YAMAP
+  plan card (`i18n.js:118-120`).
 - **Enum tables** `diff` / `route` / `dogs` — map the English data tokens (`"Moderate"`,
   `"Out & back"`, `"Leashed"`, …) to their JA equivalents (`i18n.js:95-106`).
 - **`months`** — English month abbreviation → JA (`"Apr"`→`"4月"`) for season strings
@@ -129,47 +129,52 @@ global, `window.I18N` (`i18n.js:6`), holding all UI strings and the Japanese ove
 The document is now **`<html lang="ja">`** (`index.html:2`). Static text nodes carry
 **`data-i18n`** (textContent) or **`data-i18n-aria`** (aria-label) attributes naming a `ui`
 key, e.g. the `<h1 data-i18n="appName">`, the filter chips, and the back button
-(`data-i18n-aria="back"`). The list header's top row is a **`.head-row`** containing the
-`<h1>` and a **`.head-actions`** wrapper that holds the global **"download all maps" button
-`#dl-all`** (`data-i18n-aria="dlAllAria"`) and the **language toggle button `#lang-toggle`**
-(`index.html:23-29`).
+(`data-i18n-aria="back"`). The list header's top row is a **`.head-top`** containing the
+eyebrow `<span data-i18n="tagline">` and a **`.head-actions`** wrapper that holds the global
+**"download all maps" button `#dl-all`** (`data-i18n-aria="dlAllAria"`) and the **language
+toggle button `#lang-toggle`**; the `<h1 data-i18n="appName">` is a sibling below `.head-top`
+(`index.html:35-44`).
 
 ### The i18n helpers (`app.js`)
 
 A module-level **`lang`** holds the active language: it reads `localStorage.lang` and
-defaults to **`'ja'`** (`app.js:43-44`). The helpers:
+defaults to **`'ja'`** (`app.js:110-111`). The helpers:
 
-- **`t(key)`** (`app.js:46`) — look up a **static** `ui` string for `lang`, falling back to
+- **`t(key)`** (`app.js:113`) — look up a **static** `ui` string for `lang`, falling back to
   English then to the raw key.
-- **`tf(key)`** (`app.js:47`) — look up a **dynamic-string function** from `fn` (then called
-  with arguments). `fn` is currently empty for both languages (§1a above), so `tf` is defined
-  but unused.
-- **`loc(trail)`** (`app.js:63-69`) — when `lang==='ja'`, returns `{ ...trail,
+- **`tf(key)`** (`app.js:114`) — look up a **dynamic-string function** from `fn`, called with
+  arguments — e.g. `tf('planParty')(n)` for the plan card's party size.
+- **`loc(trail)`** (`app.js:130`) — when `lang==='ja'`, returns `{ ...trail,
   ...I18N.trails[slug].ja }` (Japanese fields override the English base); otherwise returns
   the trail unchanged. Render code reads localized fields off `loc(trail)` and
   language-neutral fields (slug, stats, paths) off the raw trail. (It is named `loc`, **not**
   `L`, to avoid shadowing Leaflet's global `L`.)
-- **`trDiff` / `trRoute` / `trDogs`** (`app.js:50-52`) — translate the enum tokens via the
+- **`trDiff` / `trRoute` / `trDogs`** (`app.js:117-119`) — translate the enum tokens via the
   `diff`/`route`/`dogs` tables (used for display only; `diffClass`/`diffKey` still key off
   the raw English token).
-- **`trWpt(name)`** (`app.js:53`) — translate a waypoint name in JA via the `wpt` table.
-- **`trSeason(s)`** (`app.js:56-60`) — in JA, rewrite `"Apr – Nov"` → `"4月～11月"` via the
+- **`trWpt(name)`** (`app.js:120`) — translate a waypoint name in JA via the `wpt` table.
+- **`trSeason(s)`** (`app.js:123`) — in JA, rewrite `"Apr – Nov"` → `"4月～11月"` via the
   `months` table and a dash→`～` swap.
-- **Unit formatters** — `fmtDist(mi)` / `fmtGain(ft)` (`app.js:128-129`), `fmtTime(s)`
-  (`app.js:267-271`), and `fmtElevRange(loM,hiM)` (`app.js:408-411`) emit **km / m / 時間・分**
-  in JA and **mi / ft** in EN, converting from the stored imperial values on the fly.
+- **Unit formatters** — `fmtDist(mi)` / `fmtGain(ft)` (`app.js:195-196`), `fmtTime(s)`
+  (`app.js:328`), and `fmtElevRange(loM,hiM)` (`app.js:584`) emit **km / m / 時間・分**
+  in JA and **mi / ft** in EN, converting from the stored imperial values on the fly. Several
+  more single-value formatters follow the same JA-metric / EN-imperial rule: `fmtElev` /
+  `fmtDistAlong` (the scrub readout, §9), `fmtDur` / `fmtPlanDate` (the YAMAP plan card), and
+  `fmtElapsed` (the tracking HUD, §10a).
 
 ### Applying & switching language
 
-- **`applyStaticI18n()`** (`app.js:72-78`) sets `document.documentElement.lang`, fills every
+- **`applyStaticI18n()`** (`app.js:139`) sets `document.documentElement.lang`, fills every
   `[data-i18n]` / `[data-i18n-aria]` node, sets `document.title` to `t('appName')`, and calls
   **`updateDlBtn()`** so the global download button's label tracks the language (§12). It runs
-  on boot (`app.js:97`) and again on every language switch.
-- **`setLang(next)`** (`app.js:80-91`) — sets `lang`, persists it to `localStorage.lang`,
+  on boot (`app.js:166`) and again on every language switch.
+- **`setLang(next)`** (`app.js:147`) — sets `lang`, persists it to `localStorage.lang`,
   re-runs `applyStaticI18n()`, **live-re-renders the list** (`renderList()`), and if a detail
-  view is open re-renders it (`#detail-title`, `renderPeek()`, `renderSheetBody()`) and calls
+  view is open re-renders it (`#detail-title`, `renderPeek()`, `renderSheetBody()`), calls
   **`redrawTrailLabels()`** to re-bind the Leaflet marker popups **without rebuilding the
-  map**. It is wired to `#lang-toggle` in `bindGlobal()` (`app.js:177`).
+  map**, and re-localizes the tracking FAB/HUD (`updateTrackBtn()`/`updateHUD()`) and re-draws
+  the GPS profile cursor (`syncGpsCursor()`). It is wired to `#lang-toggle` in `bindGlobal()`
+  (`app.js:240`).
 
 ---
 
@@ -247,9 +252,9 @@ The 10 trails are, in array order: the **8 Washington** trails `lake-22`, `snow-
 `kinpu-odarumi` (Mount Kinpu via Odarumi Pass). Both Japan trails set `tiles: "gsi"` and have
 **no GPX waypoints**. Across the set, one is `route: "Loop"` (`skyline-loop`), two are
 `"Point to point"` (`enchantments`, `fuji-yoshida`), and the rest are `"Out & back"`. The
-header subtitle no longer reports a trail count: the `#list-sub` node
-(`data-i18n="subtitle"`, `index.html:30`) now reads simply "Tap a trail to explore" /
-"タップして探索".
+header has no subtitle and no trail count: aside from the `<h1 data-i18n="appName">`, the only
+header text node is the eyebrow `<span data-i18n="tagline">` (`index.html:36`), reading
+"山と渓谷の道しるべ" / "Field guide".
 
 > **Update (2026-06):** the trail set was trimmed from 12 to **10** this session — the
 > Mt. Fuji Gotemba Trail (`fuji-gotemba`), the Mount Daibosatsu Loop (`daibosatsu`), and the
@@ -265,14 +270,14 @@ header subtitle no longer reports a trail count: the `#list-sub` node
 ### Two screens, one `hidden` toggle
 
 `index.html` declares both screens up front: `#list` (visible by default) and `#detail`
-(starts with the `hidden` attribute, `index.html:41`). Switching screens is just flipping
+(starts with the `hidden` attribute, `index.html:65`). Switching screens is just flipping
 `.hidden`:
 
 - `showList()` sets `#detail.hidden = true`, `#list.hidden = false`, stops GPS if running, and
-  clears `curTrail` (`app.js:173-178`).
+  clears `curTrail` (`app.js:251`).
 - `openDetail(t)` does the inverse: `#list.hidden = true`, `#detail.hidden = false`, sets the
   (localized) title, primes the sheet, renders the peek + body, builds the map, and loads the
-  track (`app.js:183-194`).
+  track (`app.js:263`).
 
 CSS hides the inactive screen entirely (`.screen[hidden]{display:none}`, `app.css:25`), and
 `#detail` is given `z-index:10` so it stacks above the list (`app.css:105`).
@@ -281,15 +286,15 @@ CSS hides the inactive screen entirely (`.screen[hidden]{display:none}`, `app.cs
 
 Navigation is driven entirely by `location.hash`:
 
-- **`routeFromHash()`** (`app.js:90-97`) matches the hash against
+- **`routeFromHash()`** (`app.js:176`) matches the hash against
   `^#\/trail\/([\w-]+)`. If it matches and a trail with that `slug` exists, it calls
   `openDetail(t)`; otherwise it falls back to `showList()`.
-- It runs **on boot** (called at the end of the `load` handler, `app.js:85`) and **on every
-  hash change** (`window.addEventListener('hashchange', routeFromHash)`, `app.js:88`).
-- Tapping a card sets `location.hash = '#/trail/<slug>'` (`app.js:146`); the back button and
-  `showList`'s callers set `location.hash = ''` (`app.js:164`). Both mutate the hash and let
-  the single `hashchange` listener re-route — there is no direct screen-swapping from the
-  click handlers.
+- It runs **on boot** (called at the end of the `load` handler, `app.js:171`) and **on every
+  hash change** (`window.addEventListener('hashchange', routeFromHash)`, `app.js:174`).
+- Each card **is an `<a href="#/trail/<slug>">` anchor** (`app.js:208`), so tapping it drives
+  the hash directly — there is no JS click handler that assigns the hash. Only the back button
+  sets `location.hash = ''` (`app.js:241`). Either way the single `hashchange` listener
+  re-routes; there is no direct screen-swapping from the click handlers.
 
 ### Why hash routing
 
@@ -305,30 +310,33 @@ and the browser back/forward buttons work for free.
 
 ### Markup & rendering
 
-The list screen (`#list`) contains a header (`#list-header`) whose top row is a `.head-row`
-holding the `<h1 data-i18n="appName">梅ちゃんのトレイル</h1>` and a `.head-actions` wrapper
+The list screen (`#list`) contains a header (`#list-header`) whose top row is a `.head-top`
+holding the eyebrow `<span data-i18n="tagline">` and a `.head-actions` wrapper
 with the global **"download all maps" button `#dl-all`** (§12) and the **language toggle
-button `#lang-toggle`** (§1a), followed by the `#list-sub` subtitle. Below the header is a
+button `#lang-toggle`** (§1a); the `<h1 data-i18n="appName">梅ちゃんのトレイル</h1>` is a
+sibling below `.head-top`. Below the header is a
 horizontally-scrolling `#filter-bar` of `.chip` buttons, and an empty `#trail-list` container
-that JS fills (`index.html:21-40`). The filter chips are **All / Moderate / Hard / Very Hard**
+that JS fills (`index.html:23-61`). The filter chips are **All / Moderate / Hard / Very Hard**
 plus two sort chips (**↕ Distance**, **↕ Elevation**) — there is **no "Easy" chip** because no
-trail is Easy-rated (`index.html:33-38`); each chip label carries a `data-i18n` key.
+trail is Easy-rated (`index.html:46-59`); each chip label carries a `data-i18n` key.
 
-**`renderList()`** (`app.js:131-161`) is the single render function:
+**`renderList()`** (`app.js:198`) is the single render function:
 
 1. Copies `TRAILS` (`.slice()`), applies the active **filter** and **sort** (below).
-2. Maps each trail to a **`<article class="card" data-slug="…">`** built via template literal.
+2. Maps each trail to an **`<a class="card" href="#/trail/<slug>">`** anchor built via template
+   literal (the `href` is what drives the hash route, §4).
    It first computes `const tr = loc(trail)` so localized fields (name, area) come from the
    merged object (§1a). The card markup is:
    - `.card-img-wrap` holding the lazy-loaded `<img class="card-img">`,
-   - a difficulty badge `<span class="card-badge-diff <diffClass>">` whose label is
+   - a difficulty badge `<span class="card-badge <diffClass>">` whose label is
      `trDiff(diff)`,
    - a `.card-titlebar` overlay with `.card-title` (`tr.name`) and `.card-area` (`tr.area`),
-   - a `.card-stats` row: distance (`↔ fmtDist(lengthMi)`), gain (`▲ fmtGain(gainFt)`), route
-     (`⟳ trRoute(route)`), and the estimated hike **time** (`⏱ fmtTime(time)`, in a
-     `.s.time` span where the star rating used to be).
-3. Joins the HTML, writes it into `#trail-list`, then wires each `.card`'s click to set
-   `location.hash = '#/trail/' + slug` (`app.js:159-160`).
+   - a `.card-stats` row of **three** `.s` chips — distance (`fmtDist(lengthMi)`), gain
+     (`fmtGain(gainFt)`), and the estimated hike **time** (`fmtTime(time)`, in a `.s.time` span);
+     there is **no route chip**. Each stat's leading glyph is an **inline SVG** from the `icon()`
+     helper (`dist` / `gain` / `clock`), not a text glyph.
+3. Joins the HTML and writes it into `#trail-list`. Navigation is via each card's `href`
+   (no per-card click handler).
 
 `renderList()` is intentionally idempotent and is called several times: once on boot, after
 each filter/sort change, and after a **language switch** (from `setLang()`). It no longer
@@ -341,37 +349,37 @@ Two small lookup helpers map the human-readable English `diff` token (note: they
 **raw** token, not the translated label):
 
 - **`diffClass(d)`** → CSS class: `Easy→d-easy`, `Moderate→d-moderate`, `Hard→d-hard`,
-  `Very Hard→d-veryhard` (default `d-moderate`) (`app.js:121-123`). Those classes set the
-  badge's tinted background + text color (`app.css:108-111`).
-- **`diffKey(d)`** → filter token: `Easy→easy`, … `Very Hard→veryhard` (`app.js:124-126`),
+  `Very Hard→d-veryhard` (default `d-moderate`) (`app.js:192`, off the `DIFF` table at
+  `app.js:191`). Those classes set the badge's tinted text color (`app.css:156-159`).
+- **`diffKey(d)`** → filter token: `Easy→easy`, … `Very Hard→veryhard` (`app.js:193`),
   matching the chips' `data-filter` values.
 
 ### Filter & sort state
 
 Module-level state holds the current view config: **`listFilter`** (default `'all'`) and
-**`listSort`** (default `null`) (`app.js:119`). `bindGlobal()` wires the `#filter-bar` chips
-(`app.js:164-175`):
+**`listSort`** (default `null`) (`app.js:188`). `bindGlobal()` wires the `#filter-bar` chips
+(`app.js:227-238`):
 
 - A chip with `data-filter` sets `listFilter` and toggles the `.active` class among the filter
   chips.
 - A chip with `data-sort` **toggles** that sort on/off (clicking the active one clears it back
   to `null`) and toggles `.active` accordingly.
 - Either way it calls `renderList()`. Filtering uses `diffKey(t.diff) === listFilter`; sorting
-  is ascending by `lengthMi` (`'dist'`) or `gainFt` (`'gain'`) (`app.js:134-136`).
+  is ascending by `lengthMi` (`'dist'`) or `gainFt` (`'gain'`) (`app.js:201-203`).
 
-`bindGlobal()` also wires the language toggle (`#lang-toggle` → `setLang`, `app.js:177`), the
-global download button (`#dl-all` → `downloadAll`, `app.js:180`), the back button, the GPS
+`bindGlobal()` also wires the language toggle (`#lang-toggle` → `setLang`, `app.js:240`), the
+global download button (`#dl-all` → `downloadAll`, `app.js:245`), the back button, the GPS
 FAB, and the sheet drag.
 
 ### Offline state on the global download button (`dlState`)
 
 Offline status is no longer shown per card. It lives entirely on the single global
 **`#dl-all`** button in the header, driven by the module-level **`dlState`** string
-(`'idle' | 'busy' | 'done'`, `app.js:35`). **`updateDlBtn()`** (`app.js:562-569`) reflects it:
+(`'idle' | 'busy' | 'done'`, `app.js:84`). **`updateDlBtn()`** (`app.js:954`) reflects it:
 in `idle` the label is `t('dlAll')` ("⬇ Save maps" / "⬇ 地図を保存"); in `busy` the label is a
 live `"NN%"` percentage with a CSS gradient fill driven by a `--p` custom property
-(`.dl-all-btn.busy`, `app.css:53-56`); in `done` the label is `t('dlAllDone')` ("✓ Maps saved")
-and the button turns green (`.dl-all-btn.done`, `app.css:57`). On boot,
+(`.dl-all-btn.busy`, `app.css:89-92`); in `done` the label is `t('dlAllDone')` ("✓ Maps saved")
+and the button turns green (`.dl-all-btn.done`, `app.css:93`). On boot,
 `refreshCacheStatus()` (§12) probes one sample tile per trail and sets `dlState` to `'done'`
 only if **every** trail's sample is already cached, else `'idle'`. The full download/progress
 machinery is documented in §12.
@@ -382,14 +390,15 @@ machinery is documented in §12.
 
 ### `openDetail()` flow
 
-`openDetail(t)` (`app.js:195-206`) is the detail-screen entry point, invoked only by the
+`openDetail(t)` (`app.js:263`) is the detail-screen entry point, invoked only by the
 router:
 
 1. `curTrail = t` and swap screens (`#list` hidden, `#detail` shown).
 2. Set `#detail-title` text to the **localized** trail name (`loc(trail).name`).
-3. **Reset the sheet to peek** via `setSheet('peek')` (§11).
-4. **Populate the peek header** via `renderPeek(t)` (below).
-5. `renderSheetBody(t)` builds the scrollable body (below).
+3. **Populate the peek header** via `renderPeek(t)` (below).
+4. `renderSheetBody(t)` builds the scrollable body (below).
+5. **Reset the sheet to peek** via `setSheet('peek')` (§11) — run **after** the body so
+   `computePeekH()` can size the peek to the rendered elevation chart (`app.js:271-272`).
 6. `initMap()` constructs the Leaflet map (§7).
 7. `await loadTrail(t)` fetches/parses the GPX and draws the track + profile (§8–§9).
 
@@ -400,10 +409,10 @@ map.
 ### The peek / meta header — `renderPeek()`
 
 The bottom sheet's always-visible "peek" region is `#sheet-peek`, containing `#pk-title` and
-`#pk-meta` (`index.html:54-56`). Tapping it toggles the sheet open/closed; it is hidden in
+`#pk-meta` (`index.html:96-99`). Tapping it toggles the sheet open/closed; it is hidden in
 landscape (§11, §14).
 
-**`renderPeek(trail)`** (`app.js:252-259`) fills it: `#pk-title` = `loc(trail).name`; `#pk-meta`
+**`renderPeek(trail)`** (`app.js:277`) fills it: `#pk-title` = `loc(trail).name`; `#pk-meta`
 = `<span>` chips for `fmtDist(lengthMi)`, `▲ fmtGain(gainFt)`, a difficulty span (the label is
 `trDiff(diff)`, colored via `diffClass` but with `background:none;padding:0` so it reads as
 colored text, not a pill), and the estimated **time** (`⏱ fmtTime(time)`). There is no longer a
@@ -411,24 +420,26 @@ rating chip in the peek.
 
 ### `renderSheetBody()`
 
-`renderSheetBody(t)` (`app.js:217-264`) writes the entire scrollable sheet body (`#sheet-body`)
+`renderSheetBody(t)` (`app.js:287`) writes the entire scrollable sheet body (`#sheet-body`)
 in one `innerHTML` assignment. It first computes `const tr = loc(trail)` for the localized prose
 fields. All section headings and labels come from `t(...)`:
 
-- **Stat chips** — a `.stat-grid` of four `.stat-box`es: **Distance** (`fmtDist` value: miles in
-  EN, km in JA, with the unit baked into the label), **Gain** (feet abbreviated to `…k` in EN,
-  e.g. `1.5k`; meters in JA), **Difficulty** (`trDiff(diff)`), and **Time** (`fmtTime(time)`).
-  The last two use a smaller inline `font-size:13px`.
-- **Elevation card** — `#elev-card` with a header (`t('elevation')` + `#elev-range` span) and an
-  empty `<svg id="elev-svg" preserveAspectRatio="none">` that `drawProfile()` fills (§9).
+- **No stat grid here.** The four headline stats — **Distance**, **Gain**, **Difficulty**, and
+  **Time** — are rendered once in the peek bar's `#pk-meta` (`renderPeek`, above) and are **not**
+  repeated in the sheet body. The body's first element is the elevation card below.
+- **Elevation card** — `#elev-card` with a header (`t('elevation')` + `#elev-range` span), an
+  empty `<svg id="elev-svg" preserveAspectRatio="none" role="img" aria-label="…">` that
+  `drawProfile()` fills (§9), and a `<div id="scrub-tip" hidden>` (the scrub readout pill, §9).
+- **Plan card** (optional) — for a trail with a `plan`, `renderPlanCard()` is inserted
+  immediately **after** `#elev-card` (`app.js:296`/`:338`).
 - **Prose sections** (`.section`): **Overview** (`tr.summary`), **The hike** (`tr.description`),
   **Tips & need-to-know** (`tr.tips` → `<ul class="tips">`), and **Details** — section titles
   via `t('secOverview'/'secHike'/'secTips'/'secDetails')`.
 - **Details table** — a `<dl class="facts">` with rows: Route type (`trRoute(route)`), Best
   season (`trSeason(season)`), Dogs (`trDogs(dogs)`), Permit (`tr.permit`), Location (`tr.area`)
-  (`app.js:252-256`); the `<dt>` labels come from `t('factRoute')` … `t('factLocation')`.
+  (`app.js:313-317`); the `<dt>` labels come from `t('factRoute')` … `t('factLocation')`.
 - A small attribution footer crediting AllTrails (info/photo) **plus the trail's basemap
-  source**: `${t('attribTrail')} ／ ${t(trailSource(trail).creditKey)}` (`app.js:260`), so a US
+  source**: `${t('attribTrail')} ／ ${t(trailSource(trail).creditKey)}` (`app.js:321`), so a US
   trail credits USGS (`attribUsgs`) and a Japan trail credits GSI (`attribGsi`, §7).
 
 There is **no longer a download button in the sheet** — downloading is a single global action
@@ -438,31 +449,33 @@ in the header (§12).
 
 ## 7. Map subsystem
 
-**`initMap()`** (`app.js:274-282`) (re)builds the Leaflet map each time a detail screen opens:
+**`initMap()`** (`app.js:414`) (re)builds the Leaflet map each time a detail screen opens:
 
 1. If a map already exists, `map.remove()` it and null it out — every detail view gets a fresh
-   map instance bound to the `#map` div.
+   map instance bound to the `#map` div. It also **clears stale layer references**
+   (`trackLayer`/`walkedLayer`/`scrubMk`/`gpsMk`/`gpsAcc` → `null`) and resets `endMarker._all`
+   to `[]` (`app.js:417`), since `map.remove()` drops the old layers.
 2. Resolve the trail's basemap with `const src = trailSource(curTrail)` (below).
 3. `L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center,
    zoom:13, tap:true })` — the default zoom control is suppressed so it can be re-added in a
    custom position; `tap:true` enables Leaflet's tap handler for touch.
 4. Add a **zoom control at `topright`** (`L.control.zoom({ position:'topright' })`,
-   `app.js:278`).
+   `app.js:420`).
 5. Add the **tile layer for that source** (below).
 6. `map.on('dragstart', …)` disables GPS follow mode and clears the FAB's `.on` highlight when
-   the user pans (`app.js:280`) — see §10.
+   the user pans (`app.js:422`) — see §10.
 7. Nudge the zoom control down so it clears the floating header:
-   `marginTop = calc(54px + env(safe-area-inset-top,0px))` (`app.js:281`).
+   `marginTop = calc(54px + env(safe-area-inset-top,0px))` (`app.js:423`).
 
 ### Per-trail tile sources — `TILE_SOURCES` / `trailSource()`
 
 The base map is **per trail**. The single old `TILE_URL` constant is gone; instead `app.js`
-defines a **`TILE_SOURCES`** table (`app.js:17-26`) with two entries, and a tiny resolver
-**`trailSource(trail) = TILE_SOURCES[trail.tiles] || TILE_SOURCES.usgs`** (`app.js:27`) — so a
+defines a **`TILE_SOURCES`** table (`app.js:66-75`) with two entries, and a tiny resolver
+**`trailSource(trail) = TILE_SOURCES[trail.tiles] || TILE_SOURCES.usgs`** (`app.js:76`) — so a
 trail's optional `tiles` field (§3) picks the basemap (absent ⇒ `usgs`, `"gsi"` ⇒ GSI).
 `initMap()` then builds the layer from the resolved source's fields:
 `L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:8, attribution:src.leaflet,
-crossOrigin:true })` (`app.js:279`). `crossOrigin:true` is what lets the offline download read
+crossOrigin:true })` (`app.js:421`). `crossOrigin:true` is what lets the offline download read
 the tiles back out of the Cache API, and the **attribution is now dynamic per source**.
 
 The two sources:
@@ -498,93 +511,103 @@ or pre-downloaded trail renders its map from cache with no connectivity.
 
 ### `loadTrail()` — fetch & parse
 
-`loadTrail(t)` (`app.js:278-310`) turns a GPX file into in-memory geometry:
+`loadTrail(t)` (`app.js:426`) turns a GPX file into in-memory geometry:
 
-1. Reset `trackPts`, `trackWpts`, `totalDist`.
+1. Reset `trackPts`, `trackWpts`, `totalDist`, and the tracking state (`renderPts`,
+   `walkedDist`, `progIdx`) (`app.js:427-428`).
 2. **Fetch** the GPX text: `await (await fetch(t.gpx)).text()`, wrapped in try/catch that logs
-   and bails on failure (`app.js:281-282`). (When offline, the SW serves the GPX from the
+   and bails on failure (`app.js:430-431`). (When offline, the SW serves the GPX from the
    precached `APP_V` shell — see §15.)
-3. **Parse** with `new DOMParser().parseFromString(text, 'text/xml')` (`app.js:283`).
+3. **Parse** with `new DOMParser().parseFromString(text, 'text/xml')` (`app.js:432`).
 4. **Waypoints** — for each `<wpt>`, read `lat`/`lon` attributes and the child `<name>` (CDATA,
    whitespace-collapsed), pushing `{ lat, lon, name, d:null }` into `trackWpts`
-   (`app.js:285-289`). The stored `name` is the **English** name; it is translated for display
+   (`app.js:434-438`). The stored `name` is the **English** name; it is translated for display
    via `trWpt()` (§1a).
 5. **Track points** — iterate `<trkpt>`; read `lat`/`lon` and the child `<ele>` (defaulting to
    `0` when missing). Maintain a running cumulative distance `d` by adding the haversine
    distance from the previous point, and push `{ lat, lon, ele, d }` into `trackPts`. Set
-   `totalDist = d` (`app.js:291-299`).
+   `totalDist = d` (`app.js:441-448`).
 6. **Smooth** elevations for display via `smoothEle()` (below).
-7. **Snap waypoints** to the track: for each waypoint, scan all track points for the nearest
-   one (by haversine) and copy that point's cumulative distance into `w.d` (`app.js:303-306`).
+7. **Precompute** the profile bounds and far end via `precomputeProfileAndFarEnd()`
+   (`app.js:451`/`:466`) — a one-pass step (run right after `smoothEle()`) that caches the
+   smoothed elevation bounds (`eleLo`/`eleHi`/`eleRange`, for the profile Y scale) and the
+   **far-end (turnaround) index/distance** (`turnIdx`/`turnDist`) plus `isOutAndBack`, used by
+   live-tracking progress (§10a).
+8. **Snap waypoints** to the track: for each waypoint, scan all track points for the nearest
+   one (by haversine) and copy that point's cumulative distance into `w.d` (`app.js:453-456`).
    This is what lets a waypoint be drawn at the right x-position on the elevation profile.
-8. Call `drawTrack()` then `drawProfile()`.
+9. Call `drawTrack()` then `drawProfile()`.
 
 > The sample GPX files are GPX 1.1 exports from AllTrails — e.g. `Lake_22_Trail.gpx` has 1558
 > `<trkpt>` elements and 5 `<wpt>` elements, with names like "Bridge", "Waterfall", "Vista".
 
 ### `hav()` — haversine distance
 
-`hav(la1,lo1,la2,lo2)` (`app.js:575-580`) returns the great-circle distance **in meters**
+`hav(la1,lo1,la2,lo2)` (`app.js:989`) returns the great-circle distance **in meters**
 between two lat/lon pairs, using Earth radius `R = 6_371_000`. It is the geometry workhorse:
 cumulative track distance, waypoint snapping, loop detection, and nearest-point-to-GPS all call
 it.
 
 ### `smoothEle()` — elevation smoothing
 
-`smoothEle()` (`app.js:312-320`) computes a **centered moving average** of raw `ele` over a
+`smoothEle()` (`app.js:482`) computes a **centered moving average** of raw `ele` over a
 **window of 15** points (`w = 15`), writing the smoothed value to each point's `.se`
 ("smoothed elevation"). It clamps the window at the array ends (`lo`/`hi`). The profile and the
 ft-range label both read `.se`, not raw `.ele`, so the displayed curve is denoised.
 
 ### `drawTrack()` — rendering the route
 
-`drawTrack()` (`app.js:322-342`) renders all map geometry:
+`drawTrack()` (`app.js:492`) renders all map geometry:
 
 1. **Subsample** to **≤ 1200 points**: `step = max(1, floor(trackPts.length/1200))`, keeping
-   every `step`-th point plus always the last one (`app.js:323-324`). This bounds the polyline's
+   every `step`-th point plus always the last one (`app.js:493-496`). This bounds the polyline's
    vertex count for performance on long tracks (the Enchantments GPX is ~626 KB).
 2. **Halo + line pattern** — two stacked polylines over the same coords:
-   - a **black halo**: `color:'#000', weight:7, opacity:0.25` (`app.js:326`),
-   - the **red trail line** on top: `color:'#ef4444', weight:4, opacity:0.95`, saved as
-     `trackLayer` (`app.js:327`).
-   The halo gives the red line contrast against busy topo tiles.
-3. **Endpoints:**
+   - a **white halo**: `color:'#fff', weight:7.5, opacity:0.85` (`app.js:500`),
+   - the **red trail line** on top: `color:C.red` (`#d4442e`), `weight:4, opacity:0.98`, saved as
+     `trackLayer` (`app.js:501`).
+   The white halo gives the red line contrast against busy topo tiles.
+3. **Endpoints** (colors come from the `C` palette):
    - **Trailhead** — a **green** dot at `trackPts[0]` via
-     `endMarker(p, '#22c55e', 'markerTrailhead')` (note: the **third argument is an i18n key**,
-     not a literal label).
+     `endMarker(p, C.green, 'markerTrailhead')` (C.green = `#1f9d63`; note: the **third argument
+     is an i18n key**, not a literal label).
    - **Loop detection** — `isLoop` is true when **either** `curTrail.route === 'Loop'`
      **or** the straight-line distance between the first and last track point is **< 120 m**
-     (`hav(first,last) < 120`) (`app.js:332`). The **End** marker (a **red** dot,
-     `endMarker(last, '#ef4444', 'markerEnd')`) is drawn **only when `!isLoop`** (`app.js:333`)
+     (`hav(first,last) < 120`) (`app.js:506`). The **End** marker (a **red** dot,
+     `endMarker(last, C.red, 'markerEnd')`, C.red = `#d4442e`) is drawn **only when `!isLoop`**
+     (`app.js:507`)
      — on a loop the start and end coincide, so a separate endpoint would be redundant.
-4. **Waypoints** — each `trackWpts` entry becomes an **amber** dot (`dotIcon('#f59e0b', 11)`)
+4. **Waypoints** — each `trackWpts` entry becomes an **amber** dot (`dotIcon(C.amber, 11)`,
+   C.amber = `#d6861c`)
    with a bound popup showing the localized waypoint name (`trWpt(w.name)`). The marker is
    **retained on `w._marker`** so its popup can be re-localized on a language switch
-   (`app.js:335-339`).
-5. **Fit bounds** — `map.fitBounds(trackLayer.getBounds(), …)` with **sheet-aware padding**:
+   (`app.js:509-513`).
+5. **Fit bounds** — via the `fitTrack()` helper (`app.js:519`) that `drawTrack` calls:
+   `map.fitBounds(trackLayer.getBounds(), …)` with **sheet-aware padding**:
    top-left `[30,70]` (clears the header) and bottom-right `[30, sheetPeekHeight()+30]` so the
-   route isn't hidden behind the peeking bottom sheet (`app.js:341`).
+   route isn't hidden behind the peeking bottom sheet (`app.js:520`).
 
 Markers are built by two small helpers:
 
-- **`endMarker(p, color, key)`** (`app.js:345-350`) — a size-15 dot with a popup whose content
+- **`endMarker(p, color, key)`** (`app.js:524`) — a size-15 dot with a popup whose content
   is `t(key)`. It **stores the i18n key on the marker** (`mk._i18nKey = key`) and pushes the
   marker onto the static list **`endMarker._all`**, so the endpoint popups can be re-bound when
   the language changes.
-- **`dotIcon(color, size)`** (`app.js:360-365`) — returns an `L.divIcon` whose HTML is a
+- **`dotIcon(color, size)`** (`app.js:539`) — returns an `L.divIcon` whose HTML is a
   colored, white-bordered circle with a drop shadow.
 
 ### `redrawTrailLabels()` — live label re-localization
 
-**`redrawTrailLabels()`** (`app.js:353-358`), called from `setLang()` (§1a), re-binds all marker
+**`redrawTrailLabels()`** (`app.js:532`), called from `setLang()` (§1a), re-binds all marker
 popups in the active language **without rebuilding the map**: it walks `endMarker._all` and calls
 `setPopupContent(t(mk._i18nKey))` on each endpoint marker, and walks `trackWpts` calling
 `setPopupContent(trWpt(w.name))` on each `w._marker`.
 
-> The only retained layer reference is **`trackLayer`** (the red polyline, used for
-> `fitBounds`); it is declared as module state (`app.js:14`). The halo polyline and the
-> end/waypoint markers are added to the map without a top-level reference (waypoint markers are
-> reachable via `trackWpts[i]._marker` and endpoint markers via `endMarker._all`). Everything is
+> The track's red polyline is retained as **`trackLayer`** (used for `fitBounds`), declared as
+> module state (`app.js:79`); the green `walkedLayer` (§10a) is likewise retained. The **halo
+> polyline** is added to the map without any reference, and the
+> end/waypoint markers are reachable via `endMarker._all` and `trackWpts[i]._marker`
+> respectively. Everything is
 > recreated on each `loadTrail`/`drawTrack` because `initMap()` discards the whole map first.
 
 ---
@@ -593,150 +616,237 @@ popups in the active language **without rebuilding the map**: it walks `endMarke
 
 ### `drawProfile()` — SVG generation
 
-`drawProfile()` (`app.js:368-399`) renders the elevation chart into `#elev-svg`. It bails early
+`drawProfile()` (`app.js:552`) renders the elevation chart into `#elev-svg`. It bails early
 if the SVG is missing or there are `< 2` track points.
 
-1. Sizing: `W = svg.clientWidth || 340`, fixed `H = 96`; sets the `viewBox` to `0 0 W H`
+1. Sizing: `W = svg.clientWidth || 340`, fixed `H = PROF_H` (96); sets the `viewBox` to `0 0 W H`
    (the SVG uses `preserveAspectRatio="none"` so it stretches to the card width).
-2. Range: `lo`/`hi`/`range` from the **smoothed** elevations (`p.se`), with `range` floored at 1
-   to avoid divide-by-zero (`app.js:373`).
-3. **Subsample to ~500 points** (`step = max(1, floor(len/500))`) for the path (`app.js:374-375`).
-4. Coordinate mappers: `X(d) = (d/totalDist)*W` (distance → x) and
-   `Y(e) = H-14 - ((e-lo)/range)*(H-26)` (elevation → y, leaving ~14px bottom and ~12px top
-   padding) (`app.js:376`).
+2. Range: `eleLo`/`eleHi`/`eleRange` from the **smoothed** elevations (`p.se`) — precomputed once
+   in `loadTrail` (§8), with `eleRange` floored at 1 to avoid divide-by-zero.
+3. **Subsample to ~500 points** (`step = max(1, floor(len/500))`) for the path (`app.js:556-557`).
+4. Coordinate mappers: `X(d) = (d/totalDist)*W` (distance → x) and the shared
+   `profY(se) = PROF_H - PROF_PAD_B - ((se-eleLo)/eleRange)*(PROF_H - PROF_PAD_B - PROF_PAD_T)`
+   arrow const (`app.js:550`) — elevation → y, leaving `PROF_PAD_B` (14px) bottom and
+   `PROF_PAD_T` (12px) top padding (module constants at `app.js:22`). The cursor uses the same
+   `profY` so the GPS/scrub dot never drifts off the area.
 5. Build three pieces of SVG:
    - **Filled area** `path` — from `M0,H` along the curve and back down to `L W,H Z`, painted
-     with a vertical **linear gradient** `#eg` (blue `#3b82f6`@0.7 → dark blue `#1e3a8a`@0.15)
-     (`app.js:378-380`, `app.js:390-393`).
-   - **Line** `path` — the curve only, stroked `#60a5fa`, width 1.5 (`app.js:381-382`, `:396`).
+     with a vertical **linear gradient** `#eg` of **pine green** (`C.pine` = `#1f6f5c`, opacity
+     0.28 → 0.03) (`app.js:560-562`, `app.js:572-575`).
+   - **Line** `path` — the curve only, stroked `C.pine`, width 1.75 (`app.js:563-564`, `:578`).
    - **Waypoint verticals** — for each waypoint with a snapped distance (`w.d != null`), a
-     **dashed amber vertical line** (`stroke="#f59e0b" stroke-dasharray="3,3" opacity="0.6"`)
-     at that x (`app.js:384-387`).
+     **dashed amber vertical line** (`stroke=C.amber stroke-dasharray="3,3" opacity="0.6"`,
+     C.amber = `#d6861c`)
+     at that x (`app.js:566-569`).
 6. Inject `<defs>`(gradient) + waypoint lines + area + line + an empty `<g id="epos">` (the live
-   position layer) into the SVG (`app.js:389-397`).
-7. Update the **elevation-range label** `#elev-range` via `fmtElevRange(lo, hi)` (`app.js:398`):
+   position layer) into the SVG (`app.js:571-579`).
+7. Update the **elevation-range label** `#elev-range` via `fmtElevRange(eleLo, eleHi)`
+   (`app.js:580`):
    **feet** in EN (`"<lo>–<hi> ft"`, converting smoothed meters with `FT = 3.28084`) and
    **meters** in JA (`"<lo>～<hi> m"`).
 
-### `updateProfilePos()` — live position marker
+### `drawProfileCursor()` — live position / scrub marker
 
-`updateProfilePos(idx)` (`app.js:407-418`) draws the hiker's current spot on the profile. Given
-the index of the nearest track point, it recomputes the same `X`/`Y` mapping and writes into the
-`#epos` group:
+`drawProfileCursor(p, scrub)` (`app.js:617`) draws a cursor on the profile for a point
+`p = {d, se}`. It recomputes the same `X`/`profY` mapping and writes into the `#epos` group:
 
-- a **white dashed vertical line** (`stroke="#fff" stroke-dasharray="4,3"`) at the current x, and
-- a **blue dot** (`fill="#3b82f6" stroke="#fff"`, r 4.5) at the current `(x,y)`.
+- a **dashed vertical line** (`stroke=C.ink stroke-opacity="0.5" stroke-dasharray="4,3"`) at
+  the current x, and
+- a **dot** (r 4.5, white-bordered) that is **violet** (`C.violet`) when `scrub` is true and
+  **blue** (`C.blue`, the GPS color) otherwise.
 
-It is called from the GPS handler (§10) with the nearest-point index, and cleared when GPS stops
-(`#epos` emptied in `stopGPS`, `app.js:442`).
+It is **shared by GPS and scrubbing**: the GPS handler (§10) calls `drawProfileCursor(trackPts[i],
+false)` to track the hiker (`app.js:724`), while scrubbing passes `scrub=true` and also fills the
+floating readout pill `#scrub-tip` with elevation + distance-along (below). The group is
+cleared (`#epos` emptied) when GPS stops (`stopGPS`, `app.js:709`).
+
+### Elevation scrubbing — `initProfileScrub()`
+
+Dragging a finger along the elevation profile inspects any point on the trail.
+**`initProfileScrub()`** (`app.js:646`) is bound **once** from `bindGlobal()` (`app.js:248`) via
+**delegation** — a document-level `pointerdown` filtered to `#elev-svg` — because the profile SVG
+is rebuilt on every language switch / sheet re-render, so a directly-bound listener wouldn't
+survive. `touch-action:none` on `#elev-svg` keeps the drag from scrolling the sheet.
+
+- **`applyScrub(clientX)`** (`app.js:661`) maps the finger's x within the SVG to a fraction
+  `0..1`, converts it to a distance, and resolves the exact point via
+  **`pointAtDistance(D)`** (`app.js:592`) — a binary-search-plus-lerp over the monotonic
+  `trackPts[].d` returning `{lat,lon,se,d,idx}`. It then calls `drawProfileCursor(p, true)` (a
+  **violet** cursor + the `#scrub-tip` readout pill showing `fmtElev`/`fmtDistAlong`) and drops a
+  synced **violet `scrub-dot` marker** on the trail (created/moved on `map`).
+- **`onScrubMove`** (`app.js:660`) is rAF-throttled; window-level `pointermove`/`pointerup`/
+  `pointercancel` listeners (added on `pointerdown`) track the finger past the SVG edge.
+- **`endScrub()`** (`app.js:671`) tears down those listeners + the rAF and calls
+  **`clearScrub()`** (`app.js:680`), which removes the scrub marker and readout and restores the
+  blue GPS cursor (via `syncGpsCursor()`, `app.js:637`) if a fix is present.
 
 ---
 
 ## 10. GPS subsystem
 
-A single floating action button, `#btn-gps` (`.map-fab`, `index.html:47`), drives live
-location; its click is bound to `toggleGPS` (`app.js:165`).
+A single floating action button, `#btn-gps` (`.map-fab`, `index.html:73`), drives live
+location; its click is bound to `toggleGPS` (`app.js:242`).
 
 ### Toggle / start / stop
 
-- **`toggleGPS()`** (`app.js:423-430`) is tri-state:
+- **`toggleGPS()`** (`app.js:690`) is tri-state:
   - **Not watching** → `startGPS()`.
   - **Watching but not following** (and we have a `curPos`) → re-enable follow, re-highlight the
     FAB, and recenter the map on the user at `max(currentZoom, 15)`.
   - **Watching and following** → `stopGPS()`.
-- **`startGPS()`** (`app.js:431-436`): if `navigator.geolocation` is missing, `alert(t('alertNoGeo'))`
+- **`startGPS()`** (`app.js:698`): if `navigator.geolocation` is missing, `alert(t('alertNoGeo'))`
   and bail; otherwise request a wake lock (below), set `gpsFollow = true`, highlight the FAB
   (`.on`), and start `navigator.geolocation.watchPosition(onPos, onPosErr,
   {enableHighAccuracy:true, maximumAge:4000, timeout:30000})`, storing the watch id in `gpsWatch`.
-- **`stopGPS()`** (`app.js:437-443`): `clearWatch`, release the wake lock, reset
+- **`stopGPS()`** (`app.js:704`): `clearWatch`, release the wake lock, reset
   `gpsFollow`/`curPos`, remove the GPS marker and accuracy circle, drop the FAB highlight, and
   clear the profile position layer (`#epos`).
 
 ### Position updates — `onPos()`
 
-`onPos(pos)` (`app.js:444-457`):
+`onPos(pos)` (`app.js:711`):
 
 1. Read `latitude`/`longitude`/`accuracy`; store `curPos = {lat,lon}`.
 2. **Pulsing dot + accuracy circle.** On the first fix it creates:
    - `gpsMk` — an `L.marker` whose icon is a `<div class="gps-dot">` (the blue dot with the CSS
-     `gpspulse` keyframe ring, `app.css:205-211`), at `zIndexOffset:1000` so it sits above the
+     `gpspulse` keyframe ring, `app.css:361-363`), at `zIndexOffset:1000` so it sits above the
      track.
-   - `gpsAcc` — an `L.circle` of `radius:accuracy`, faint blue fill, used as the accuracy halo.
-   On subsequent fixes it just repositions both and updates the circle's radius (`app.js:447-450`).
+   - `gpsAcc` — an `L.circle` of `radius:accuracy`, faint blue fill (`C.blue`), used as the
+     accuracy halo.
+   On subsequent fixes it just repositions both and updates the circle's radius (`app.js:714-717`).
 3. **Follow mode.** If `gpsFollow`, recenter the map to the new position at `max(currentZoom,15)`
-   with animation (`app.js:451`).
-4. **Nearest track point → profile.** Scan all `trackPts` for the one nearest the fix (haversine)
-   and pass its index to `updateProfilePos(idx)` (`app.js:452-456`), moving the blue marker along
-   the elevation profile in sync with the map dot.
+   with animation (`app.js:718`).
+4. **Feed live tracking.** If a tracking session is active (`tracking && !paused`), pass the fix
+   to `updateProgress` (§10a) (`app.js:719`).
+5. **Profile cursor.** Draw the blue GPS cursor with `drawProfileCursor(trackPts[i], false)`
+   (§9), where `i` **reuses the tracking snap index** (`progIdx`) when a session is active (so it
+   can't jump to the wrong overlapping leg of an out-and-back), else `nearestIdx(lat,lon).idx`
+   (`app.js:720-725`).
 
-`onPosErr(err)` (`app.js:458`) specifically handles permission-denied (`code === 1`) with an
+`onPosErr(err)` (`app.js:727`) specifically handles permission-denied (`code === 1`) with an
 instructional `alert(t('alertDenied'))` (pointing to iOS Settings → Privacy → Location Services →
 Safari) and stops GPS.
 
 ### How dragging disables follow
 
 `initMap()` registers `map.on('dragstart', …)` which sets `gpsFollow = false` and removes the
-FAB's `.on` class (`app.js:274`). So as soon as the user pans the map, the app stops yanking the
+FAB's `.on` class (`app.js:422`). So as soon as the user pans the map, the app stops yanking the
 view back; tapping the FAB again re-engages follow (the second branch of `toggleGPS`).
 
 ### Screen Wake Lock
 
-- **`reqWake()`** (`app.js:460`) requests `navigator.wakeLock.request('screen')` (guarded by a
+- **`reqWake()`** (`app.js:729`) requests `navigator.wakeLock.request('screen')` (guarded by a
   feature check, errors swallowed) so the screen stays on while navigating.
-- **`relWake()`** (`app.js:461`) releases it and nulls `wakeLock`.
+- **`relWake()`** (`app.js:730`) releases it and nulls `wakeLock`.
 - **Re-acquire on visibility.** Wake locks are dropped when a tab is backgrounded, so a
-  `visibilitychange` listener (`app.js:462`) re-requests the lock when the page becomes visible
+  `visibilitychange` listener (`app.js:731`) re-requests the lock when the page becomes visible
   again **and** GPS is still active **and** no lock is currently held.
+
+---
+
+## 10a. Live trail-progress tracking
+
+A second floating action button, `#btn-track` (`.map-fab.track`, `index.html:76`), starts a
+**live trail-progress** session: each GPS fix is snapped to the trail, the walked portion fills
+green over the red base, and a `#track-hud` banner (`index.html:79`) shows percent + elapsed time.
+Its click is bound to `toggleTrack` in `bindGlobal()` (`app.js:243`); the HUD's ✕ button
+(`#th-close`) is bound to `stopTracking` (`app.js:244`).
+
+### Start / pause / stop
+
+- **`toggleTrack()`** (`app.js:741`): if not tracking, `startTracking()`; otherwise it toggles
+  **pause/resume**, banking elapsed time on pause (`trackElapsedMs += now - trackStartTs`) and
+  resuming the clock from now.
+- **`startTracking()`** (`app.js:748`): resets progress (`walkedDist=0`, `progIdx=-1`), removes
+  any old `walkedLayer`, shows the HUD, starts GPS if it isn't already running (tracking needs
+  live fixes), and starts a 1 s `hudTimer` so the elapsed clock ticks even without new fixes.
+- **`stopTracking()`** (`app.js:760`): ends the session — hides the HUD, removes the green
+  overlay, resets progress and elapsed — but **leaves GPS as-is** so the location dot can stay on.
+  It's also called by `showList()`/`openDetail()` to reset per-trail.
+- **`updateTrackBtn()`** (`app.js:768`) toggles the `.tracking` class and swaps the PLAY/PAUSE
+  icon + aria-label.
+
+### Snapping a fix to the trail — `updateProgress()`
+
+`updateProgress(lat,lon,accuracy)` (`app.js:790`), fed from `onPos` (§10), snaps each fix to a
+track vertex and advances the walked distance:
+
+- **Off-trail gate.** `offTrailGate(acc)` (`app.js:778`) = `max(25, min(60, 2.5*acc))` m — fixes
+  whose nearest vertex is farther than the gate are rejected (progress holds), scaled to GPS
+  accuracy (looser under tree cover).
+- **First fix** uses `acquireIdx()` (`app.js:782`): among in-gate vertices it takes the one with
+  the **smallest distance-along**, so an out-and-back's trailhead/return overlap can't be mistaken
+  for near-complete progress.
+- **Subsequent fixes** use `nearestIdx()` over a **forward window** only —
+  `[progIdx - SNAP_BACK_M, progIdx + SNAP_FWD_M]` (constants `SNAP_BACK_M=80`, `SNAP_FWD_M=250` m,
+  `app.js:58-59`) — so the return leg of an out-and-back (which overlaps the outbound) can't match
+  the wrong leg.
+- **Monotonic advance.** `walkedDist` only ever grows; it recolors via `recolorProgress()`
+  (`app.js:813`) — a green polyline (`C.green`) over the red base, built from `renderPts` with
+  `.d ≤ walkedDist` plus an exact split vertex from `pointAtDistance(D)` — only when the
+  high-water mark actually advances.
+
+### The HUD — `updateHUD()`
+
+`updateHUD()` (`app.js:829`) fills the `#track-hud` percent (`.th-pct`), progress bar (`.th-fill`),
+and elapsed time (`.th-num`, from `fmtElapsed(elapsedMs())`). **Out-and-back progress** is measured
+against the **far end** (`turnDist`, §8) so reaching the turnaround reads 100%; loops and
+point-to-point measure against the full `totalDist`. At 100% it shows a localized message
+(`trackTurnaround` for out-and-back, else `trackComplete`).
 
 ---
 
 ## 11. Bottom sheet subsystem
 
-The detail screen's `#sheet` (`index.html:49-56`) is a draggable bottom sheet with a grip
+The detail screen's `#sheet` (`index.html:94-101`) is a draggable bottom sheet with a grip
 (`#grip`), a tappable peek region (`#sheet-peek`), and a scrollable body (`#sheet-body`). It has
-two states tracked by `sheetState` (`app.js:18`): **`'peek'`** and **`'full'`**.
+two states tracked by `sheetState` (`app.js:83`): **`'peek'`** and **`'full'`**.
 
 ### Heights & `setSheet()`
 
-- **Peek height** is **≈16 % of viewport height**: `sheetPeekHeight() = round(innerHeight*0.16)`
-  (`app.js:467`).
-- **Full height** is **`90dvh`** (dynamic viewport height) (`app.js:478`); CSS caps the sheet at
-  `max-height:92dvh` (`app.css:148`).
-- **`setSheet(state)`** (`app.js:468-480`):
+- **Peek height** is computed by **`computePeekH()`** (`app.js:850`) from the rendered sheet
+  geometry — `#elev-card`'s `offsetTop + offsetHeight + 14` (so the peek reveals the whole
+  elevation chart for scrubbing) — clamped to **[16vh, 62vh]**. **16vh**
+  (`round(innerHeight*0.16)`) is only the **fallback** (used in landscape or before the body
+  renders); `sheetPeekHeight()` (`app.js:857`) returns the cached `peekH` or that fallback.
+- **Full height** is **`90dvh`** (dynamic viewport height) (`app.js:869`); CSS caps the sheet at
+  `max-height:92dvh` (`app.css:240`).
+- **`setSheet(state)`** (`app.js:858`) first re-measures via `computePeekH()`, then:
   - In landscape (`(orientation:landscape) and (max-height:560px)`) the sheet is docked to the
-    side, so it clears the inline height and just parks the FAB at
-    `calc(20px + var(--safe-b))` (`app.js:472-476`).
+    side, so it clears the inline height and just parks the FABs at
+    `calc(20px + var(--safe-b))` (`app.js:864-866`).
   - Otherwise it sets the sheet's inline `height` to the peek px or `90dvh`, and positions the
-    **GPS FAB just above the peek sheet**: `bottom = calc(<peekPx>px + 14px)` (`app.js:479`). So
+    **GPS FAB just above the peek sheet**: `bottom = calc(<peekPx>px + 14px)` (`app.js:870`). So
     in peek the FAB floats over the map above the sheet; when the sheet expands to full, the FAB
     ends up behind it.
+  - Either way it **also parks the track FAB 58px above the GPS FAB** (`app.js:873`).
 
 The sheet's smooth open/close is a CSS height transition
-(`transition:height .32s cubic-bezier(...)`, `app.css:146`), with `touch-action:none` so the
+(`transition:height .32s cubic-bezier(...)`, `app.css:239`), with `touch-action:none` so the
 drag gesture isn't hijacked by the browser.
 
 ### Drag gesture — `initSheetDrag()`
 
-`initSheetDrag()` (`app.js:481-496`) implements a unified pointer drag:
+`initSheetDrag()` (`app.js:875`) implements a unified pointer drag:
 
 - **Start** (`touchstart` passive / `mousedown` on **both** `#grip` and `#sheet-peek`) records
   the start Y and the sheet's current height, and disables the CSS transition for 1:1 dragging.
 - **Move** (window-level `touchmove`/`mousemove`) sets the sheet height to
   `clamp(peekHeight … innerHeight*0.9)` based on drag delta (`startH + (startY - y)`).
 - **End** (`touchend`/`mouseup`) re-enables the transition and **snaps**: if the released height
-  is above `innerHeight*0.45` → `setSheet('full')`, else `setSheet('peek')` (`app.js:486`).
+  is above `innerHeight*0.45` → `setSheet('full')`, else `setSheet('peek')` (`app.js:880`).
 
 ### Tap to toggle
 
 Tapping the peek (when not mid-drag) toggles between peek and full:
 `peek.addEventListener('click', () => setSheet(sheetState==='peek'?'full':'peek'))`
-(`app.js:495`).
+(`app.js:889`).
 
 ### FAB position tracks the sheet
 
-As described above, every `setSheet()` recomputes the FAB's `bottom`. On resize/rotation the
-debounced handler also re-runs `setSheet(sheetState)` so the FAB and sheet height stay correct
-(`app.js:584-587`).
+As described above, every `setSheet()` recomputes the FABs' `bottom`. On resize/rotation the
+debounced handler also re-runs `setSheet(sheetState)` so the FABs and sheet height stay correct
+(`app.js:998-1000`).
 
 ---
 
@@ -744,31 +854,31 @@ debounced handler also re-runs `setSheet(sheetState)` so the FAB and sheet heigh
 
 A single global button **pre-caches the map tiles for *all* trails** (across both tile
 sources) so every map works with no connectivity. It is driven from one button in the list
-header — **`#dl-all`** (`.dl-all-btn`, `index.html:26`) — bound to `downloadAll` in
-`bindGlobal()` (`app.js:180`). There is **no per-trail download button and no download modal**
+header — **`#dl-all`** (`.dl-all-btn`, `index.html:38`) — bound to `downloadAll` in
+`bindGlobal()` (`app.js:245`). There is **no per-trail download button and no download modal**
 anymore; iOS has no background fetch, so this is a single foreground, user-initiated action
 with inline progress on the button itself.
 
 ### Button state — `dlState` / `updateDlBtn()` / `updateDlProgress()`
 
 The button's appearance is driven by the module-level **`dlState`** (`'idle' | 'busy' |
-'done'`, `app.js:35`):
+'done'`, `app.js:84`):
 
-- **`updateDlBtn()`** (`app.js:562-569`) toggles the `.busy` / `.done` classes and sets the
+- **`updateDlBtn()`** (`app.js:954`) toggles the `.busy` / `.done` classes and sets the
   static label — `t('dlAll')` in `idle`, `t('dlAllDone')` in `done`. `applyStaticI18n()` calls
   it so the label tracks the language (§1a).
-- **`updateDlProgress(done,total)`** (`app.js:570-575`) computes a percentage, writes it to the
+- **`updateDlProgress(done,total)`** (`app.js:963`) computes a percentage, writes it to the
   button's **`--p` CSS custom property** (which drives the gradient fill of `.dl-all-btn.busy`,
-  `app.css:53-56`), and — while `busy` — sets the button text to the live `"NN%"`.
+  `app.css:89-92`), and — while `busy` — sets the button text to the live `"NN%"`.
 
 ### Web Mercator tile math
 
 The download converts a lat/lon box to **XYZ tile ranges** at each zoom:
 
-- **`ll2t(lat, lon, z)`** (`app.js:511-513`) is the standard slippy-map projection:
+- **`ll2t(lat, lon, z)`** (`app.js:899`) is the standard slippy-map projection:
   `n = 2^z`, `x = floor(n*(lon+180)/360)`, and
   `y = floor(n*(1 - ln(tan(φ) + sec(φ))/π)/2)` with `φ = lat·π/180`. Returns `{x, y}`.
-- **`tRange(b, z)`** (`app.js:509-510`) projects the SW and NE corners and returns the inclusive
+- **`tRange(b, z)`** (`app.js:897`) projects the SW and NE corners and returns the inclusive
   `{x0,x1,y0,y1}` tile range (min/max-ed so corner order doesn't matter).
 - **`DL_MIN_Z = 10`** (`app.js`) — the overview floor for downloads. Each trail caches from
   z10 up to **its source's `maxZoom`**: **z10–16** for USGS, **z10–18** for GSI. The upper bound
@@ -799,16 +909,16 @@ the same routine builds both the USGS `{z}/{y}/{x}` and the GSI `{z}/{x}/{y}` UR
 
 ### Batched fetch into the Cache API — `downloadAll()`
 
-**`downloadAll()`** (`app.js:540-559`) is the whole flow:
+**`downloadAll()`** (`app.js:932`) is the whole flow:
 
 1. Bail if already `busy` or `caches` is unavailable; set `dlState='busy'`, `updateDlBtn()`,
    and seed the progress bar (`updateDlProgress(0,1)`).
 2. **Gather every tile URL across all trails.** For each `trail` of `TRAILS`, `await
    gpxBox(trail)` and push `tileURLsFor(box, trailSource(trail))` — i.e. each trail
    contributes tiles from **its own** source (USGS to z16 or GSI to z18). The combined list is then
-   **deduped** with a `Set` (`app.js:549`), so tiles shared by overlapping trails are fetched
+   **deduped** with a `Set` (`app.js:941`), so tiles shared by overlapping trails are fetched
    once.
-3. Open the **`TILE_CACHE`** cache (`'wa-trails-tiles-v1'`, `app.js:7` / `app.js:551`) and
+3. Open the **`TILE_CACHE`** cache (`'wa-trails-tiles-v1'`, `app.js:7` / `app.js:943`) and
    iterate the URLs in **batches of 8** (`BATCH = 8`). For each URL it skips ones already cached
    (`cache.match`), otherwise `fetch(u, {mode:'cors'})` and `cache.put` it if the response is
    `ok` **or** `opaque`. Each settled request bumps `done` and calls `updateDlProgress(done,
@@ -821,7 +931,7 @@ the same routine builds both the USGS `{z}/{y}/{x}` and the GSI `{z}/{x}/{y}` UR
 
 ### Status sampling — `refreshCacheStatus()`
 
-**`refreshCacheStatus()`** (`app.js:579-591`) decides the button's startup state. It opens
+**`refreshCacheStatus()`** (`app.js:972`) decides the button's startup state. It opens
 `TILE_CACHE` and, for **each** trail, computes the **z14 center tile** (`ll2t(center, 14)`),
 builds that tile's URL **from that trail's own source** (so the GSI trails are probed against
 the GSI URL), and checks `cache.match`. It sets `dlState='done'` **only if every trail's sample
@@ -840,34 +950,44 @@ these directly and re-render by rewriting `innerHTML`.
 
 | Variable | Decl | Holds |
 |---|---|---|
-| `map` | `app.js:30` | The current Leaflet map instance (or `null`). |
-| `curTrail` | `app.js:30` | The trail object currently open in detail (or `null`). |
-| `trackLayer` | `app.js:30` | The red track polyline `L.polyline` (used for `fitBounds`). The **only** retained layer reference. |
-| `trackPts` | `app.js:31` | Parsed track points: `{lat, lon, ele, d, se}` with cumulative distance `d` and smoothed elevation `se`. |
-| `trackWpts` | `app.js:31` | Parsed waypoints: `{lat, lon, name, d, _marker}` with snapped along-track distance `d` and the retained Leaflet marker. |
-| `totalDist` | `app.js:32` | Total track length in meters (for profile x-scaling). |
-| `gpsWatch` | `app.js:32` | `watchPosition` id while GPS is active (`null` when off). |
-| `gpsMk` | `app.js:32` | The pulsing GPS-position marker (or `null`). |
-| `gpsAcc` | `app.js:32` | The GPS accuracy circle (or `null`). |
-| `gpsFollow` | `app.js:32` | Whether the map auto-recenters on the user. |
-| `curPos` | `app.js:33` | Last known `{lat, lon}` fix (or `null`). |
-| `wakeLock` | `app.js:33` | The active Screen Wake Lock sentinel (or `null`). |
-| `sheetState` | `app.js:34` | Bottom-sheet state: `'peek' | 'full'`. |
-| `dlState` | `app.js:35` | Global offline-maps download state: `'idle' | 'busy' | 'done'` — drives the `#dl-all` button (§12). |
-| `lang` | `app.js:43` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
-| `listFilter` | `app.js:119` | Active difficulty filter (`'all'` or a `diffKey`). |
-| `listSort` | `app.js:119` | Active sort (`'dist'`, `'gain'`, or `null`). |
-| `rzT` | `app.js:604` | Debounce timer handle for the resize handler. |
+| `map` | `app.js:79` | The current Leaflet map instance (or `null`). |
+| `curTrail` | `app.js:79` | The trail object currently open in detail (or `null`). |
+| `trackLayer` | `app.js:79` | The red track polyline `L.polyline` (used for `fitBounds`). |
+| `trackPts` | `app.js:80` | Parsed track points: `{lat, lon, ele, d, se}` with cumulative distance `d` and smoothed elevation `se`. |
+| `trackWpts` | `app.js:80` | Parsed waypoints: `{lat, lon, name, d, _marker}` with snapped along-track distance `d` and the retained Leaflet marker. |
+| `totalDist` | `app.js:81` | Total track length in meters (for profile x-scaling). |
+| `gpsWatch` | `app.js:81` | `watchPosition` id while GPS is active (`null` when off). |
+| `gpsMk` | `app.js:81` | The pulsing GPS-position marker (or `null`). |
+| `gpsAcc` | `app.js:81` | The GPS accuracy circle (or `null`). |
+| `gpsFollow` | `app.js:81` | Whether the map auto-recenters on the user. |
+| `curPos` | `app.js:82` | Last known `{lat, lon}` fix (or `null`). |
+| `wakeLock` | `app.js:82` | The active Screen Wake Lock sentinel (or `null`). |
+| `sheetState` | `app.js:83` | Bottom-sheet state: `'peek' | 'full'`. |
+| `dlState` | `app.js:84` | Global offline-maps download state: `'idle' | 'busy' | 'done'` — drives the `#dl-all` button (§12). |
+| `eleLo` / `eleHi` / `eleRange` | `app.js:87` | Cached smoothed-elevation bounds for the profile Y scale (set in `loadTrail`, §8). |
+| `renderPts` | `app.js:90` | Downsampled track points (with cumulative `.d`) for the polyline, reused by the green walked overlay (§10a). |
+| `turnIdx` / `turnDist` / `isOutAndBack` | `app.js:93` | Far-end (turnaround) index/distance and out-and-back flag, used by live-tracking progress (§8, §10a). |
+| scrub state | `app.js:96` | `scrubbing`, `scrubMk`, `scrubRAF`, `scrubX`, `scrubRect`, `scrubCardRect` — elevation-scrub gesture state (§9). |
+| tracking state | `app.js:99-102` | `tracking`/`paused`, `trackStartTs`/`trackElapsedMs`/`hudTimer`, `walkedDist`/`progIdx`, `walkedLayer` — live trail-progress session (§10a). |
+| `lang` | `app.js:110` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
+| `listFilter` | `app.js:188` | Active difficulty filter (`'all'` or a `diffKey`). |
+| `listSort` | `app.js:188` | Active sort (`'dist'`, `'gain'`, or `null`). |
+| `peekH` | `app.js:849` | Cached bottom-sheet peek height in px (computed by `computePeekH()`, §11). |
+| `rzT` | `app.js:997` | Debounce timer handle for the resize handler. |
 
 Two trivial DOM helpers are also defined globally: **`$`** (`querySelector`) and **`$$`**
-(`querySelectorAll` → array) (`app.js:37-38`). The i18n helpers `t` / `tf` / `loc` / `trDiff` /
+(`querySelectorAll` → array) (`app.js:104-105`). The i18n helpers `t` / `tf` / `loc` / `trDiff` /
 `trRoute` / `trDogs` / `trWpt` / `trSeason` and the unit formatters `fmtDist` / `fmtGain` /
 `fmtTime` / `fmtElevRange` are documented in §1a.
 
 Module-level **constants** (`app.js`): `TILE_CACHE` (`'wa-trails-tiles-v1'`), `DL_MIN_Z` (10),
 the zoom-aware padding helper `padFor(z)` (0.05° / 0.03° / 0.015° / 0.008° / 0.004°), `FT`
-(3.28084), and the per-trail basemap table **`TILE_SOURCES`** with its
-resolver **`trailSource()`** (§7) — these replace the old single `TILE_URL` constant.
+(3.28084), `MI_PER_KM` (1.609344), the profile-geometry constants `PROF_H` (96) / `PROF_PAD_B`
+(14) / `PROF_PAD_T` (12), the `C` colour palette (track/marker hex, mirroring app.css), the
+live-tracking snap window `SNAP_FWD_M` (250) / `SNAP_BACK_M` (80), the inline-SVG icon set
+(`ICON_PATHS` + `ICON_PLAY`/`ICON_PAUSE`), the difficulty `DIFF` table, and the per-trail
+basemap table **`TILE_SOURCES`** with its resolver **`trailSource()`** (§7) — these replace the
+old single `TILE_URL` constant.
 
 ---
 
@@ -876,39 +996,39 @@ resolver **`trailSource()`** (§7) — these replace the old single `TILE_URL` c
 ### Portrait (default)
 
 The default layout is a single-column, full-height mobile UI: the list is a vertical
-flex column of cards (`#trail-list`, `app.css:49-53`); the detail screen layers a full-bleed
+flex column of cards (`#trail-list`, `app.css:115`); the detail screen layers a full-bleed
 `#map`, a floating translucent header, the GPS FAB, and the bottom sheet.
 
 ### Landscape phones — `@media (orientation:landscape) and (max-height:560px)`
 
-A single media query (`app.css:242-256`) reflows the app for landscape phones (short viewports):
+A single media query (`app.css:402-422`) reflows the app for landscape phones (short viewports):
 
 - **List → 2-column grid.** `#trail-list` becomes
-  `display:grid; grid-template-columns:1fr 1fr; grid-auto-rows:min-content` (`app.css:244`).
+  `display:grid; grid-template-columns:1fr 1fr; grid-auto-rows:min-content` (`app.css:405`).
 - **Detail → map left, sheet docked right.** `#sheet` is repositioned to the **right edge**
   (`top:0; bottom:0; left:auto; right:0; width:min(360px,42%)`), with `height:auto !important`,
   no rounded corners, and a left-side shadow; its top padding clears the header
-  (`app.css:247-252`). The grip and peek are **hidden** (`display:none`) since the sheet is
-  always open, and `#map` is shrunk to make room: `right:min(360px,42%)` (`app.css:253-255`).
-- **FAB repositioning.** `setSheet()` detects this same media query at runtime and parks the GPS
-  FAB at `calc(20px + var(--safe-b))` instead of above the (now side-docked) sheet
-  (`app.js:472-476`).
+  (`app.css:411-415`). The grip and peek are **hidden** (`display:none`) since the sheet is
+  always open, and `#map` is shrunk to make room: `right:min(360px,42%)`.
+- **FAB repositioning.** `setSheet()` detects this same media query at runtime and parks the
+  FABs at `calc(20px + var(--safe-b))` instead of above the (now side-docked) sheet
+  (`app.js:864-866`).
 
 ### Safe-area-inset handling (notch / home indicator)
 
 Four design tokens capture the device safe areas:
-`--safe-t/-b/-l/-r = env(safe-area-inset-*)` (`app.css:7-10`), enabled by
+`--safe-t/-b/-l/-r = env(safe-area-inset-*)` (`app.css:26-29`), enabled by
 `viewport-fit=cover` in the viewport meta (`index.html:5`) and the
-`apple-mobile-web-app-status-bar-style: black-translucent` meta (`index.html:8`). (The head
+`apple-mobile-web-app-status-bar-style: default` meta (`index.html:8`). (The head
 also declares **both** the standard `mobile-web-app-capable` and the legacy
 `apple-mobile-web-app-capable` meta tags for standalone display, `index.html:6-7`.) They're
 applied throughout so content avoids the notch and home indicator: the list header padding
-(`app.css:29`), the list's bottom scroll padding (`app.css:75`), the detail header height/padding
-(`app.css:117`), the map FAB's left offset (`app.css:140`), and the sheet body's bottom padding
-(`app.css:169`).
-The Leaflet zoom control is likewise nudged by `env(safe-area-inset-top)` in JS (`app.js:281`).
-`#app` is **`position:fixed; top:0; right:0; bottom:0; left:0; overflow:hidden`**
-(`app.css:23`), pinning it to the visual-viewport edges (including the safe areas under
+(`app.css:56`), the list's bottom scroll padding (`app.css:117`), the detail header height/padding
+(`app.css:165`), the map FAB's left offset (`app.css:189`), and the sheet body's bottom padding
+(`app.css:254`).
+The Leaflet zoom control is likewise nudged by `env(safe-area-inset-top)` in JS (`app.js:423`).
+`#app` is **`position:fixed; inset:0; overflow:hidden`**
+(`app.css:44`), pinning it to the visual-viewport edges (including the safe areas under
 `viewport-fit=cover`). It was previously sized with `height:100dvh` (with a `100vh` fallback),
 but in an installed iOS standalone PWA `100dvh` could resolve ~34px short of the physical screen
 and leave a gap at the bottom; the fixed-inset approach fills the true screen.
@@ -921,7 +1041,7 @@ The app has **two distinct Service-Worker caches**, declared at the top of `sw.j
 
 | Cache name | Constant | Contents | Written by |
 |---|---|---|---|
-| `wa-trails-app-v9` | `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js`), manifest, icon, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. | SW `install` (`addAll(SHELL)` + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
+| `wa-trails-app-v11` | `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js`), manifest, icon, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. | SW `install` (`addAll(SHELL)` + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
 | `wa-trails-tiles-v1` | `TILE_V` (`sw.js:2`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL. | SW `fetch` (cache-first fill on miss) **and** the page's `downloadAll()` pre-cache. |
 
 > The cache **names** retain the historic `wa-trails-` prefix (an internal identifier — it is
@@ -943,7 +1063,7 @@ even one the user has never opened.
 
 On `activate` (`sw.js:38-44`), the SW deletes any cache whose name is **neither** `APP_V`
 **nor** `TILE_V`, then `clients.claim()`. This is the version-migration mechanism: bumping
-`APP_V` (now `…-v4`) on a deploy evicts the previous shell cache automatically,
+`APP_V` (now `…-v11`) on a deploy evicts the previous shell cache automatically,
 while the tile cache (`TILE_V`) is deliberately preserved across shell upgrades so users don't
 lose downloaded maps.
 
@@ -1017,7 +1137,8 @@ user taps ◎ (GPS)
    └─► toggleGPS() ─► startGPS() ─► reqWake() + watchPosition()
          └─► onPos() ─► move gps-dot + accuracy circle
                        ─► if follow: recenter
-                       ─► nearest trackPt ─► updateProfilePos(idx)
+                       ─► if tracking: updateProgress()
+                       ─► nearest trackPt ─► drawProfileCursor(trackPts[i], false)
 
 user taps "⬇ Save maps" (#dl-all, downloads ALL trails)
    └─► downloadAll()  ─► dlState='busy' ─► updateDlBtn()

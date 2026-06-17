@@ -192,7 +192,8 @@ They appear in the raw HTML like this (note the escaped quotes):
 
 `9816.974 m ÷ 1609.344 = 6.1 mi`, which matches the published Lake 22 length
 exactly. `app.js` uses the same factors at runtime — `FT = 3.28084` as a named
-constant for elevation, and `1609.344` inline (`mi → km`) for distance display.
+constant for elevation, and `MI_PER_KM = 1.609344` as a named constant
+(`mi → km`) for distance display.
 
 > ### ⚠️ Gotcha: the page embeds *many* trails, not just the one
 > An AllTrails page also embeds the stats for **nearby / recommended
@@ -289,8 +290,9 @@ a record of the technique):
 > shipping Mount Kinpu (Odarumi Pass) route (`kinpu-odarumi`) is a separate,
 > shorter trail (5.2 mi / 1,673 ft, Moderate, Out & back — see the final-stats
 > table) and was **not** sourced from a `trailGeoStats`/AllTrails page the same
-> way; its stats live in `trails.js`. The Odarumi Pass page saved in
-> `alltrails/` is "Odarumi Toge - Mount Kinpu, Yamanashi, Japan."
+> way; its stats live in `trails.js`. The Odarumi Pass route's GPX is saved in
+> `alltrails/` as `大弛峠__金峰山.gpx` (大弛峠 = Odarumi Pass); there is no
+> separate English-named page capture for it.
 
 > The Yoshida GPX is a **one-way ascent** (5th Station → crater rim), and the
 > Yoshida page's `trailGeoStats` is **also** the one-way ascent (4.2 mi /
@@ -695,7 +697,7 @@ Ordered checklist to add one trail end-to-end:
    the filenames exactly.
 7. **Register both in the service worker.** Add the new `gpx/...` and
    `images/...` paths to `TRAIL_ASSETS` in `sw.js` so they are precached for
-   offline. Bump `APP_V` (currently `wa-trails-app-v9`) so clients pick up the
+   offline. Bump `APP_V` (currently `wa-trails-app-v11`) so clients pick up the
    new asset list. (`sw.js`'s tile cache-first rule already matches both
    `nationalmap.gov` and `cyberjapandata.gsi.go.jp`, so a `tiles:"gsi"` trail's
    tiles cache offline with no further change.)

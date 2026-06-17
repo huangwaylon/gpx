@@ -60,7 +60,7 @@ is fully translated.
 | `index.html` | App shell — `#list` and `#detail` `<section class="screen">`; the global "download all maps" button (`#dl-all`) sits in the header next to the language toggle. Static text carries `data-i18n` keys. `<html lang="ja">` |
 | `app.js` | All logic — i18n, routing, map (per-trail tile source via `TILE_SOURCES`), GPX parse, GPS, elevation, global tile download |
 | `i18n.js` | `window.I18N` — UI strings, dynamic-string fns, enum tables, waypoint names, and per-trail Japanese content |
-| `app.css` | Dark, mobile-first, responsive styles (custom properties, safe-area insets, CJK font stack) |
+| `app.css` | Light (paper-cool), mobile-first, responsive styles (custom properties, safe-area insets, CJK font stack) |
 | `trails.js` | The data model — `window.TRAILS` array of 10 trail objects (8 US + 2 Japan; English base content). Optional `tiles` field picks the basemap (USGS default; `"gsi"` for Japan) |
 | `sw.js` | Service worker — precaches shell+i18n+GPX+images; cache-first map tiles (USGS + GSI) |
 | `manifest.json`, `icon-{180,192,512}.png` | PWA install metadata + Home-Screen icon (cropped from the Enchantments photo) |
@@ -122,7 +122,7 @@ Paste into the DevTools console:
 ```
 
 (Or DevTools → Application → Storage → **Clear site data**.) To ship an update to returning
-users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v9`) — the `activate` handler purges
+users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v11`) — the `activate` handler purges
 old caches. Reset language during testing with `localStorage.removeItem('lang')`.
 
 ## Adding a trail (short version)

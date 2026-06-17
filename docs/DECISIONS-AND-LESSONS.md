@@ -375,10 +375,10 @@ and without breaking the offline-cacheable static-file model (ADR-5, ADR-7).
 A **hand-rolled i18n layer** lives in `i18n.js` as a single plain object, `window.I18N`, with:
 
 - `ui` — static UI strings, keyed `en` / `ja` (titles, buttons, section headings, alerts).
-- `fn` — locale-aware **string functions** for dynamic text. *(Currently an empty `{ en:{}, ja:{} }`
-  scaffold — the per-trail download descriptions/progress that once lived here were removed with the
-  download-UX overhaul (ADR-10); the global button now shows a bare percentage. `tf()` and the
-  scaffold are retained for future dynamic strings.)*
+- `fn` — locale-aware **string functions** for dynamic text. *(Currently holds one function,
+  `planParty` — used to render the hike-plan party size, e.g. `"3 hikers"` / `"3人"`. The per-trail
+  download descriptions/progress that once lived here were removed with the download-UX overhaul
+  (ADR-10); the global button now shows a bare percentage.)*
 - **enum/token tables** — `diff`, `route`, `dogs`, `months` — translating data *tokens* at render
   time (e.g. `"Hard"` → `"上級"`, `"Loop"` → `"周回"`).
 - `wpt` — GPX **waypoint name** translations (English → Japanese).
@@ -396,7 +396,7 @@ A **hand-rolled i18n layer** lives in `i18n.js` as a single plain object, `windo
 
 Units switch with language **at render time** while the **stored data stays imperial**: feet and
 miles are the single canonical source in `trails.js`, and the formatters convert to km/m for
-Japanese (`fmtDist`, `fmtGain`, `fmtElevRange`) — e.g. `mi * 1.609344` and `ft / FT`
+Japanese (`fmtDist`, `fmtGain`, `fmtElevRange`) — e.g. `mi * MI_PER_KM` and `ft / FT`
 (`FT = 3.28084`). Date/duration/season text is also localized at render time
 (`fmtTime`, `trSeason` via the `months` table).
 
@@ -543,7 +543,8 @@ depends on a trail being open (the old `trailBox` read the live `trackPts`). On 
   tiles** (≈2,760 USGS + ~465 GSI). Acceptable trade for the simpler model; the download is
   deduped, batched, and shows live progress.
 - The removed per-trail button, modal, and per-card badge are noted in Part 4. The dynamic
-  download strings they used were also removed from `i18n.js` (`fn` is now empty — ADR-8).
+  download strings they used were also removed from `i18n.js`; the only `fn` function remaining is
+  `planParty` (ADR-8).
 
 ---
 
@@ -715,12 +716,12 @@ satisfied from the cache, so source edits are invisible until the cache is inval
   reload re-fetches from disk).
 - To ship updates to users: **bump the cache version** so the new SW installs a fresh shell and the
   `activate` handler deletes the stale caches. The shell cache version is `APP_V` in `sw.js`
-  (currently **`'wa-trails-app-v9'`** — bumped each shell release; it was v2 when this bug was first
+  (currently **`'wa-trails-app-v11'`** — bumped each shell release; it was v2 when this bug was first
   written up), while the tile cache `TILE_V` (`'wa-trails-tiles-v1'`) is kept stable so downloaded
   tiles survive shell updates:
 
 ```js
-const APP_V  = 'wa-trails-app-v9';
+const APP_V  = 'wa-trails-app-v11';
 const TILE_V = 'wa-trails-tiles-v1';
 
 self.addEventListener('activate', e => {
@@ -732,7 +733,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v9'`, the shell is served
+**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v11'`, the shell is served
 cache-first, and `activate` deletes every cache except the current `APP_V` and `TILE_V`.
 
 **Lesson.** Cache-first service workers are great in production and **hostile during development**.
@@ -870,8 +871,8 @@ Several previously-flagged items were addressed and **verified against the curre
   "install" references are the unrelated service-worker `install` event in `sw.js`.
 - **Unused globals removed.** `markerLayer`, `gpsLayer`, and the `MI` constant no longer exist in
   `app.js`. (The `FT` constant is **retained** — it is still used for the imperial⇄metric unit
-  conversions in `fmtGain`, `renderSheetBody`, and `fmtElevRange`; distance conversion uses an inline
-  `* 1.609344`.)
+  conversions in `fmtGain`, `renderSheetBody`, and `fmtElevRange`; distance conversion uses the
+  named constant `MI_PER_KM` (`= 1.609344`).)
 - **`mobile-web-app-capable` added.** `index.html` now declares
   `<meta name="mobile-web-app-capable" content="yes">` alongside the existing
   `<meta name="apple-mobile-web-app-capable" content="yes">`.
@@ -880,11 +881,12 @@ Several previously-flagged items were addressed and **verified against the curre
   modal** and **no per-card offline badge**, and `app.js` has **no per-slug `cacheStatus` map** (one
   `dlState` instead).
 - **Dead download/modal i18n strings removed.** The dynamic download descriptions/progress strings
-  are **gone** from `i18n.js`; `fn` is now an empty `{ en:{}, ja:{} }` scaffold (ADR-8). The current
+  are **gone** from `i18n.js`; `fn` now holds just `planParty` after the download strings were
+  removed (ADR-8). The current
   download UI uses static `dlAll` / `dlAllDone` / `dlAllAria` keys plus a bare percentage. New
   per-source attribution keys `attribTrail` / `attribUsgs` / `attribGsi` were added in both
   languages.
-- **`sw.js` cache bumped to `wa-trails-app-v9`.** `TRAIL_ASSETS` now precaches **ten** GPX files and
+- **`sw.js` cache bumped to `wa-trails-app-v11`.** `TRAIL_ASSETS` now precaches **ten** GPX files and
   ten hero images (eight WA + two Japan), and the cache-first tile handler matches **both**
   `nationalmap.gov` and `cyberjapandata.gsi.go.jp` (ADR-9). `TILE_V` stays `wa-trails-tiles-v1` so
   downloaded tiles survive the shell bump (the cache-version-as-release-lever practice from Bug 3 is

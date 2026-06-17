@@ -1,7 +1,7 @@
 # Ume-chan's Trails 梅ちゃんのトレイル
 
-An offline-capable hiking PWA for iPhone. Browse 12 trails — 8 in Washington State (USA) and
-4 in Japan (Mt. Fuji and the Yamanashi mountains) — view topographic maps with GPX tracks, see
+An offline-capable hiking PWA for iPhone. Browse 10 trails — 8 in Washington State (USA) and
+2 in Japan (Mt. Fuji and the Yamanashi mountains) — view topographic maps with GPX tracks, see
 live GPS position, elevation profiles, and full trail details — all working offline once cached.
 The interface is **bilingual: Japanese by default, with a one-tap toggle to English**.
 
@@ -9,7 +9,7 @@ The interface is **bilingual: Japanese by default, with a one-tap toggle to Engl
 
 - **Bilingual UI (日本語 / English)** — Japanese by default; everything is translated,
   including trail descriptions, map labels, and units (km/m in JA, mi/ft in EN)
-- **12 curated trails** (8 USA + 4 Japan) with stats, descriptions, tips, and photos (data via AllTrails)
+- **10 curated trails** (8 USA + 2 Japan) with stats, descriptions, tips, and photos (data via AllTrails)
 - **Topographic maps** — USGS National Map for US trails, GSI 地理院タイル (Geospatial
   Information Authority of Japan) for Japan trails, with the route, waypoints, and trailhead
 - **Live GPS** — your location plotted on the map and the elevation profile
@@ -36,7 +36,7 @@ Deployable to GitHub Pages as-is.
 - `index.html` — app shell (list + detail screens)
 - `app.js` — i18n, routing, map (per-trail tile source), GPX parsing, GPS, elevation, global tile download
 - `i18n.js` — UI strings, unit formatting, and per-trail Japanese translations
-- `app.css` — dark, mobile-first, responsive styles
+- `app.css` — light "paper", mobile-first, responsive styles
 - `trails.js` — trail metadata (English base content)
 - `gpx/` — GPX tracks · `images/` — hero photos
 - `sw.js` — service worker (offline caching)

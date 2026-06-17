@@ -17,14 +17,14 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | **Service workers** | Supported in Safari tabs + Home-Screen PWAs since iOS 11.1. **Not** available in WKWebView / in-app browsers. | Registers `./sw.js` (classic SW) on `load`. Offline breaks inside in-app browsers — **recommend "Open in Safari"** (GAP: not detected/surfaced in-app). |
 | **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** via a single global **"Save maps"** button — never background prefetch. |
 | **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
-| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v9`) and map tiles (`wa-trails-tiles-v1`, holding both USGS + GSI tiles). No IndexedDB. |
+| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v11`) and map tiles (`wa-trails-tiles-v1`, holding both USGS + GSI tiles). No IndexedDB. |
 | **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded. | GPS only works screen-on, foreground. App re-acquires Wake Lock on `visibilitychange`. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
 | **`navigator.wakeLock` (standalone)** | Broken in standalone on iOS 16.4–18.3; works in standalone only from **18.4+**. | Calls `wakeLock.request('screen')`, re-acquires on visibility change. **GAP: no video-loop fallback.** Advise raising Auto-Lock. |
 | **`beforeinstallprompt`** | **Never fires** on iOS. | Installation is left to the user (Safari **Share → Add to Home Screen**); the app shows **no in-app install banner or prompt** and performs **no standalone detection**. |
 | **7-day storage eviction** | iOS evicts **all** script-writable storage after 7 days of no interaction. `persist()` does **not** help. | `refreshCacheStatus()` re-checks a sample tile for every trail on startup and sets the single download button to "saved" only if all are present. Affects `localStorage` too (e.g. the `lang` preference resets to JA default). **GAP: no auto re-prompt** when tiles are gone. |
 | **Manifest features** | `display:standalone` works; `fullscreen`/`minimal-ui` → standalone; `shortcuts`/`categories`/`screenshots` ignored; `id` needs iOS 17+. | Manifest uses `display:standalone` + `id:"/ume-trails"` and a Japanese `name`. Relies on Apple meta tags for capability; ships **both** `mobile-web-app-capable` and `apple-mobile-web-app-capable`. |
-| **Splash screen** | Auto-generated from `background_color` + icon; no manifest control. | Sets `background_color:#0f172a`; accepts the auto splash. |
+| **Splash screen** | Auto-generated from `background_color` + icon; no manifest control. | Sets `background_color:#f4f6f3`; accepts the auto splash. |
 | **`navigator.connection`** | Network Information API unsupported. | App relies on cache-first SW + `navigator.onLine` semantics (see Other quirks). |
 | **Input font-size < 16px** | iOS auto-zooms the page on focus of < 16px controls. | App has **no text inputs**, so the trap is effectively N/A — see note. |
 | **Notch / home indicator** | Needs `viewport-fit=cover` + `env(safe-area-inset-*)`. | Both present: `viewport-fit=cover` in `index.html`, `--safe-*` vars in `app.css`. |
@@ -72,13 +72,13 @@ The app uses the Cache API for **everything** persistent and uses **no IndexedDB
 
 | Cache name (constant) | Contents | Population strategy |
 |---|---|---|
-| **`wa-trails-app-v9`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
+| **`wa-trails-app-v11`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
 | **`wa-trails-tiles-v1`** (`TILE_V` in `sw.js`, `TILE_CACHE` in `app.js`) | Map tiles — USGS topo (US trails) **and** GSI 地理院タイル (Japan trails) | Filled cache-first on `fetch`, and bulk-filled by the user-initiated "Save maps" download. |
 
 `sw.js` declarations:
 
 ```js
-const APP_V  = 'wa-trails-app-v9';
+const APP_V  = 'wa-trails-app-v11';
 const TILE_V = 'wa-trails-tiles-v1';
 ```
 
@@ -128,7 +128,7 @@ await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.dele
   ```js
   function onPosErr(err){
     if (err.code === 1){   // PERMISSION_DENIED
-      alert('Location access denied. Enable it in Settings → Privacy → Location Services → Safari.');
+      alert(t('alertDenied'));   // localized message (JA/EN) via the i18n table
       stopGPS();
     }
   }
@@ -260,8 +260,8 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#f4f6f3",
+  "theme_color": "#f4f6f3",
   "orientation": "any",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
@@ -274,7 +274,7 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
 - `id:"/ume-trails"` → used on iOS 17+, harmlessly ignored earlier.
 - `name`/`short_name` are Japanese (`梅ちゃんのトレイル` / `梅ちゃん`) — iOS uses these for the install sheet / app identity; the Home-Screen icon label itself comes from `apple-mobile-web-app-title` (below).
 - No `shortcuts`/`categories`/`screenshots` are declared (they'd be ignored anyway).
-- `background_color:#0f172a` is what iOS uses to paint the **auto-generated splash**.
+- `background_color:#f4f6f3` is what iOS uses to paint the **auto-generated splash**.
 
 **Apple-specific meta/link tags present in `index.html`** (these do the heavy lifting on iOS):
 
@@ -282,10 +282,10 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
 |---|---|---|
 | `<meta name="mobile-web-app-capable">` | `yes` | **Standard** (spec) capability tag; silences the Safari deprecation warning and aligns with the cross-browser spec. |
 | `<meta name="apple-mobile-web-app-capable">` | `yes` | Apple-legacy form, kept for older iOS. Launch in standalone (no Safari chrome) when added to Home Screen. |
-| `<meta name="apple-mobile-web-app-status-bar-style">` | `black-translucent` | Status bar style; **translucent → content draws under the status bar**, which is why safe-area insets matter (below). |
+| `<meta name="apple-mobile-web-app-status-bar-style">` | `default` | Status bar style; **`default` → opaque status bar, content sits below it** (not drawn under). Safe-area insets still matter because of `viewport-fit=cover` (notch / home indicator), see below. |
 | `<meta name="apple-mobile-web-app-title">` | `梅ちゃんのトレイル` | Home-Screen icon label. |
 | `<link rel="apple-touch-icon">` | `icon-180.png` | Home-Screen icon (180×180 PNG; iOS does not reliably honor SVG here). |
-| `<meta name="theme-color">` | `#0f172a` | UI tinting (also a standard tag). |
+| `<meta name="theme-color">` | `#f4f6f3` | UI tinting (also a standard tag). |
 | `<link rel="manifest">` | `manifest.json` | Standard manifest link. |
 
 Exact source:
@@ -293,9 +293,9 @@ Exact source:
 ```html
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="梅ちゃんのトレイル">
-<meta name="theme-color" content="#0f172a">
+<meta name="theme-color" content="#f4f6f3">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
 ```
@@ -330,9 +330,9 @@ iOS Safari **auto-zooms the viewport** when the user focuses a form control whos
   **Recommendation:** if a search/filter **text input** is ever added, give it `font-size: 16px` (or larger) to prevent the zoom. Also note `maximum-scale=1` is set in the viewport (below), which suppresses pinch-zoom but is **not** a substitute for the 16px rule on inputs across all iOS versions.
 
 ### Notch / Dynamic Island / home indicator (safe areas)
-Content can be obscured by the notch/Dynamic Island and the home indicator unless the page opts into the safe-area model. This is especially relevant here because `apple-mobile-web-app-status-bar-style` is `black-translucent`, so the web view draws **under** the status bar.
+Content can be obscured by the notch/Dynamic Island and the home indicator unless the page opts into the safe-area model. This is especially relevant here because the viewport uses `viewport-fit=cover`, so the layout extends into the notch / home-indicator regions.
 
-- **How this app handles it — confirmed in source.** The viewport opts in with **`viewport-fit=cover`**, and `app.css` defines safe-area **custom properties** that are applied throughout the layout (header padding, filter bar, FAB position, bottom sheet, modal, etc.).
+- **How this app handles it — confirmed in source.** The viewport opts in with **`viewport-fit=cover`**, and `app.css` defines safe-area **custom properties** that are applied throughout the layout (header padding, filter bar, FAB position, bottom sheet, etc.).
 
   `index.html`:
   ```html
