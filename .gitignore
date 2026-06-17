@@ -1,8 +1,9 @@
-# Source material (large — not deployed)
-# alltrails/
-
 # OS / editor cruft
 .DS_Store
+
+# Saved AllTrails page captures — kept locally, NOT committed: they embed
+# third-party secret tokens (e.g. a Mapbox access token) that GitHub push
+# protection blocks. The .html / .gpx exports under alltrails/ ARE committed.
 *.webarchive
 
 # Server logs

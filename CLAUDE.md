@@ -28,29 +28,26 @@ is fully translated.
 1. **Never add a build step or framework.** The whole design depends on being a static,
    zero-tooling site that deploys to GitHub Pages and caches cleanly offline. If you think
    you need React/Vite/TypeScript/npm — you don't. Match the existing vanilla style.
-2. **Never commit the `alltrails/` folder.** It's ~166 MB of saved AllTrails source pages
-   (`.html`/`.webarchive`/`.gpx`) and is git-ignored. Only the ~3.5 MB app deploys.
-   GitHub Pages has a **hard 100 MB per-file** and soft 1 GB repo limit.
-3. **The service worker will serve you stale code during development.** After editing
+2. **The service worker will serve you stale code during development.** After editing
    `app.js`/`app.css`/`index.html`/`i18n.js`, a plain reload shows the OLD cached version.
    You must clear the SW + caches (see Development below). This bites every time.
-4. **Don't shadow Leaflet's global `L`.** A localization helper was once named `L()` and it
+3. **Don't shadow Leaflet's global `L`.** A localization helper was once named `L()` and it
    silently overwrote Leaflet's `window.L`, breaking the map (`L.polyline is not a function`).
    The helper is now `loc()`. Keep `L` reserved for Leaflet.
-5. **Don't "fix" the elevation-gain stat to use the GPX file.** The displayed gain comes
+4. **Don't "fix" the elevation-gain stat to use the GPX file.** The displayed gain comes
    from AllTrails' DEM-based number on purpose; raw GPX elevation over-counts ~50–60% due
    to GPS noise. See `docs/DATA-PIPELINE.md` and ADR-4 in `docs/DECISIONS-AND-LESSONS.md`.
-6. **Keep both languages complete.** Any new user-facing string must be added to `i18n.js`
+5. **Keep both languages complete.** Any new user-facing string must be added to `i18n.js`
    for **both** `en` and `ja`. Any new trail needs a Japanese block in `I18N.trails`. See
    `docs/I18N.md`.
-7. **Verify changes in a real browser, including offline and in both languages.** There are
+6. **Verify changes in a real browser, including offline and in both languages.** There are
    no automated tests. Stop the dev server and reload to prove offline still works.
-8. **Pick the basemap by region; never hardcode one tile URL.** US trails use USGS topo,
+7. **Pick the basemap by region; never hardcode one tile URL.** US trails use USGS topo,
    Japan trails use GSI 地理院タイル — selected per trail via the `tiles` field and the
    `TILE_SOURCES` map in `app.js`. USGS templates are `{z}/{y}/{x}`, GSI is `{z}/{x}/{y}`; the
    tile math substitutes tokens by name, so keep the right order in each template. Any new tile
    host must also be added to the cache-first branch in `sw.js`.
-9. **One global "download all maps" button — don't reintroduce per-trail downloads.** Offline
+8. **One global "download all maps" button — don't reintroduce per-trail downloads.** Offline
    tiles are fetched by the single `#dl-all` button (next to the language toggle), which caches
    every trail across both sources. The old per-trail download button, the download modal, and
    the per-card offline ✓ badge were deliberately removed; the button's own idle / percent /
@@ -69,7 +66,7 @@ is fully translated.
 | `manifest.json`, `icon-{180,192,512}.png` | PWA install metadata + Home-Screen icon (cropped from the Enchantments photo) |
 | `gpx/` | 10 GPX tracks (committed, parsed at runtime) |
 | `images/` | 10 WebP hero photos (1200×800) |
-| `alltrails/` | **git-ignored** raw source pages used to build the data |
+| `alltrails/` | Raw AllTrails source. The `.html` + `.gpx` exports (~8 MB) are committed for provenance; the heavy `.webarchive` captures are kept locally but **git-ignored** (they embed third-party secret tokens). Neither is referenced or served by the app |
 | `docs/` | Full documentation suite (see below) |
 
 ## Architecture in one breath
@@ -125,7 +122,7 @@ Paste into the DevTools console:
 ```
 
 (Or DevTools → Application → Storage → **Clear site data**.) To ship an update to returning
-users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v7`) — the `activate` handler purges
+users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v9`) — the `activate` handler purges
 old caches. Reset language during testing with `localStorage.removeItem('lang')`.
 
 ## Adding a trail (short version)
@@ -148,6 +145,12 @@ Full sourcing/extraction process is in `docs/DATA-PIPELINE.md`; translation conv
 
 Push to `main`; GitHub Pages serves the repo root. Pages must be enabled in repo
 Settings → Pages (branch `main`, root `/`). `.nojekyll` disables Jekyll.
+
+Mind GitHub's limits **and secret-scanning push protection**: a **hard 100 MB per-file** cap
+(a larger file makes `git push` fail) and a soft 1 GB repo limit. The committed `alltrails/`
+source (`.html` + `.gpx`, ~8 MB) keeps the whole repo around ~13 MB — well under both. The
+`.webarchive` captures are **git-ignored**: they're large and embed third-party secret tokens
+(a Mapbox token) that push protection rejects, so they must not be committed.
 
 ## Key iOS PWA constraints (why the app is shaped this way)
 
