@@ -749,26 +749,31 @@ view back; tapping the FAB again re-engages follow (the second branch of `toggle
 A second floating action button, `#btn-track` (`.map-fab.track`, `index.html:76`), starts a
 **live trail-progress** session: each GPS fix is snapped to the trail, the walked portion fills
 green over the red base, and a `#track-hud` banner (`index.html:79`) shows percent + elapsed time.
-Its click is bound to `toggleTrack` in `bindGlobal()` (`app.js:243`); the HUD's ✕ button
-(`#th-close`) is bound to `stopTracking` (`app.js:244`).
+Its click is bound to `toggleTrack` in `bindGlobal()` (`app.js:257`); the HUD's ✕ button
+(`#th-close`) is bound to `endTracking` (`app.js:258`), which forgets any saved session (below)
+before stopping.
 
 ### Start / pause / stop
 
-- **`toggleTrack()`** (`app.js:741`): if not tracking, `startTracking()`; otherwise it toggles
+- **`toggleTrack()`** (`app.js:761`): if not tracking, `startTracking()`; otherwise it toggles
   **pause/resume**, banking elapsed time on pause (`trackElapsedMs += now - trackStartTs`) and
-  resuming the clock from now.
-- **`startTracking()`** (`app.js:748`): resets progress (`walkedDist=0`, `progIdx=-1`), removes
-  any old `walkedLayer`, shows the HUD, starts GPS if it isn't already running (tracking needs
-  live fixes), and starts a 1 s `hudTimer` so the elapsed clock ticks even without new fixes.
-- **`stopTracking()`** (`app.js:760`): ends the session — hides the HUD, removes the green
-  overlay, resets progress and elapsed — but **leaves GPS as-is** so the location dot can stay on.
-  It's also called by `showList()`/`openDetail()` to reset per-trail.
-- **`updateTrackBtn()`** (`app.js:768`) toggles the `.tracking` class and swaps the PLAY/PAUSE
+  resuming the clock from now (reopening GPS if it had been closed). Persists the session either way.
+- **`startTracking()`** (`app.js:769`): resets progress (`walkedDist=0`, `progIdx=-1`,
+  `reacqMiss=0`), removes any old `walkedLayer`, shows the HUD, starts GPS if it isn't already
+  running (tracking needs live fixes), starts a 1 s `hudTimer` so the elapsed clock ticks even
+  without new fixes, and writes the first `persistSession()` snapshot.
+- **`stopTracking()`** (`app.js:784`): resets the **in-memory** session — hides the HUD, removes
+  the green overlay, zeroes progress/elapsed — but **leaves GPS as-is** (the location dot can stay
+  on) **and leaves the saved session in `localStorage` intact**, so reopening the trail can still
+  offer a resume. It's called by `showList()`/`openDetail()` to reset per-trail.
+- **`endTracking()`** (`app.js:793`) = `clearSession()` + `stopTracking()`: the **explicit** end
+  (HUD ✕), which also forgets the saved session.
+- **`updateTrackBtn()`** (`app.js:794`) toggles the `.tracking` class and swaps the PLAY/PAUSE
   icon + aria-label.
 
 ### Snapping a fix to the trail — `updateProgress()`
 
-`updateProgress(lat,lon,accuracy)` (`app.js:790`), fed from `onPos` (§10), snaps each fix to a
+`updateProgress(lat,lon,accuracy)` (`app.js:816`), fed from `onPos` (§10), snaps each fix to a
 track vertex and advances the walked distance:
 
 - **Off-trail gate.** `offTrailGate(acc)` (`app.js:778`) = `max(25, min(60, 2.5*acc))` m — fixes
@@ -781,6 +786,13 @@ track vertex and advances the walked distance:
   `[progIdx - SNAP_BACK_M, progIdx + SNAP_FWD_M]` (constants `SNAP_BACK_M=80`, `SNAP_FWD_M=250` m,
   `app.js:58-59`) — so the return leg of an out-and-back (which overlaps the outbound) can't match
   the wrong leg.
+- **Stale-window re-acquire.** A frozen window can never reach a far-off fix — pocket the phone at
+  the trailhead, pull it out at the summit, and every fix lands kilometres past the window and is
+  rejected, stranding progress near the last snap. After **`REACQUIRE_AFTER` = 3** (`app.js:64`)
+  consecutive out-of-window rejections (counted in `reacqMiss`), `updateProgress` falls back to
+  `acquireIdx()` for that fix, re-snapping from scratch so progress jumps to where you actually are.
+  Since `walkedDist` is monotonic and `acquireIdx` is smallest-distance-along, this only ever fills
+  *forward* on a curated route — it never un-colors.
 - **Monotonic advance.** `walkedDist` only ever grows; it recolors via `recolorProgress()`
   (`app.js:813`) — a green polyline (`C.green`) over the red base, built from `renderPts` with
   `.d ≤ walkedDist` plus an exact split vertex from `pointAtDistance(D)` — only when the
@@ -793,6 +805,35 @@ and elapsed time (`.th-num`, from `fmtElapsed(elapsedMs())`). **Out-and-back pro
 against the **far end** (`turnDist`, §8) so reaching the turnaround reads 100%; loops and
 point-to-point measure against the full `totalDist`. At 100% it shows a localized message
 (`trackTurnaround` for out-and-back, else `trackComplete`).
+
+### Surviving a reload — session persistence & resume
+
+iOS suspends and may **evict** a backgrounded PWA, so a long screen-off stretch (the phone
+pocketed on a climb) can reload the page mid-hike and lose the in-memory session. The session is
+therefore mirrored to `localStorage` under **`SESSION_KEY`** (`app.js:114`):
+
+- **`persistSession()`** (`app.js:876`) writes `{slug, walkedDist, progIdx, trackStartTs,
+  trackElapsedMs, paused, savedAt}` on **every accepted fix** (end of `updateProgress`), on
+  pause/resume, on `startTracking`, and on **`visibilitychange → hidden`** (the last capturing
+  state just before iOS suspends us). `trackStartTs` is an **absolute** `Date.now()`, so a restored
+  running clock keeps counting *through* the gap.
+- **`maybeOfferResume(trail)`** (`app.js:893`), called at the end of `openDetail()` after the track
+  loads, reads the saved record and — if it's **this** trail's, **fresh** (`savedAt` within
+  `SESSION_MAX_AGE_MS` = 18 h, `app.js:115`), and **non-trivial** (`savedElapsedMs ≥ 60 s`) — shows
+  the **`#track-resume`** prompt (a sibling banner of the HUD in `index.html`), rendered by
+  `renderResumePrompt()` (`app.js:902`) with the saved percent + elapsed and re-localized live by
+  `setLang()`.
+- **`resumeSession(s)`** (`app.js:915`) restores `walkedDist`/`progIdx`/`paused`, redraws the green
+  overlay, reopens GPS, restarts the HUD timer, and re-stamps the session. Bound to the prompt's
+  **Resume**; **Dismiss** calls `clearSession()`. Because the windowed snap resumes from the
+  restored `progIdx`, the **stale-window re-acquire** (above) snaps you to your real position within
+  a few fixes.
+
+This does **not** add background tracking (impossible on iOS web — see `IOS-PWA-GUIDE.md`): no GPS
+fixes are captured while the screen is off, and no breadcrumb path is recorded. It makes the
+*session* — the progress high-water mark and the elapsed clock — survive the gap, so reopening at
+the summit shows the right elapsed time and (after the re-acquire) progress to where you stand,
+measured against the known GPX rather than a recorded track.
 
 ---
 
@@ -968,8 +1009,8 @@ these directly and re-render by rewriting `innerHTML`.
 | `renderPts` | `app.js:90` | Downsampled track points (with cumulative `.d`) for the polyline, reused by the green walked overlay (§10a). |
 | `turnIdx` / `turnDist` / `isOutAndBack` | `app.js:93` | Far-end (turnaround) index/distance and out-and-back flag, used by live-tracking progress (§8, §10a). |
 | scrub state | `app.js:96` | `scrubbing`, `scrubMk`, `scrubRAF`, `scrubX`, `scrubRect`, `scrubCardRect` — elevation-scrub gesture state (§9). |
-| tracking state | `app.js:99-102` | `tracking`/`paused`, `trackStartTs`/`trackElapsedMs`/`hudTimer`, `walkedDist`/`progIdx`, `walkedLayer` — live trail-progress session (§10a). |
-| `lang` | `app.js:110` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
+| tracking state | `app.js:104-115` | `tracking`/`paused`, `trackStartTs`/`trackElapsedMs`/`hudTimer`, `walkedDist`/`progIdx`, `walkedLayer`, `reacqMiss` (consecutive off-window fixes → re-acquire), `pendingResume` (saved session offered for resume), plus `SESSION_KEY`/`SESSION_MAX_AGE_MS` — the live trail-progress session, mirrored to `localStorage` so it survives a reload (§10a). |
+| `lang` | `app.js:123` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
 | `listFilter` | `app.js:188` | Active difficulty filter (`'all'` or a `diffKey`). |
 | `listSort` | `app.js:188` | Active sort (`'dist'`, `'gain'`, or `null`). |
 | `peekH` | `app.js:849` | Cached bottom-sheet peek height in px (computed by `computePeekH()`, §11). |

@@ -57,6 +57,11 @@ const ICON_PAUSE = '<svg class="ic" viewBox="0 0 24 24" fill="currentColor" aria
 // return leg (which overlaps the outbound leg) can't match the wrong leg.
 const SNAP_FWD_M  = 250;   // how far ahead along the track to search (≈ one fix's travel)
 const SNAP_BACK_M = 80;    // small backward slack for GPS jitter
+// If this many consecutive fixes land outside that forward window, the window has gone stale
+// (e.g. you pocketed the phone at the trailhead and pulled it out at the summit — a frozen
+// window can never reach a far-off fix). Abandon it and re-acquire from scratch via acquireIdx,
+// so progress jumps to where you actually are instead of staying stranded near the last snap.
+const REACQUIRE_AFTER = 3;
 
 // Map tile sources. Each trail picks one via its `tiles` field (default = usgs).
 // US trails use USGS topo ({z}/{y}/{x}); Japan trails use GSI 地理院タイル ({z}/{x}/{y}).
@@ -100,6 +105,14 @@ let tracking = false, paused = false;
 let trackStartTs = 0, trackElapsedMs = 0, hudTimer = null;
 let walkedDist = 0, progIdx = -1;   // monotonic distance-along reached (m); last snapped vertex
 let walkedLayer = null;             // green polyline drawn over the red base track
+let reacqMiss = 0;                  // consecutive off-window fixes (triggers a full re-acquire)
+let pendingResume = null;           // a saved session offered for resume on the current trail
+
+// A tracking session is mirrored to localStorage so it survives a page reload / iOS tab eviction
+// (progress + an absolute start timestamp, so the elapsed clock keeps counting across the gap).
+// Reopening the trail offers to restore it. Only the HUD ✕ (endTracking) forgets it.
+const SESSION_KEY = 'trackSession';
+const SESSION_MAX_AGE_MS = 18 * 3600 * 1000;   // discard a saved session older than this (stale)
 
 const $  = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
@@ -155,6 +168,7 @@ function setLang(next) {
     renderSheetBody(curTrail);
     redrawTrailLabels();
     updateTrackBtn(); updateHUD();   // re-localize the tracking button + HUD message
+    if(pendingResume) renderResumePrompt();
     syncGpsCursor();
   }
 }
@@ -241,7 +255,9 @@ function bindGlobal() {
   $('#btn-back').addEventListener('click', () => { location.hash = ''; });
   $('#btn-gps').addEventListener('click', toggleGPS);
   $('#btn-track').addEventListener('click', toggleTrack);
-  $('#th-close').addEventListener('click', stopTracking);
+  $('#th-close').addEventListener('click', endTracking);
+  $('#tr-resume').addEventListener('click', () => { const s=pendingResume; hideResumePrompt(); if(s) resumeSession(s); });
+  $('#tr-dismiss').addEventListener('click', () => { clearSession(); hideResumePrompt(); });
   $('#dl-all').addEventListener('click', downloadAll);
 
   initSheetDrag();
@@ -252,7 +268,7 @@ function showList() {
   $('#detail').hidden = true;
   $('#list').hidden = false;
   if (gpsWatch !== null) stopGPS();
-  stopTracking();
+  stopTracking(); hideResumePrompt();
   scrubbing = false; clearScrub();
   curTrail = null;
 }
@@ -262,7 +278,7 @@ function showList() {
 // ════════════════════════════════════════════════════════════
 async function openDetail(trail) {
   curTrail = trail;
-  stopTracking(); scrubbing = false;     // fresh per-trail tracking/scrub state
+  stopTracking(); hideResumePrompt(); scrubbing = false;   // fresh per-trail tracking/scrub state
   $('#list').hidden = true;
   $('#detail').hidden = false;
   $('#detail-title').textContent = loc(trail).name;
@@ -272,6 +288,7 @@ async function openDetail(trail) {
   setSheet('peek');
   initMap();
   await loadTrail(trail);
+  maybeOfferResume(trail);    // a saved session for this trail (survived a reload) can be resumed
 }
 
 function renderPeek(trail) {
@@ -425,7 +442,7 @@ function initMap() {
 
 async function loadTrail(trail) {
   trackPts = []; trackWpts = []; totalDist = 0;
-  renderPts = []; walkedDist = 0; progIdx = -1;
+  renderPts = []; walkedDist = 0; progIdx = -1; reacqMiss = 0;
   let text;
   try { text = await (await fetch(trail.gpx)).text(); }
   catch(e) { console.error('GPX load failed', e); return; }
@@ -728,7 +745,10 @@ function onPosErr(err){ if(err.code===1){ alert(t('alertDenied')); stopGPS(); } 
 
 async function reqWake(){ if('wakeLock'in navigator){try{wakeLock=await navigator.wakeLock.request('screen');}catch(_){}}}
 async function relWake(){ if(wakeLock){try{await wakeLock.release();}catch(_){}wakeLock=null;} }
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden && gpsWatch!==null && !wakeLock) reqWake(); });
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){ persistSession(); return; }   // snapshot session state before iOS suspends us
+  if(gpsWatch!==null && !wakeLock) reqWake();
+});
 
 // ════════════════════════════════════════════════════════════
 //  Live trail progress
@@ -742,29 +762,35 @@ function toggleTrack(){
   if(!tracking){ startTracking(); return; }
   paused=!paused;
   if(paused) trackElapsedMs+=Date.now()-trackStartTs;   // bank elapsed, freeze the clock
-  else       trackStartTs=Date.now();                   // resume from now
+  else { trackStartTs=Date.now(); if(gpsWatch===null) startGPS(); }   // resume from now; ensure fixes
   updateTrackBtn(); updateHUD();
+  persistSession();
 }
 function startTracking(){
   if(!navigator.geolocation){ alert(t('alertNoGeo')); return; }
+  hideResumePrompt();                      // starting fresh overrides any offered resume
   tracking=true; paused=false;
   trackStartTs=Date.now(); trackElapsedMs=0;
-  walkedDist=0; progIdx=-1;
+  walkedDist=0; progIdx=-1; reacqMiss=0;
   if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; }
   $('#track-hud').hidden=false;
   if(gpsWatch===null) startGPS();          // tracking needs live fixes
   clearInterval(hudTimer); hudTimer=setInterval(updateHUD,1000);
   updateTrackBtn(); updateHUD();
+  persistSession();
 }
-// End the session entirely (HUD ✕). Leaves GPS as-is so the location dot can stay on.
+// Reset the in-memory session (used on navigation / trail-switch). Leaves the saved session in
+// localStorage intact so reopening the trail can still offer a resume; only endTracking() forgets it.
 function stopTracking(){
-  tracking=false; paused=false;
+  tracking=false; paused=false; reacqMiss=0;
   clearInterval(hudTimer); hudTimer=null;
   const hud=$('#track-hud'); if(hud) hud.hidden=true;
   if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; }
   walkedDist=0; progIdx=-1; trackElapsedMs=0;
   updateTrackBtn();
 }
+// Explicit end (HUD ✕): forget the saved session, then stop.
+function endTracking(){ clearSession(); stopTracking(); }
 function updateTrackBtn(){
   const b=$('#btn-track'); if(!b) return;
   const live = tracking && !paused;
@@ -791,19 +817,22 @@ function updateProgress(lat,lon,accuracy){
   const n=trackPts.length; if(n<2) return;
   const gate=offTrailGate(accuracy);
   let r;
-  if(progIdx<0){ r=acquireIdx(lat,lon,gate); }      // first fix: whole-track, smallest-d match
-  else {
+  if(progIdx<0 || reacqMiss>=REACQUIRE_AFTER){      // first fix, OR the window went stale (repeated
+    r=acquireIdx(lat,lon,gate);                     // misses): re-acquire whole-track, smallest-d
+  } else {
     const avg=totalDist/(n-1)||1;                   // forward window around the last snap
     const from=Math.max(0, progIdx-Math.ceil(SNAP_BACK_M/avg));
     const to  =Math.min(n-1, progIdx+Math.ceil(SNAP_FWD_M/avg));
     r=nearestIdx(lat,lon,from,to);
   }
-  if(r.dist>gate) return;                           // off-trail: hold progress
+  if(r.dist>gate){ reacqMiss++; return; }           // off-trail/out-of-window: hold, count the miss
+  reacqMiss=0;
   progIdx=r.idx;
   // Only recolor when the high-water mark actually advances (walkedDist is monotonic), so a
   // stationary or backward-jittering fix doesn't rebuild the polyline for an identical line.
   if(trackPts[r.idx].d>walkedDist){ walkedDist=trackPts[r.idx].d; recolorProgress(); }
   updateHUD();
+  persistSession();                                 // mirror progress so a reload can resume
 }
 
 // Green overlay over the red base track, covering everything walked (cumulative distance
@@ -837,6 +866,62 @@ function updateHUD(){
   $('.th-num').textContent = fmtElapsed(elapsedMs());
   const msg=$('.th-msg'), m = pct>=100 ? t(isOutAndBack ? 'trackTurnaround' : 'trackComplete') : '';
   msg.textContent=m; msg.hidden=!m;
+}
+
+// ── Session persistence + resume ──
+// iOS suspends/evicts a backgrounded PWA, so a hike's progress can vanish mid-walk (the phone
+// pocketed on a long climb). We mirror the live session to localStorage on every accepted fix and
+// whenever the page is hidden; reopening the trail offers to restore it. The start timestamp is
+// absolute, so the elapsed clock keeps counting across the gap when resumed.
+function persistSession(){
+  if(!tracking || !curTrail) return;
+  try{
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      slug:curTrail.slug, walkedDist, progIdx,
+      trackStartTs, trackElapsedMs, paused, savedAt:Date.now(),
+    }));
+  }catch(_){}
+}
+function readSession(){ try{ return JSON.parse(localStorage.getItem(SESSION_KEY)||'null'); }catch(_){ return null; } }
+function clearSession(){ try{ localStorage.removeItem(SESSION_KEY); }catch(_){} }
+
+// Elapsed for a saved session, computed live (running → keeps counting wall-clock since its
+// absolute start; paused → frozen at its banked total) — same rule as elapsedMs().
+function savedElapsedMs(s){ return s.trackElapsedMs + (s.paused ? 0 : Date.now()-s.trackStartTs); }
+
+// On opening a trail, offer to resume a saved session for it (unless it's gone stale/trivial).
+function maybeOfferResume(trail){
+  const s=readSession();
+  if(!s || s.slug!==trail.slug) return;                              // none, or it's another trail's
+  if(Date.now()-(s.savedAt||0) > SESSION_MAX_AGE_MS){ clearSession(); return; }   // too old
+  if(savedElapsedMs(s) < 60000) return;                             // trivially short — skip the offer
+  pendingResume=s;
+  renderResumePrompt();
+  $('#track-resume').hidden=false;
+}
+function renderResumePrompt(){
+  const s=pendingResume; if(!s) return;
+  const total = isOutAndBack ? turnDist : totalDist;
+  const pct = total>0 ? Math.min(100, Math.round(s.walkedDist/total*100)) : 0;
+  $('#tr-msg').textContent = `${t('trackResumeMsg')} · ${pct}% · ${fmtElapsed(savedElapsedMs(s))}`;
+  $('#tr-resume').textContent = t('trackResume');
+  $('#tr-dismiss').textContent = t('trackDismiss');
+}
+function hideResumePrompt(){ pendingResume=null; const el=$('#track-resume'); if(el) el.hidden=true; }
+
+// Restore a saved session: progress + the green overlay + the elapsed clock (which, thanks to the
+// absolute start timestamp, now includes the time the app was gone), then go live again. The next
+// few fixes re-acquire your real position via the windowed-snap miss counter.
+function resumeSession(s){
+  tracking=true; paused=!!s.paused;
+  trackStartTs=s.trackStartTs; trackElapsedMs=s.trackElapsedMs||0;
+  walkedDist=s.walkedDist||0; progIdx=(s.progIdx>=0)?s.progIdx:-1; reacqMiss=0;
+  $('#track-hud').hidden=false;
+  recolorProgress();
+  if(gpsWatch===null && !paused) startGPS();        // resume live fixes
+  clearInterval(hudTimer); hudTimer=setInterval(updateHUD,1000);
+  updateTrackBtn(); updateHUD();
+  persistSession();                                 // re-stamp savedAt now that we're live again
 }
 
 // ════════════════════════════════════════════════════════════

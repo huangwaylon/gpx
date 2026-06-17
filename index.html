@@ -91,6 +91,15 @@
       <div class="th-msg" hidden></div>
     </div>
 
+    <!-- Resume prompt — offered when a saved tracking session for this trail survived a reload -->
+    <div id="track-resume" hidden role="alertdialog" aria-labelledby="tr-msg">
+      <span class="tr-msg" id="tr-msg"></span>
+      <div class="tr-actions">
+        <button class="tr-dismiss" id="tr-dismiss" data-i18n="trackDismiss">破棄</button>
+        <button class="tr-resume" id="tr-resume" data-i18n="trackResume">再開</button>
+      </div>
+    </div>
+
     <div id="sheet">
       <div class="sheet-grip" id="grip"></div>
       <div id="sheet-peek">

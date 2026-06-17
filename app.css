@@ -224,6 +224,27 @@ img { display:block; }
 .th-msg { margin-top:8px; font-size:12.5px; font-weight:700; color:var(--blaze-d); text-align:center; }
 .th-msg[hidden] { display:none; }
 
+/* Resume prompt — same slim banner slot as the HUD, with a message + dismiss/resume actions */
+#track-resume {
+  position:absolute; z-index:560;
+  top:calc(52px + var(--safe-t) + 18px); left:50%; transform:translateX(-50%);
+  width:min(88vw, 344px);
+  background:rgba(255,255,255,0.94); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);
+  border:1px solid var(--line); border-radius:16px;
+  box-shadow:var(--sh-pop); padding:10px 11px 10px 14px;
+  display:flex; align-items:center; gap:10px;
+}
+#track-resume[hidden] { display:none; }
+.tr-msg { flex:1; min-width:0; font-size:13px; font-weight:700; color:var(--ink);
+  line-height:1.3; font-variant-numeric:tabular-nums; }
+.tr-actions { flex-shrink:0; display:flex; gap:7px; }
+.tr-actions button { height:32px; padding:0 13px; border-radius:999px;
+  font-size:13px; font-weight:700; cursor:pointer; border:1px solid var(--line);
+  transition:background .15s, transform .1s; }
+.tr-actions button:active { transform:scale(0.94); }
+.tr-dismiss { background:var(--surface-2); color:var(--muted); }
+.tr-resume { background:var(--pine); border-color:var(--pine); color:#fff; }
+
 /* Violet marker that follows the elevation scrub point (distinct from the blue GPS dot) */
 .scrub-dot { width:16px; height:16px; background:var(--scrub); border:3px solid #fff; border-radius:50%;
   box-shadow:0 1px 6px rgba(0,0,0,0.45); }
@@ -417,6 +438,6 @@ html[lang="ja"] .plan-date { font-weight:700; }
   .sheet-grip, #sheet-peek { display:none; }
   #sheet-body > * { max-width:none; }
   #map { right:min(360px,42%); }
-  /* keep the progress HUD centered over the (left) map area, not under the docked sheet */
-  #track-hud { left:calc((100% - min(360px,42%)) / 2); }
+  /* keep the progress HUD / resume prompt centered over the (left) map area, not under the docked sheet */
+  #track-hud, #track-resume { left:calc((100% - min(360px,42%)) / 2); }
 }

@@ -120,8 +120,18 @@ await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.dele
     onPos, onPosErr, { enableHighAccuracy:true, maximumAge:4000, timeout:30000 });
   ```
 
-  Because the watch dies when the screen sleeps, **the app cannot track you with the screen off.**
+  Because the watch dies when the screen sleeps, **no GPS is recorded while the screen is off, and
+  no breadcrumb path is ever stored** — live tracking is a screen-on tool. What the app *does*
+  rescue is the **session** itself: see *Live trail-progress survives a reload* below.
   **User guidance to document in-product:** *Keep your screen on while navigating; the blue dot stops updating when the phone sleeps.* (The app already tries to prevent sleep via Wake Lock — see next section — but Wake Lock itself is unreliable on older iOS, so the manual guidance still matters.)
+
+- **Live trail-progress survives a reload.** Even though fixes stop with the screen off, the
+  tracking *session* (the progress high-water mark + the elapsed clock) is mirrored to
+  `localStorage` on every accepted fix and on `visibilitychange → hidden`, with an **absolute**
+  start timestamp. If iOS reloads or evicts the PWA mid-hike, reopening the trail offers to
+  **resume**: the elapsed time is still correct (it counted through the gap), and after a few fixes
+  a **stale-window re-acquire** re-snaps your position and fills progress to where you stand —
+  measured against the known GPX, not a recorded track. See `ARCHITECTURE.md` §10a.
 
 - Instead of pre-checking permission (impossible on iOS), the app **reacts to the error**. `watchPosition`'s error callback inspects the standard `GeolocationPositionError` code; **code `1` is `PERMISSION_DENIED`**:
 

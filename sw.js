@@ -1,4 +1,4 @@
-const APP_V  = 'wa-trails-app-v11';
+const APP_V  = 'wa-trails-app-v12';
 const TILE_V = 'wa-trails-tiles-v1';
 
 const SHELL = [

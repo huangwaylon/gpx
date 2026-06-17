@@ -58,6 +58,9 @@ window.I18N = {
       trackTurnaround: "Turnaround reached — head back",
       trackComplete: "Trail complete!",
       scrubAria: "Drag to inspect elevation along the trail",
+      trackResumeMsg: "Resume tracking?",
+      trackResume: "Resume",
+      trackDismiss: "Dismiss",
     },
     ja: {
       appName: "梅ちゃんのトレイル",
@@ -110,6 +113,9 @@ window.I18N = {
       trackTurnaround: "折り返し地点に到達 — ここから下山",
       trackComplete: "踏破！",
       scrubAria: "ドラッグでコース上の標高を確認",
+      trackResumeMsg: "記録を再開しますか？",
+      trackResume: "再開",
+      trackDismiss: "破棄",
     },
   },
 

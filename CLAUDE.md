@@ -83,7 +83,11 @@ the trail with an elevation/distance readout; **live tracking** (`startTracking`
 → `recolorProgress`, toggled by the `#btn-track` FAB) snaps each GPS fix to the trail with a
 windowed-forward search, fills the walked portion green over the red base, and shows percent +
 elapsed in the `#track-hud` banner (out-and-back progress locks at the far end so the return leg
-doesn't un-color). Offline is three tiers: SW precache (shell+i18n+GPX+images) →
+doesn't un-color). The tracking session is **mirrored to `localStorage`** (with an absolute start
+time) so it survives an iOS reload/eviction mid-hike: reopening the trail offers a **resume** (the
+elapsed clock counted through the gap), and after a few rejected fixes a **stale-window re-acquire**
+re-snaps your position — built for the pocket-the-phone-then-check-at-the-summit pattern. Offline is
+three tiers: SW precache (shell+i18n+GPX+images) →
 cache-first tiles (both hosts) → a **single global "download all maps" button** (`downloadAll`)
 in the list header that pre-caches every trail's tiles across both sources. Full detail in
 `docs/ARCHITECTURE.md`.
