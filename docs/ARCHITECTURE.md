@@ -470,15 +470,19 @@ The two sources:
 | Key | Service | URL template | `maxZoom` | Leaflet attribution / credit key |
 |---|---|---|---|---|
 | `usgs` | USGS National Map "USGSTopo" (US trails) | `…/USGSTopo/MapServer/tile/{z}/{y}/{x}` | 16 | `© USGS` / `attribUsgs` |
-| `gsi` | GSI 地理院タイル (Geospatial Information Authority of Japan; Japan trails) | `https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png` | 16 | `地理院タイル © 国土地理院` / `attribGsi` |
+| `gsi` | GSI 地理院タイル (Geospatial Information Authority of Japan; Japan trails) | `https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png` | 18 | `地理院タイル © 国土地理院` / `attribGsi` |
 
 **Key token-order detail:** the USGS template is **`{z}/{y}/{x}`** (row/y **before** column/x,
 the ArcGIS convention), while the GSI template is **`{z}/{x}/{y}`** (x before y). Both are
 ordinary 256-px Web-Mercator (EPSG:3857) XYZ tiles, and the download/probe code substitutes
 tokens **by name** (`.replace('{z}',z).replace('{y}',y).replace('{x}',x)`, §12), so the *same*
-slippy-map tile math works unchanged for both despite the differing URL order. GSI tiles serve
-CORS-open (`Access-Control-Allow-Origin: *`) with native zoom z0–18; the app caps display at
-z16 and downloads z10–16. GSI's `std` layer labels are in Japanese.
+slippy-map tile math works unchanged for both despite the differing URL order. **The two sources
+top out at different native zooms, and each `maxZoom` matches its source's real ceiling:** the
+USGSTopo cache serves only through **z16** (z17+ return HTTP 404), whereas GSI's `std` layer
+serves to **z18**. Because the map layer is rebuilt per trail with `maxZoom: src.maxZoom`, US
+trails cap display at z16 and Japan trails zoom in to z18; downloads follow the same per-source
+ceiling (z10–16 for USGS, z10–18 for GSI). GSI tiles serve CORS-open
+(`Access-Control-Allow-Origin: *`); its `std` layer labels are in Japanese.
 
 ### Cache-first behavior
 
@@ -766,8 +770,9 @@ The download converts a lat/lon box to **XYZ tile ranges** at each zoom:
   `y = floor(n*(1 - ln(tan(φ) + sec(φ))/π)/2)` with `φ = lat·π/180`. Returns `{x, y}`.
 - **`tRange(b, z)`** (`app.js:509-510`) projects the SW and NE corners and returns the inclusive
   `{x0,x1,y0,y1}` tile range (min/max-ed so corner order doesn't matter).
-- **`DL_ZOOMS = [10,11,12,13,14,15,16]`** (`app.js:8`) — tiles are fetched for **zoom 10
-  through 16**.
+- **`DL_MIN_Z = 10`** (`app.js`) — the overview floor for downloads. Each trail caches from
+  z10 up to **its source's `maxZoom`**: **z10–16** for USGS, **z10–18** for GSI. The upper bound
+  is the source's real native ceiling, so no 404-ing tiles are requested.
 
 ### Per-trail bounding box — `gpxBox()`
 
@@ -776,20 +781,21 @@ SW precache, so it works offline too), parses it, and computes the min/max lat/l
 `<trkpt>` elements. If parsing yields no track points it **falls back** to `trail.center ±
 0.02°`. It returns the **raw** box; the surrounding context buffer is added later, per zoom,
 by `tileURLsFor()` via **`padFor(z)`** (`app.js`) — **0.05°** at z≤12, **0.03°** at z13–14,
-**0.015°** at z15–16. Padding is heaviest at overview zooms (where you pan to see surrounding
-terrain) and lightest near max detail, where tiny z16 tiles make a wide frame expensive for
-little benefit. This replaces
+**0.015°** at z15–16, **0.008°** at z17, **0.004°** at z18. Padding is heaviest at overview
+zooms (where you pan to see surrounding terrain) and progressively tighter toward max detail,
+since each extra zoom quadruples the tile count and you rarely pan far while reading z17–18
+detail right at your position. This replaces
 the old `trailBox()`/`countTiles()`/`tileURLs()` trio, which depended on the *currently open*
 trail's live `trackPts`; `gpxBox()` works for any trail without it being open.
 
 ### Expanding a box to URLs — `tileURLsFor()`
 
-**`tileURLsFor(box, urlTpl)`** (`app.js`) expands a box into every concrete tile URL
-across `DL_ZOOMS`, **expanding the box by `padFor(z)` for each zoom**, then substituting tokens
-**by name** into the given template
-(`urlTpl.replace('{z}',z).replace('{y}',y).replace('{x}',x)`). Because it substitutes by name,
+**`tileURLsFor(box, src)`** (`app.js`) expands a box into every concrete tile URL
+across **z10 up to `src.maxZoom`**, **expanding the box by `padFor(z)` for each zoom**, then
+substituting tokens **by name** into that source's template
+(`src.url.replace('{z}',z).replace('{y}',y).replace('{x}',x)`). Because it substitutes by name,
 the same routine builds both the USGS `{z}/{y}/{x}` and the GSI `{z}/{x}/{y}` URLs correctly
-(§7).
+(§7), each to its own zoom ceiling.
 
 ### Batched fetch into the Cache API — `downloadAll()`
 
@@ -798,8 +804,8 @@ the same routine builds both the USGS `{z}/{y}/{x}` and the GSI `{z}/{x}/{y}` UR
 1. Bail if already `busy` or `caches` is unavailable; set `dlState='busy'`, `updateDlBtn()`,
    and seed the progress bar (`updateDlProgress(0,1)`).
 2. **Gather every tile URL across all trails.** For each `trail` of `TRAILS`, `await
-   gpxBox(trail)` and push `tileURLsFor(box, trailSource(trail).url)` — i.e. each trail
-   contributes tiles from **its own** source URL (USGS or GSI). The combined list is then
+   gpxBox(trail)` and push `tileURLsFor(box, trailSource(trail))` — i.e. each trail
+   contributes tiles from **its own** source (USGS to z16 or GSI to z18). The combined list is then
    **deduped** with a `Set` (`app.js:549`), so tiles shared by overlapping trails are fetched
    once.
 3. Open the **`TILE_CACHE`** cache (`'wa-trails-tiles-v1'`, `app.js:7` / `app.js:551`) and
@@ -858,9 +864,9 @@ Two trivial DOM helpers are also defined globally: **`$`** (`querySelector`) and
 `trRoute` / `trDogs` / `trWpt` / `trSeason` and the unit formatters `fmtDist` / `fmtGain` /
 `fmtTime` / `fmtElevRange` are documented in §1a.
 
-Module-level **constants** (`app.js`): `TILE_CACHE` (`'wa-trails-tiles-v1'`), `DL_ZOOMS`,
-the zoom-aware padding helper `padFor(z)` (0.05° / 0.03° / 0.015°), `FT` (3.28084), and the
-per-trail basemap table **`TILE_SOURCES`** with its
+Module-level **constants** (`app.js`): `TILE_CACHE` (`'wa-trails-tiles-v1'`), `DL_MIN_Z` (10),
+the zoom-aware padding helper `padFor(z)` (0.05° / 0.03° / 0.015° / 0.008° / 0.004°), `FT`
+(3.28084), and the per-trail basemap table **`TILE_SOURCES`** with its
 resolver **`trailSource()`** (§7) — these replace the old single `TILE_URL` constant.
 
 ---
@@ -1015,8 +1021,8 @@ user taps ◎ (GPS)
 
 user taps "⬇ Save maps" (#dl-all, downloads ALL trails)
    └─► downloadAll()  ─► dlState='busy' ─► updateDlBtn()
-         └─► for each trail: gpxBox(t) ─► tileURLsFor(box, trailSource(t).url)
-             ─► dedupe (Set) over all trails/both sources, DL_ZOOMS[10..16]
+         └─► for each trail: gpxBox(t) ─► tileURLsFor(box, trailSource(t))
+             ─► dedupe (Set) over all trails/both sources, z10..src.maxZoom (USGS 16, GSI 18)
              ─► batched fetch(8) ─► caches.open('wa-trails-tiles-v1').put()
              ─► updateDlProgress(done,total) (NN% + --p fill)
              ─► dlState='done' ─► updateDlBtn() (green "✓ Maps saved")

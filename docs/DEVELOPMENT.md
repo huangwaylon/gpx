@@ -217,9 +217,10 @@ the codebase:
   (e.g. `renderList()`, `renderSheetBody()`), then wiring up event listeners
   afterward.
 - **Constants up top.** Tunables live as `const`s at the top of `app.js`:
-  `TILE_CACHE`, `DL_ZOOMS`, `padFor(z)`, `FT`, plus the `TILE_SOURCES` map (the two
-  basemaps — `usgs` and `gsi`) and the `trailSource(trail)` helper that picks one
-  per trail. Reuse them rather than hard-coding values.
+  `TILE_CACHE`, `DL_MIN_Z`, `padFor(z)`, `FT`, plus the `TILE_SOURCES` map (the two
+  basemaps — `usgs` at `maxZoom` 16, `gsi` at 18) and the `trailSource(trail)` helper that
+  picks one per trail; downloads run z10 up to each source's `maxZoom`. Reuse them rather than
+  hard-coding values.
 - **CSS custom properties** drive theming in `app.css` (`:root { --bg-0, --blue,
   --safe-t, … }`), including iOS safe-area insets. The design is dark,
   mobile-first, and responsive (portrait + landscape).

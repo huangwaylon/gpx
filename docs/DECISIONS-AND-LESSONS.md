@@ -331,8 +331,9 @@ A **three-tier** caching strategy:
 3. **Explicit per-trail tile download — user-initiated, foreground.** *(Superseded by ADR-10 — see
    below. Kept here for the three-tier structure.)*
    The user taps "Download map for offline." The app computes the trail's bounding box (from the
-   loaded track, falling back to a box around the trail center), enumerates tiles across
-   `DL_ZOOMS = [10..16]`, and fetches them in **batches of 8** into `TILE_CACHE`, showing live
+   loaded track, falling back to a box around the trail center), enumerates tiles from z10 up to
+   the source's `maxZoom` (z10–16 USGS, z10–18 GSI), and fetches them in **batches of 8** into
+   `TILE_CACHE`, showing live
    progress. Offline availability is later detected by sampling one center tile per trail at zoom 14
    (`refreshCacheStatus`), which drives the "✓ available offline" badges.
 
@@ -460,7 +461,7 @@ untouched. Both Japan trails set `tiles: "gsi"`, pointing at the official **GSI 
 ```js
 const TILE_SOURCES = {
   usgs: { url:'…/USGSTopo/MapServer/tile/{z}/{y}/{x}',                          maxZoom:16, leaflet:'© USGS',              creditKey:'attribUsgs' },
-  gsi:  { url:'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',       maxZoom:16, leaflet:'地理院タイル © 国土地理院', creditKey:'attribGsi' },
+  gsi:  { url:'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',       maxZoom:18, leaflet:'地理院タイル © 国土地理院', creditKey:'attribGsi' },
 };
 const trailSource = trail => TILE_SOURCES[trail.tiles] || TILE_SOURCES.usgs;
 ```
@@ -492,8 +493,14 @@ detail-screen attribution line.
   tokens **by name** (`.replace('{z}',z).replace('{y}',y).replace('{x}',x)`), so the identical
   Web-Mercator XYZ math drives both with **no branching** — see the lesson in Part 3. The one
   invariant to protect is the correct token *order inside each template*.
-- GSI's native raster goes to z18 (USGS to z16), but the app caps both at **`maxZoom:16`** and
-  downloads `z10–16`, so offline coverage matches what's actually displayable.
+- **Each source's `maxZoom` is set to its real native ceiling, not a shared cap.** The USGSTopo
+  cache stops at **z16** (z17+ return HTTP 404, confirmed by probing the live service), so US
+  trails keep `maxZoom:16`. GSI's `std` raster serves to **z18**, so the Japan trails set
+  `maxZoom:18` and zoom in two levels further for fine detail. Because `initMap` rebuilds the
+  layer per trail with `maxZoom: src.maxZoom`, display and download both follow the per-source
+  ceiling (downloads run z10 up to `src.maxZoom`); offline coverage still matches what's
+  displayable. *(The earlier shared `maxZoom:16` / `z10–16` cap was lifted for GSI — see the
+  edit history; USGS was already at its native max.)*
 - The service worker's cache-first tile handler now matches **both** hosts (ADR-7, tier 2).
 
 ---

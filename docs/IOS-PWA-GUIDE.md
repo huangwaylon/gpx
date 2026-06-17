@@ -429,26 +429,27 @@ This means simply **panning the map while online warms the cache** for free — 
 ### Tier 3 — User explicitly downloads every trail's tiles ("Save maps")
 A **single global** button in the list header — **"Save maps"** (`#dl-all`, sitting next to the language toggle) — pre-caches tiles for **all 10 trails across both tile sources** into `wa-trails-tiles-v1` in one tap. There is **no** per-trail download button or download modal anymore.
 
-`downloadAll()` walks every trail, computes each trail's bounding box from its (already-precached) GPX via `gpxBox()`, builds the full tile-URL list for that trail **using its own source template** across **zooms 10–16**, dedupes everything with a `Set`, then fetches in batches of 8 with inline progress:
+`downloadAll()` walks every trail, computes each trail's bounding box from its (already-precached) GPX via `gpxBox()`, builds the full tile-URL list for that trail **using its own source template** across **z10 up to that source's `maxZoom`** (USGS 16, GSI 18), dedupes everything with a `Set`, then fetches in batches of 8 with inline progress:
 
 ```js
-const DL_ZOOMS = [10, 11, 12, 13, 14, 15, 16];   // 7 zoom levels
-// Zoom-aware context buffer (degrees) added around each track per zoom: wider at
-// overview zooms, tighter near max detail (z16 tiles are tiny, so a wide frame is costly).
-const padFor = z => z <= 12 ? 0.05 : z <= 14 ? 0.03 : 0.015;
+const DL_MIN_Z = 10;   // overview floor; ceiling = each source's maxZoom (USGS 16, GSI 18)
+// Zoom-aware context buffer (degrees) added around each track per zoom: wider at overview
+// zooms, progressively tighter toward max detail (z17–18 tiles are tiny, so a wide frame is
+// costly and you rarely pan far when reading them).
+const padFor = z => z<=12 ? 0.05 : z<=14 ? 0.03 : z<=16 ? 0.015 : z===17 ? 0.008 : 0.004;
 
 // Raw bbox of one trail, parsed from its precached GPX (falls back to a small
 // box around trail.center if no track points parse). Padding is applied later, per zoom.
 async function gpxBox(trail){ /* …parse trkpt min/max lat/lon… */ }
 
-// Every tile URL for one box across DL_ZOOMS, built from that trail's URL template.
+// Every tile URL for one box across z10..src.maxZoom, built from that source's URL template.
 // Each zoom expands the box by its own padFor(z) before computing the tile range.
-function tileURLsFor(box, urlTpl){
+function tileURLsFor(box, src){
   const urls = [];
-  DL_ZOOMS.forEach(z => { const p = padFor(z);
+  for (let z=DL_MIN_Z; z<=src.maxZoom; z++){ const p = padFor(z);
     const r = tRange({ n:box.n+p, s:box.s-p, e:box.e+p, w:box.w-p }, z);
     for (let x=r.x0; x<=r.x1; x++) for (let y=r.y0; y<=r.y1; y++)
-      urls.push(urlTpl.replace('{z}',z).replace('{y}',y).replace('{x}',x)); });
+      urls.push(src.url.replace('{z}',z).replace('{y}',y).replace('{x}',x)); }
   return urls;
 }
 
@@ -458,7 +459,7 @@ async function downloadAll(){
   let urls = [];
   for (const trail of TRAILS){                       // every trail…
     const box = await gpxBox(trail);
-    urls.push(...tileURLsFor(box, trailSource(trail).url));   // …via its own source
+    urls.push(...tileURLsFor(box, trailSource(trail)));   // …via its own source
   }
   urls = [...new Set(urls)];                          // dedupe across trails
   const total = urls.length || 1; let done = 0;

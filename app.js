@@ -5,12 +5,15 @@
    ════════════════════════════════════════════════════════════ */
 
 const TILE_CACHE = 'wa-trails-tiles-v1';
-const DL_ZOOMS   = [10, 11, 12, 13, 14, 15, 16];
+// Offline pre-caching spans z10 (overview) up to each source's own maxZoom — USGS tops out at
+// z16 (its native ceiling; z17+ 404s), GSI serves to z18 — so Japan trails cache the extra
+// z17–18 detail while US trails stop where the USGS cache ends.
+const DL_MIN_Z   = 10;
 // Zoom-aware bbox padding (degrees, ~111 km per °) added around each track when caching
 // offline tiles. Generous at overview zooms — where you pan to take in the surrounding
-// terrain — and tighter near max detail, since z16 tiles are tiny and a wide z16 frame
-// costs a lot of tiles for context you rarely zoom that far in to read.
-const padFor = z => z <= 12 ? 0.05 : z <= 14 ? 0.03 : 0.015;
+// terrain — and progressively tighter toward max detail, since each extra zoom quadruples the
+// tile count and you rarely pan far while reading z17–18 detail right at your position.
+const padFor = z => z<=12 ? 0.05 : z<=14 ? 0.03 : z<=16 ? 0.015 : z===17 ? 0.008 : 0.004;
 const FT         = 3.28084;
 const MI_PER_KM  = 1.609344;
 
@@ -67,7 +70,7 @@ const TILE_SOURCES = {
   },
   gsi: {
     url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
-    maxZoom: 16, leaflet: '地理院タイル © 国土地理院', creditKey: 'attribGsi',
+    maxZoom: 18, leaflet: '地理院タイル © 国土地理院', creditKey: 'attribGsi',
   },
 };
 const trailSource = trail => TILE_SOURCES[trail.tiles] || TILE_SOURCES.usgs;
@@ -914,14 +917,15 @@ async function gpxBox(trail){
   return { n, s, e, w };
 }
 
-// Every tile URL for one box across DL_ZOOMS, built from that trail's tile template.
-// Each zoom expands the box by its own padFor(z), so overview zooms cache wider context.
-function tileURLsFor(box, urlTpl){
+// Every tile URL for one box across the source's zoom range (z10 up to src.maxZoom — 16 for
+// USGS, 18 for GSI), built from that source's tile template. Each zoom expands the box by its
+// own padFor(z), so overview zooms cache wider context.
+function tileURLsFor(box, src){
   const urls=[];
-  DL_ZOOMS.forEach(z=>{ const p=padFor(z);
+  for(let z=DL_MIN_Z; z<=src.maxZoom; z++){ const p=padFor(z);
     const r=tRange({ n:box.n+p, s:box.s-p, e:box.e+p, w:box.w-p }, z);
     for(let x=r.x0;x<=r.x1;x++) for(let y=r.y0;y<=r.y1;y++)
-      urls.push(urlTpl.replace('{z}',z).replace('{y}',y).replace('{x}',x)); });
+      urls.push(src.url.replace('{z}',z).replace('{y}',y).replace('{x}',x)); }
   return urls;
 }
 
@@ -932,7 +936,7 @@ async function downloadAll(){
   let urls=[];
   for(const trail of TRAILS){
     const box=await gpxBox(trail);
-    urls.push(...tileURLsFor(box, trailSource(trail).url));
+    urls.push(...tileURLsFor(box, trailSource(trail)));
   }
   urls=[...new Set(urls)];
   const total=urls.length || 1; let done=0;
