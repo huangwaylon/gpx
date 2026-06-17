@@ -13,7 +13,7 @@
   --line:rgba(22,35,29,0.10); --line-2:rgba(22,35,29,0.055);
   /* brand */
   --pine:#1f6f5c; --pine-d:#175949; --pine-soft:rgba(31,111,92,0.10); --pine-ring:rgba(31,111,92,0.30);
-  --blaze:#c2652d; --blaze-d:#9a4d1f;
+  --blaze-d:#9a4d1f;
   /* map semantics — mirror the C{} palette in app.js (keep in sync) */
   --track:#d4442e; --progress:#1f9d63; --gps:#2f6fe0; --wpt:#d6861c; --scrub:#7b5bff;
   /* shadows / radii */
@@ -197,10 +197,7 @@ img { display:block; }
 .hbtn:active { transform:scale(0.92); background:#fff; }
 #detail-title { font-family:var(--font-display); font-size:17px; font-weight:600; letter-spacing:-0.1px; flex:1;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink);
-  opacity:0; transition:opacity .2s; }
-#detail-header.scrolled { background:rgba(243,245,241,0.86); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);
-  border-bottom:1px solid var(--line); }
-#detail-header.scrolled #detail-title { opacity:1; }
+  opacity:0; }   /* hidden in the top bar — the trail name shows in the sheet peek */
 
 #map { position:absolute; inset:0; background:var(--paper-2); z-index:1; }
 

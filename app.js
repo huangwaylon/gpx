@@ -33,7 +33,6 @@ const C = { red:'#d4442e', green:'#1f9d63', blue:'#2f6fe0', violet:'#7b5bff', am
 const ICON_PATHS = {
   dist:    '<path d="m18 8 4 4-4 4"/><path d="m6 8-4 4 4 4"/><path d="M2 12h20"/>',
   gain:    '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>',
-  route:   '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
   clock:   '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
   pin:     '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
   download:'<path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/>',
@@ -95,7 +94,7 @@ let eleLo = 0, eleHi = 0, eleRange = 1;
 let renderPts = [];
 // Far end of the trail = the point of greatest distance from the trailhead. For an out-and-back
 // (whose GPX is a closed round trip) this is the turnaround/summit, and progress locks here.
-let turnIdx = 0, turnDist = 0, isOutAndBack = false;
+let turnDist = 0, isOutAndBack = false;
 
 // Elevation-scrub state (drag a finger along the profile to inspect a point on the trail).
 let scrubbing = false, scrubMk = null, scrubRAF = 0, scrubX = 0, scrubRect = null, scrubCardRect = null;
@@ -498,7 +497,7 @@ async function loadTrail(trail) {
 //     the GPX is a closed round trip, so this is the turnaround; progress locks here.
 function precomputeProfileAndFarEnd() {
   eleLo = Infinity; eleHi = -Infinity;
-  const p0 = trackPts[0]; let far = -1; turnIdx = 0;
+  const p0 = trackPts[0]; let far = -1, turnIdx = 0;
   trackPts.forEach((p, i) => {
     if (p.se < eleLo) eleLo = p.se;
     if (p.se > eleHi) eleHi = p.se;
