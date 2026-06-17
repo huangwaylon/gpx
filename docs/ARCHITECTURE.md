@@ -10,8 +10,8 @@
 ## 1. High-level overview
 
 **Ume-chan's Trails** (Japanese: 梅ちゃんのトレイル) is an **offline-capable hiking PWA** built
-for the iPhone (Safari / "Add to Home Screen"). It presents **12 trails — 8 in Washington
-State (USA) and 4 in Japan** — and is **bilingual** — **Japanese by default**, with a
+for the iPhone (Safari / "Add to Home Screen"). It presents **10 trails — 8 in Washington
+State (USA) and 2 in Japan** — and is **bilingual** — **Japanese by default**, with a
 one-tap toggle to English (see §1a). A user browses a scrollable list of trail cards, taps
 one, and lands on a full-screen trail-detail view with:
 
@@ -67,7 +67,7 @@ boots on `window load`.
         ┌──────────────────┬──────────────┼──────────────┬───────────────┐
         ▼                  ▼              ▼               ▼               ▼
  leaflet@1.9.4 (unpkg)  i18n.js       trails.js        app.js
-   map engine + CSS    window.I18N  window.TRAILS[12] ALL app logic
+   map engine + CSS    window.I18N  window.TRAILS[10] ALL app logic
                       (UI + JA text)                       │
         ┌───────────────────────────────────────────────────────────┼───────────────┐
         ▼                  ▼                ▼              ▼          ▼                ▼
@@ -119,7 +119,7 @@ global, `window.I18N` (`i18n.js:6`), holding all UI strings and the Japanese ove
 - **`wpt`** — GPX waypoint name → JA (`"Bridge"`→`"橋"`, …) (`i18n.js:112-119`).
 - **`trails.<slug>.ja`** — per-trail Japanese content (`name`, `area`, `summary`,
   `description`, `permit`, `tips`) that **overrides** the English base from `trails.js`
-  (`i18n.js:122-279`). All 12 trails (including the 4 Japan trails) have a Japanese block.
+  (`i18n.js:122-279`). All 10 trails (including the 2 Japan trails) have a Japanese block.
 
 `trails.js` remains the **English base**; the Japanese for each trail lives in
 `I18N.trails[slug].ja` and is merged over the base at render time (see `loc()` below).
@@ -183,21 +183,26 @@ artifact and its responsibility. (Source-only material is noted at the bottom.)
 | `index.html` | HTML | **App shell.** Declares the `#list` and `#detail` screens, the `.head-actions` wrapper holding the global download button (`#dl-all`) and language toggle (`#lang-toggle`), PWA `<meta>` tags, manifest/icon links, `data-i18n`/`data-i18n-aria` hooks, and the four `<script>` tags. |
 | `app.js` | JS | **All application logic** — routing, i18n helpers (§1a), list/detail rendering, Leaflet map, GPX parsing & geometry, elevation profile, GPS, bottom-sheet drag, the global tile-download, SW registration. Single `'use strict'` script, no exports. |
 | `app.css` | CSS | **All styles** — design tokens (CSS custom properties), both screens, cards, the language-toggle button, the global download button (`.dl-all-btn`, incl. its `--p` progress gradient), bottom sheet, the GPS-dot pulse animation, Leaflet overrides, and the landscape media query. |
-| `trails.js` | JS data | **Data model (English base).** Defines `window.TRAILS`, the array of 12 trail objects — 8 Washington + 4 Japan (see §3). |
+| `trails.js` | JS data | **Data model (English base).** Defines `window.TRAILS`, the array of 10 trail objects — 8 Washington + 2 Japan (see §3). |
 | `i18n.js` | JS data | **i18n tables.** Defines `window.I18N` — UI strings, dynamic-string functions, enum/season/waypoint tables, and per-trail Japanese content (see §1a). Loads before `trails.js`/`app.js`. |
 | `sw.js` | JS (SW) | **Service worker.** Precaches the shell + bundled trail assets on `install`; serves cache-first for tiles and shell on `fetch`; prunes old caches on `activate`. |
 | `manifest.json` | JSON | **Web App Manifest** — name (`梅ちゃんのトレイル`), `start_url`/`scope` (`./`), `display:standalone`, theme/background colors, the PNG icons. |
 | `icon-180.png` / `icon-192.png` / `icon-512.png` | PNG | **App icon** — a square center-crop of the Enchantments (Colchuck Lake) hero photo. `icon-180.png` is the iOS `apple-touch-icon`; the 192/512 sizes are the manifest icons (`purpose:"any"`). |
 | `.nojekyll` | marker | Empty file that disables GitHub Pages' Jekyll processing so files (and any leading-underscore paths) are served verbatim. |
-| `gpx/` | dir | **12 GPX tracks**, one per trail (e.g. `gpx/Lake_22_Trail.gpx`, `gpx/Mt_Fuji_Yoshida.gpx`). GPX 1.1 from AllTrails, containing `<trkpt>` track points (with `<ele>`) and (on the WA trails) `<wpt>` named waypoints. |
-| `images/` | dir | **12 WebP hero photos**, one per trail (e.g. `images/lake-22.webp`), shown on the list cards. |
+| `gpx/` | dir | **10 GPX tracks**, one per trail (e.g. `gpx/Lake_22_Trail.gpx`, `gpx/Mt_Fuji_Yoshida.gpx`). GPX 1.1 from AllTrails, containing `<trkpt>` track points (with `<ele>`) and (on the WA trails) `<wpt>` named waypoints; the Japan trails carry no `<wpt>` waypoints. |
+| `images/` | dir | **10 WebP hero photos**, one per trail (e.g. `images/lake-22.webp`), shown on the list cards. |
 | `README.md` | docs | Project readme (not loaded by the app). |
 | `docs/ARCHITECTURE.md` | docs | This document. |
 
 **Source-only / not deployed:** the `alltrails/` directory holds the original AllTrails
-`.html` / `.webarchive` saved pages and the raw GPX exports used to derive `trails.js` and the
-`gpx/` tracks. It is **git-ignored** (`.gitignore` excludes `alltrails/`, `*.webarchive`,
-`.DS_Store`, `*.log`) and never ships to production.
+`.html` saved pages and the raw `.gpx` exports used to derive `trails.js` and the
+`gpx/` tracks. It is kept in the repo for provenance but is **not loaded by the app** (nothing
+references it at runtime). The `.html` + `.gpx` files **are committed/tracked in git** as of
+2026-06 (~8 MB); the large `.webarchive` captures stay **git-ignored** because they embed
+third-party secret tokens (a Mapbox access token) that GitHub's secret-scanning push protection
+rejects. So `.gitignore` excludes `.DS_Store`, `*.webarchive`, and `*.log`. (Earlier revisions
+git-ignored `alltrails/` entirely; that rule was dropped this session so the source pages
+travel with the repo.)
 
 > Note: the load order in `index.html` matters — Leaflet (`L`) loads first, then `i18n.js`
 > defines `window.I18N`, then `trails.js` defines `window.TRAILS`, all **before** `app.js`
@@ -207,8 +212,8 @@ artifact and its responsibility. (Source-only material is noted at the bottom.)
 
 ## 3. The data model — `window.TRAILS`
 
-`trails.js` assigns a single global array, `window.TRAILS` (`trails.js:4`), of **12 trail
-objects** — the 8 Washington State trails followed by 4 Japan trails. It holds the **English
+`trails.js` assigns a single global array, `window.TRAILS` (`trails.js:4`), of **10 trail
+objects** — the 8 Washington State trails followed by 2 Japan trails. It holds the **English
 base** content plus all language-neutral data; the Japanese translations live separately in
 `I18N.trails[slug].ja` and are merged in at render time via `loc()` (see §1a). `app.js` reads
 `TRAILS` everywhere as the bare global. Each object is a flat record with the following
@@ -222,8 +227,6 @@ fields:
 | `img` | string | Relative path to the WebP hero photo. | `"images/lake-22.webp"` |
 | `gpx` | string | Relative path to the GPX track, fetched by `loadTrail()`. | `"gpx/Lake_22_Trail.gpx"` |
 | `tiles` | string? | **Optional** basemap selector read by `trailSource()` (§7): **omitted** ⇒ USGS topo (the US trails); `"gsi"` ⇒ GSI 地理院タイル (the Japan trails). | (absent) / `"gsi"` |
-| `rating` | number | AllTrails star rating (shown as `★ <rating>`). | `4.7` |
-| `reviews` | number | Review count; rendered with `.toLocaleString()`. | `18454` |
 | `lengthMi` | number | Trail length in **miles** (data stays imperial); also the **distance** sort key. Displayed via `fmtDist()` — mi in EN, km in JA. | `6.1` |
 | `gainFt` | number | Elevation gain in **feet** (data stays imperial); also the **elevation** sort key. Displayed via `fmtGain()` — ft in EN, m in JA. | `1456` |
 | `diff` | string | Difficulty token, one of **`"Easy"` / `"Moderate"` / `"Hard"` / `"Very Hard"`** (the data uses only Moderate/Hard/Very Hard). Drives the badge color (`diffClass`) and the filter (`diffKey`) off the raw token; displayed via `trDiff()` (JA: 初級/中級/上級/超上級). | `"Moderate"` |
@@ -236,15 +239,24 @@ fields:
 | `summary` | string | Short lead paragraph under "Overview". | `"A beautiful hike to an alpine lake…"` |
 | `description` | string | Long paragraph under "The hike". | (multi-sentence) |
 | `tips` | string[] | Bullet list under "Tips & need-to-know"; rendered as `<li>` items. | `["Rocky trail — sturdy boots…", …]` |
+| `plan` | object? | **Optional** baked-in upcoming-hike plan shared from a **YAMAP** plan (URL, date, party size, the plan's own dist/gain, pace, and an hour-by-hour `itinerary`). Locale-neutral data with a few `{en,ja}` text bits; rendered as a tappable card on the detail sheet by `renderPlanCard()`/`renderTimeline()`. Present on `kinpu-odarumi` only. | (present on `kinpu-odarumi`) |
 
-The 12 trails are, in array order: the **8 Washington** trails `lake-22`, `snow-lake`,
+The 10 trails are, in array order: the **8 Washington** trails `lake-22`, `snow-lake`,
 `lake-valhalla`, `talapus-lake`, `mount-pilchuck`, `bridal-veil`, `skyline-loop`,
-`enchantments`, followed by the **4 Japan** trails `fuji-yoshida`, `fuji-gotemba`,
-`daibosatsu`, `kinpu`. The four Japan trails all set `tiles: "gsi"` and have **no GPX
-waypoints**. Across the set, two are `route: "Loop"` (`skyline-loop`, `daibosatsu`), two are
+`enchantments`, followed by the **2 Japan** trails `fuji-yoshida` (Mt. Fuji: Yoshida Trail) and
+`kinpu-odarumi` (Mount Kinpu via Odarumi Pass). Both Japan trails set `tiles: "gsi"` and have
+**no GPX waypoints**. Across the set, one is `route: "Loop"` (`skyline-loop`), two are
 `"Point to point"` (`enchantments`, `fuji-yoshida`), and the rest are `"Out & back"`. The
-header subtitle's "12 trails" copy (the `#list-sub` node, `data-i18n="subtitle"`,
-`index.html:30`) matches the array length.
+header subtitle no longer reports a trail count: the `#list-sub` node
+(`data-i18n="subtitle"`, `index.html:30`) now reads simply "Tap a trail to explore" /
+"タップして探索".
+
+> **Update (2026-06):** the trail set was trimmed from 12 to **10** this session — the
+> Mt. Fuji Gotemba Trail (`fuji-gotemba`), the Mount Daibosatsu Loop (`daibosatsu`), and the
+> Kanayama-route Mount Kinpu (`kinpu`) were removed. The Odarumi-Pass Mount Kinpu
+> (`kinpu-odarumi`) is a **different** trail and remains. The Fuji Yoshida GPX was also
+> replaced with a new 2,438-point track that has its AllTrails POI waypoints stripped (0
+> `<wpt>`).
 
 ---
 
@@ -313,7 +325,8 @@ trail is Easy-rated (`index.html:33-38`); each chip label carries a `data-i18n` 
      `trDiff(diff)`,
    - a `.card-titlebar` overlay with `.card-title` (`tr.name`) and `.card-area` (`tr.area`),
    - a `.card-stats` row: distance (`↔ fmtDist(lengthMi)`), gain (`▲ fmtGain(gainFt)`), route
-     (`⟳ trRoute(route)`), and a right-aligned `.star` rating.
+     (`⟳ trRoute(route)`), and the estimated hike **time** (`⏱ fmtTime(time)`, in a
+     `.s.time` span where the star rating used to be).
 3. Joins the HTML, writes it into `#trail-list`, then wires each `.card`'s click to set
    `location.hash = '#/trail/' + slug` (`app.js:159-160`).
 
@@ -390,10 +403,11 @@ The bottom sheet's always-visible "peek" region is `#sheet-peek`, containing `#p
 `#pk-meta` (`index.html:54-56`). Tapping it toggles the sheet open/closed; it is hidden in
 landscape (§11, §14).
 
-**`renderPeek(trail)`** (`app.js:208-215`) fills it: `#pk-title` = `loc(trail).name`; `#pk-meta`
+**`renderPeek(trail)`** (`app.js:252-259`) fills it: `#pk-title` = `loc(trail).name`; `#pk-meta`
 = `<span>` chips for `fmtDist(lengthMi)`, `▲ fmtGain(gainFt)`, a difficulty span (the label is
 `trDiff(diff)`, colored via `diffClass` but with `background:none;padding:0` so it reads as
-colored text, not a pill), and a `.star` rating with review count.
+colored text, not a pill), and the estimated **time** (`⏱ fmtTime(time)`). There is no longer a
+rating chip in the peek.
 
 ### `renderSheetBody()`
 
@@ -887,8 +901,11 @@ applied throughout so content avoids the notch and home indicator: the list head
 (`app.css:117`), the map FAB's left offset (`app.css:140`), and the sheet body's bottom padding
 (`app.css:169`).
 The Leaflet zoom control is likewise nudged by `env(safe-area-inset-top)` in JS (`app.js:281`).
-`#app` uses `height:100dvh` (with a `100vh` fallback) so it tracks the dynamic viewport as
-Safari's chrome shows/hides (`app.css:20`).
+`#app` is **`position:fixed; top:0; right:0; bottom:0; left:0; overflow:hidden`**
+(`app.css:23`), pinning it to the visual-viewport edges (including the safe areas under
+`viewport-fit=cover`). It was previously sized with `height:100dvh` (with a `100vh` fallback),
+but in an installed iOS standalone PWA `100dvh` could resolve ~34px short of the physical screen
+and leave a gap at the bottom; the fixed-inset approach fills the true screen.
 
 ---
 
@@ -898,7 +915,7 @@ The app has **two distinct Service-Worker caches**, declared at the top of `sw.j
 
 | Cache name | Constant | Contents | Written by |
 |---|---|---|---|
-| `wa-trails-app-v4` | `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js`), manifest, icon, Leaflet CSS+JS, and **all 12 GPX files + 12 hero images**. | SW `install` (`addAll(SHELL)` + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
+| `wa-trails-app-v9` | `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js`), manifest, icon, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. | SW `install` (`addAll(SHELL)` + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
 | `wa-trails-tiles-v1` | `TILE_V` (`sw.js:2`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL. | SW `fetch` (cache-first fill on miss) **and** the page's `downloadAll()` pre-cache. |
 
 > The cache **names** retain the historic `wa-trails-` prefix (an internal identifier — it is
@@ -911,7 +928,7 @@ The app has **two distinct Service-Worker caches**, declared at the top of `sw.j
 On `install` (`sw.js:28-36`), the SW opens `APP_V`, **`addAll(SHELL)`** (which must all succeed —
 `SHELL` lists `./`, `index.html`, `app.css`, `app.js`, `trails.js`, **`i18n.js`**,
 `manifest.json`, `icon-180.png`, `icon-192.png`, `icon-512.png`, and the two Leaflet CDN URLs, `sw.js:4-9`), then **best-effort**
-caches `TRAIL_ASSETS` (the **12 GPX + 12 webp** — 8 Washington + 4 Japan, `sw.js:12-26`) with
+caches `TRAIL_ASSETS` (the **10 GPX + 10 webp** — 8 Washington + 2 Japan, `sw.js:12-24`) with
 `Promise.allSettled` so a single failed asset doesn't break install. It calls `skipWaiting()`.
 Bundling the GPX and images means a trail's track and photo are available with **zero network**,
 even one the user has never opened.

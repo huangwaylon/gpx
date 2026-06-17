@@ -17,7 +17,7 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | **Service workers** | Supported in Safari tabs + Home-Screen PWAs since iOS 11.1. **Not** available in WKWebView / in-app browsers. | Registers `./sw.js` (classic SW) on `load`. Offline breaks inside in-app browsers — **recommend "Open in Safari"** (GAP: not detected/surfaced in-app). |
 | **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** via a single global **"Save maps"** button — never background prefetch. |
 | **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
-| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v4`) and map tiles (`wa-trails-tiles-v1`, holding both USGS + GSI tiles). No IndexedDB. |
+| **Cache API** | Fully supported since iOS 11.1. | Used for **both** app shell (`wa-trails-app-v9`) and map tiles (`wa-trails-tiles-v1`, holding both USGS + GSI tiles). No IndexedDB. |
 | **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded. | GPS only works screen-on, foreground. App re-acquires Wake Lock on `visibilitychange`. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
 | **`navigator.wakeLock` (standalone)** | Broken in standalone on iOS 16.4–18.3; works in standalone only from **18.4+**. | Calls `wakeLock.request('screen')`, re-acquires on visibility change. **GAP: no video-loop fallback.** Advise raising Auto-Lock. |
@@ -72,13 +72,13 @@ The app uses the Cache API for **everything** persistent and uses **no IndexedDB
 
 | Cache name (constant) | Contents | Population strategy |
 |---|---|---|
-| **`wa-trails-app-v4`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
+| **`wa-trails-app-v9`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
 | **`wa-trails-tiles-v1`** (`TILE_V` in `sw.js`, `TILE_CACHE` in `app.js`) | Map tiles — USGS topo (US trails) **and** GSI 地理院タイル (Japan trails) | Filled cache-first on `fetch`, and bulk-filled by the user-initiated "Save maps" download. |
 
 `sw.js` declarations:
 
 ```js
-const APP_V  = 'wa-trails-app-v4';
+const APP_V  = 'wa-trails-app-v9';
 const TILE_V = 'wa-trails-tiles-v1';
 ```
 
@@ -351,7 +351,7 @@ Content can be obscured by the notch/Dynamic Island and the home indicator unles
   #list-header { padding: calc(var(--safe-t) + 14px) calc(16px + var(--safe-l)) 12px calc(16px + var(--safe-r)); }
   ```
 
-  The app also handles dynamic viewport height with `height:100dvh` (with a `100vh` fallback) so the layout tracks Safari's collapsing toolbar.
+  The root `#app` container is pinned with `position:fixed; top:0; right:0; bottom:0; left:0` so it fills the visual viewport edge-to-edge, including the safe areas under `viewport-fit=cover`. (It was previously sized with `height:100dvh` / a `100vh` fallback, but in an installed iOS **standalone** PWA `100dvh` could resolve ~34px short of the physical screen, leaving a gap at the bottom.)
 
 ---
 
@@ -384,7 +384,7 @@ The app is **bilingual**: **Japanese by default**, with an **English toggle** in
 Ume-chan's Trails uses a **three-tier offline model**. The first two tiers are automatic; the third is the deliberate, user-controlled step that the iOS background-fetch ban forces on us.
 
 ### Tier 1 — App shell + all trail data precached on SW install
-On `install`, the service worker precaches the **app shell** (must-succeed) and, best-effort, **all 12 GPX tracks + all 12 hero images**, so the app UI and every trail's info/elevation/photo work offline **immediately after first load** — even before the user downloads any map tiles.
+On `install`, the service worker precaches the **app shell** (must-succeed) and, best-effort, **all 10 GPX tracks + all 10 hero images**, so the app UI and every trail's info/elevation/photo work offline **immediately after first load** — even before the user downloads any map tiles.
 
 ```js
 const SHELL = [
@@ -398,15 +398,13 @@ const TRAIL_ASSETS = [
   // Washington (8)
   'gpx/Lake_22_Trail.gpx', /* …6 more WA GPX… */ 'gpx/The_Enchantments_Traverse.gpx',
   'images/lake-22.webp',   /* …6 more WA images… */ 'images/enchantments.webp',
-  // Japan (4)
-  'gpx/Mt_Fuji_Yoshida.gpx','gpx/Mt_Fuji_Gotemba.gpx',
-  'gpx/Mount_Daibosatsu_Loop.gpx','gpx/Mount_Kinpu_Kanayama.gpx',
-  'images/fuji-yoshida.webp','images/fuji-gotemba.webp',
-  'images/daibosatsu.webp','images/kinpu.webp',
+  // Japan (2)
+  'gpx/Mt_Fuji_Yoshida.gpx','gpx/Mount_Kinpu_Odarumi.gpx',
+  'images/fuji-yoshida.webp','images/kinpu-odarumi.webp',
 ];
 ```
 
-> Verified: the repo contains exactly **12 GPX files** and **12 `.webp` hero images**, matching the 12 trails in `trails.js` — 8 in Washington (`lake-22`, `snow-lake`, `lake-valhalla`, `talapus-lake`, `mount-pilchuck`, `bridal-veil`, `skyline-loop`, `enchantments`) and 4 in Japan (`fuji-yoshida`, `fuji-gotemba`, `daibosatsu`, `kinpu`). The GPX/image lists in `sw.js` are bundled at install time — this is *trail metadata*, not map imagery.
+> Verified: the repo contains exactly **10 GPX files** and **10 `.webp` hero images**, matching the 10 trails in `trails.js` — 8 in Washington (`lake-22`, `snow-lake`, `lake-valhalla`, `talapus-lake`, `mount-pilchuck`, `bridal-veil`, `skyline-loop`, `enchantments`) and 2 in Japan (`fuji-yoshida`, `kinpu-odarumi`). The GPX/image lists in `sw.js` are bundled at install time — this is *trail metadata*, not map imagery.
 
 ### Tier 2 — Map tiles served cache-first with network fallback
 Any request to a **USGS National Map tile (US trails) or a GSI 地理院タイル tile (Japan trails)** is intercepted and served **cache-first**: return the cached tile if present, otherwise fetch, store (including any **opaque** cross-origin responses), and return — falling back to a `503` if offline and uncached. The branch matches **both** tile hosts:
@@ -429,7 +427,7 @@ This means simply **panning the map while online warms the cache** for free — 
 > **Two tile sources, one cache.** US trails use USGS topo (`{z}/{y}/{x}`); Japan trails use GSI 地理院タイル (`{z}/{x}/{y}.png`, Japanese labels on the `std` layer). Both are 256-px, EPSG:3857 Web-Mercator XYZ tiles and are CORS-enabled (`Access-Control-Allow-Origin: *`), so they cache as **real** (non-opaque) responses. The two URL templates put the `x`/`y` tokens in a **different order**, but `app.js` substitutes them by name (`.replace('{z}'…).replace('{y}'…).replace('{x}'…)`), so the same tile math drives both. They share the single `wa-trails-tiles-v1` cache. (Practical note: GSI works fine from real iPhones / home networks; it can `403` from some datacenter IPs, which is irrelevant to end users.)
 
 ### Tier 3 — User explicitly downloads every trail's tiles ("Save maps")
-A **single global** button in the list header — **"Save maps"** (`#dl-all`, sitting next to the language toggle) — pre-caches tiles for **all 12 trails across both tile sources** into `wa-trails-tiles-v1` in one tap. There is **no** per-trail download button or download modal anymore.
+A **single global** button in the list header — **"Save maps"** (`#dl-all`, sitting next to the language toggle) — pre-caches tiles for **all 10 trails across both tile sources** into `wa-trails-tiles-v1` in one tap. There is **no** per-trail download button or download modal anymore.
 
 `downloadAll()` walks every trail, computes each trail's bounding box from its (already-precached) GPX via `gpxBox()`, builds the full tile-URL list for that trail **using its own source template** across **zooms 10–16**, dedupes everything with a `Set`, then fetches in batches of 8 with inline progress:
 
@@ -489,18 +487,18 @@ async function downloadAll(){
 Because the download is one tap for **everything**, there is no per-trail tile-count preview before committing — the button just shows a live percentage as it works.
 
 ### Approximate tile counts & storage footprint
-Because the download is now **global**, the meaningful number is the **total across all 12 trails and both tile sources**, not a per-trail figure. Each trail's tile count is still computed at runtime from its real track bounding box × 7 zoom levels (`gpxBox` → `tileURLsFor`), so it varies a lot by trail:
+Because the download is now **global**, the meaningful number is the **total across all 10 trails and both tile sources**, not a per-trail figure. Each trail's tile count is still computed at runtime from its real track bounding box × 7 zoom levels (`gpxBox` → `tileURLsFor`), so it varies a lot by trail:
 
-- A compact trail (e.g. a short out-and-back like Lake 22) contributes on the order of **~100–150** tiles.
-- A large, spread-out route (e.g. **The Enchantments Traverse** or the long **Gotemba** route on Fuji) produces a **much larger** bounding box and therefore **substantially more** tiles — likely several hundred — because box-area × 7 zooms grows with geographic extent. (Tile counts roughly **quadruple per added zoom level**, and zooms 15–16 dominate the total.)
+- A compact trail (e.g. a short out-and-back like **Talapus Lake** or **Mount Pilchuck**) contributes on the order of **~150** tiles.
+- A large, spread-out route (e.g. **The Enchantments Traverse**) produces a **much larger** bounding box and therefore **many more** tiles — on the order of **a thousand** — because box-area × 7 zooms grows with geographic extent. (Tile counts roughly **quadruple per added zoom level**, and zooms 15–16 dominate the total.)
 
-Summed across everything (and deduped), a real "Save maps" run cached **~2,723 tiles ≈ 1,973 USGS + 750 GSI**. At a typical **~15–25 KB** per 256×256 topo PNG tile:
+Summed across everything (and deduped), a full "Save maps" run caches roughly **~3,200 tiles ≈ 2,760 USGS** (the 8 Washington trails) **+ ~465 GSI** (the 2 Japan trails). At a typical **~15–25 KB** per 256×256 topo PNG tile:
 
 | Scope | Approx tiles | Approx storage |
 |---|---|---|
-| One compact trail | ~130 | **~2–3 MB** |
-| One large trail | ~300+ | **~5–7 MB** |
-| **All 12 trails, both sources (a full "Save maps")** | **~2,700** | **roughly ~45–65 MB total** |
+| One compact trail | ~150 | **~3 MB** |
+| The Enchantments (largest box) | ~1,200 | **~20–30 MB** |
+| **All 10 trails, both sources (a full "Save maps")** | **~3,200** | **roughly ~50–80 MB total** |
 
 This is well within the large installed-PWA quota on iOS 17+ (~60% of disk), so storage size is **not** the limiting factor — *eviction* (the 7-day rule) is.
 
@@ -508,7 +506,7 @@ This is well within the large installed-PWA quota on iOS 17+ (~60% of disk), so 
 This is the central design decision, and it's driven by both platform limits and product sense:
 
 1. **No background fetch on iOS (hard constraint).** iOS has no Background Fetch/Sync, so tiles can only be pulled while the app is open and in the foreground. Bulk-caching every trail's imagery has to happen during an active session anyway — there's no "download overnight" option — so it must be an explicit, visible action with progress. This rationale is **unchanged**; what changed is that it's now **one tap for everything** rather than a per-trail button.
-2. **All-or-nothing, by design (a deliberate trade-off).** The old per-trail downloads let a user fetch *only the chosen trail* (a few MB) to respect metered data. The single button trades that selectivity for simplicity: it grabs **all 12 trails across both sources** (tens of MB) in one go. The assumption is that the user sets this up on Wi-Fi at home before a trip; on a weak/metered trailhead LTE connection the full download is heavier than the old per-trail option would have been.
+2. **All-or-nothing, by design (a deliberate trade-off).** The old per-trail downloads let a user fetch *only the chosen trail* (a few MB) to respect metered data. The single button trades that selectivity for simplicity: it grabs **all 10 trails across both sources** (tens of MB) in one go. The assumption is that the user sets this up on Wi-Fi at home before a trip; on a weak/metered trailhead LTE connection the full download is heavier than the old per-trail option would have been.
 3. **Storage & the 7-day eviction rule.** Since tiles can be evicted after a week of inactivity anyway, the cache will drift out of date regardless; the "Save maps" button is the user's one-tap way to refresh **all** maps right before a trip, which keeps the whole set current at once.
 4. **User control & predictability.** The button is explicit and visible, with a live percentage and a clear "✓ Maps saved" end state, so storage use is consensual and the user always knows whether the maps are ready. The trade-off versus the old design is that the status is now **global** (all trails saved, or not) rather than a per-trail badge.
 
@@ -520,12 +518,12 @@ This is the central design decision, and it's driven by both platform limits and
 |---|---|
 | Meta tags (both capability tags), manifest link, global "Save maps" button (`#dl-all`), `[data-i18n]` hooks | `index.html` |
 | Manifest (iOS-respected fields; Japanese identity) | `manifest.json` |
-| Caching strategy, two named caches, precache lists (12 GPX + 12 images), two-host tile match | `sw.js` |
+| Caching strategy, two named caches, precache lists (10 GPX + 10 images), two-host tile match | `sw.js` |
 | Geolocation, Wake Lock, language preference, cache-status probe, global tile download (`downloadAll`/`gpxBox`), tile sources | `app.js` |
 | i18n string tables, per-trail localized content, unit/date formatting | `i18n.js` (design: `docs/I18N.md`) |
-| Safe-area variables, dynamic viewport height, display font sizes | `app.css` |
-| Trail metadata (12 trails: 8 WA + 4 Japan) | `trails.js` |
-| Bundled offline assets | `gpx/` (12 GPX), `images/` (12 `.webp`) |
+| Safe-area variables, full-screen `#app` pinning (`position:fixed`), display font sizes | `app.css` |
+| Trail metadata (10 trails: 8 WA + 2 Japan) | `trails.js` |
+| Bundled offline assets | `gpx/` (10 GPX), `images/` (10 `.webp`) |
 
 ---
 

@@ -1,8 +1,8 @@
 # Development Guide — Ume-chan's Trails (梅ちゃんのトレイル)
 
 Developer guide for **Ume-chan's Trails** (梅ちゃんのトレイル), a static,
-offline-capable hiking PWA for iPhone. It shows 12 trails — **8 in Washington
-State, USA, and 4 in Japan** — on topographic maps (**USGS** for the US trails,
+offline-capable hiking PWA for iPhone. It shows 10 trails — **8 in Washington
+State, USA, and 2 in Japan** — on topographic maps (**USGS** for the US trails,
 **GSI 地理院タイル** for the Japan trails) with GPX tracks, live GPS, and
 elevation profiles. The UI is **bilingual — Japanese by default, with a one-tap
 toggle to English** (all text and units; see [`docs/I18N.md`](./I18N.md)).
@@ -143,7 +143,7 @@ For **returning users**, the correct way to force everyone onto a new version on
 deploy is to bump the cache version constant at the top of `sw.js`:
 
 ```js
-const APP_V  = 'wa-trails-app-v4';   // ← bump this (…-v5, …-v6) when you ship shell changes
+const APP_V  = 'wa-trails-app-v9';   // ← bump this (…-v10, …-v11) when you ship shell changes
 const TILE_V = 'wa-trails-tiles-v1'; // map-tile cache; bump only if tile handling changes
 ```
 
@@ -160,7 +160,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-So changing `APP_V` from `wa-trails-app-v4` to `wa-trails-app-v5` invalidates
+So changing `APP_V` from `wa-trails-app-v9` to `wa-trails-app-v10` invalidates
 the old app-shell cache for all users and re-precaches the new shell on next
 load. **Bump `APP_V` whenever you change shell files** (`index.html`, `app.css`,
 `app.js`, `trails.js`, `i18n.js`, or the bundled asset lists). Leave `TILE_V`
@@ -308,8 +308,6 @@ cards and detail screen read all of them, and a missing field renders as
 | `img` | string | Path to hero image — `"images/<slug>.webp"` (matches step b). |
 | `gpx` | string | Path to GPX — `"gpx/My_New_Trail.gpx"` (matches step a). |
 | `tiles` | string | **Optional.** Basemap source. **Omit for US trails** (defaults to USGS topo). Set to `"gsi"` for trails **outside the US** (e.g. Japan) to use the **GSI 地理院タイル** basemap. `app.js` resolves it via `trailSource(trail)` (the `TILE_SOURCES` map), so both the live map and the offline tile download use the chosen source automatically. |
-| `rating` | number | Star rating, e.g. `4.7`. |
-| `reviews` | number | Review count, e.g. `18454` (rendered with thousands separators). |
 | `lengthMi` | number | Length in miles, e.g. `6.1`. Used for the **Distance** sort. |
 | `gainFt` | number | Elevation gain in feet, e.g. `1456`. Used for the **Elevation** sort. |
 | `diff` | string | **Exactly one of** `"Easy"`, `"Moderate"`, `"Hard"`, `"Very Hard"`. Drives the difficulty badge **and** the filter chips. Note: the **Easy filter chip was removed** (no current trail is Easy), so an `"Easy"` trail still gets a badge but no chip will match it — the filter chips are **All / Moderate / Hard / Very Hard**. Any other value won't match a filter and gets a default badge style. |
@@ -333,7 +331,6 @@ Example skeleton:
   img: "images/my-new-trail.webp",
   gpx: "gpx/My_New_Trail.gpx",
   // tiles: "gsi",   // ← add this ONLY for a non-US (e.g. Japan) trail; omit for US (USGS)
-  rating: 4.6, reviews: 1234,
   lengthMi: 5.0, gainFt: 1200, diff: "Moderate",
   route: "Out & back", time: "3 h 00 min",
   season: "Jun – Oct", dogs: "Leashed",
@@ -350,17 +347,15 @@ Example skeleton:
 
 > **Non-US trails:** set `tiles: "gsi"` so the map and the offline download use
 > the **GSI 地理院タイル** basemap (free, no API key, CORS-enabled, with Japanese
-> topographic labels) instead of USGS topo. The four Japan trails
-> (`fuji-yoshida`, `fuji-gotemba`, `daibosatsu`, `kinpu`) all carry `tiles:
-> "gsi"`; the eight Washington trails omit `tiles` and fall back to USGS.
+> topographic labels) instead of USGS topo. Both Japan trails
+> (`fuji-yoshida`, `kinpu-odarumi`) carry `tiles: "gsi"`; the eight Washington
+> trails omit `tiles` and fall back to USGS.
 
-> The trail count in the list header is **not** computed from `TRAILS.length`.
-> The live string is the `subtitle` key in `i18n.js`, in **both** `ui.en`
-> (`"12 trails · tap to explore"`) and `ui.ja` (`"12のコース · タップして探索"`);
-> `index.html` carries the Japanese default inline on the
-> `data-i18n="subtitle"` node for first paint. If you change the number of
-> trails, update the count in **both** `ui.en` and `ui.ja` in `i18n.js` (the
-> inline default in `index.html`, and the `README.md` copy).
+> The list header `subtitle` no longer shows a trail count. It is a static
+> string — `ui.en` `"Tap a trail to explore"` / `ui.ja` `"タップして探索"` in
+> `i18n.js`, with the Japanese default inlined on the `data-i18n="subtitle"`
+> node in `index.html` for first paint — so adding or removing a trail needs no
+> subtitle edit.
 
 ### d. Add the Japanese translation block to `i18n.js`
 
@@ -382,7 +377,7 @@ I18N.trails = {
 ```
 
 Translate the six text fields (`name, area, summary, description, permit,
-tips`). Everything else (stats, coords, rating, and the enum *values* like
+tips`). Everything else (stats, coords, and the enum *values* like
 `"Moderate"`) stays in `trails.js` and is localized through the enum tables.
 Also translate any **new GPX waypoint names** by adding `English → Japanese`
 entries to `I18N.wpt`.
@@ -418,11 +413,11 @@ but its GPX/photo won't be guaranteed available offline.
 
 Editing `trails.js`, `i18n.js`, and the precache list is a shell change. To make
 returning users pick it up on deploy, bump `APP_V` in `sw.js` (currently
-`wa-trails-app-v4`, so bump to the next version — see
+`wa-trails-app-v9`, so bump to the next version — see
 [the SW section](#3-the-service-worker-gotcha-read-this)):
 
 ```js
-const APP_V = 'wa-trails-app-v5';
+const APP_V = 'wa-trails-app-v10';
 ```
 
 ### Verify the new trail locally
@@ -470,17 +465,18 @@ reload — it should come up in Japanese.
 
 **List screen**
 
-- [ ] The list renders **12 cards** (one per trail in `TRAILS` — 8 Washington +
-      4 Japan).
+- [ ] The list renders **10 cards** (one per trail in `TRAILS` — 8 Washington +
+      2 Japan).
 - [ ] Difficulty filter chips (**All / Moderate / Hard / Very Hard** — there is
       no "Easy" chip) filter correctly; "All" shows everything.
 - [ ] **↕ Distance** and **↕ Elevation** sorts reorder the cards; tapping an
       active sort chip again clears the sort.
-- [ ] Cards show distance, gain, route, and rating. (There is **no** per-card
+- [ ] Cards show distance, gain, route, and **time** (star ratings were removed; the time
+      occupies the slot where the star used to be). (There is **no** per-card
       offline ✓ badge anymore — offline maps are handled by one global button,
       below.)
 - [ ] The header's global **⬇ Save maps** button (`#dl-all`, next to the
-      language toggle) downloads tiles for **all 12 trails across both sources**:
+      language toggle) downloads tiles for **all 10 trails across both sources**:
       it goes idle → a live `NN%` → **✓ Maps saved**.
 
 **Detail screen**
@@ -491,7 +487,7 @@ reload — it should come up in Japanese.
 - [ ] The **elevation profile** SVG draws, with the elevation range label.
 - [ ] **Map tiles load** — USGS topo for Washington trails, **GSI 地理院タイル**
       for Japan trails (`tiles: "gsi"`).
-- [ ] Trailhead/endpoint and waypoint markers appear. (The four Japan trails
+- [ ] Trailhead/endpoint and waypoint markers appear. (Both Japan trails
       have **no GPX waypoints** — only trailhead/end markers, and Loop routes
       suppress the separate "End" marker.)
 - [ ] The bottom sheet drags between peek and full; the GPS FAB repositions
@@ -517,7 +513,7 @@ reload — it should come up in Japanese.
 
 1. With the app loaded, tap the header's global **⬇ Save maps** button
    (`#dl-all`) and **wait for it to read ✓ Maps saved**. This downloads tiles
-   for **all 12 trails** across **both** sources (USGS + GSI) into the tile
+   for **all 10 trails** across **both** sources (USGS + GSI) into the tile
    cache in one pass.
 2. Go offline: either **stop the local server** (`Ctrl+C`) or, in Chrome
    DevTools, **Network → Offline**.
@@ -575,8 +571,10 @@ Key points:
   change is not enough on its own for users who've already loaded the app — also
   **bump `APP_V`** in `sw.js` so their cached shell is invalidated (see
   [the SW section](#3-the-service-worker-gotcha-read-this)).
-- **Push only the app, never the source material.** Confirm `git status` doesn't
-  include the `alltrails/` folder (it's git-ignored — see below).
+- **The `alltrails/` source is partly committed.** It used to be git-ignored; the
+  `.html` + `.gpx` exports (~8 MB) are now tracked for provenance, while the heavy
+  `.webarchive` captures stay git-ignored (they embed third-party secret tokens — see
+  §8/§9). None of it is referenced or served by the app.
 
 ---
 
@@ -586,19 +584,22 @@ Stay within GitHub Pages' published limits:
 
 | Limit | Value | Implication |
 | --- | --- | --- |
-| **Per-file size** | **100 MB hard limit** | No single committed file may exceed this. (Largest current file is `gpx/The_Enchantments_Traverse.gpx` at ~626 KB — comfortably fine.) |
-| **Repository size** | **1 GB soft limit** | Keep the repo lean. The deployed app is **only ~5 MB**. |
+| **Per-file size** | **100 MB hard limit** | No single committed file may exceed this. (Largest committed file is ~0.6 MB — `gpx/The_Enchantments_Traverse.gpx`.) A file over 100 MB makes `git push` fail. |
+| **Repository size** | **1 GB soft limit** | Keep the repo reasonable. The deployed app is **~5 MB**; with the committed `alltrails/` `.html`/`.gpx` source (~8 MB) the whole repo is **~13 MB** — well under 1 GB. |
 | **Bandwidth** | **100 GB / month (soft)** | Fine for this app's traffic; just don't host huge downloads here. |
 
-The reason the repo stays tiny: the **`alltrails/` source folder (~166 MB** of
-AllTrails HTML/webarchive source material) **is git-ignored and must never be
-committed.** Only the ~5 MB app (HTML/CSS/JS + `gpx/` + `images/` + a few small
-files) is deployed. Before committing, sanity-check that you're not about to add
-large source files:
+The `alltrails/` source folder holds saved AllTrails pages. The `.html` + `.gpx`
+exports (~8 MB) are **committed** for provenance; the heavy `.webarchive` captures
+(~45 MB) are **git-ignored** — they embed third-party secret tokens (a Mapbox token)
+that GitHub's **secret-scanning push protection** rejects, so committing one makes
+`git push` fail. Only the ~5 MB app (HTML/CSS/JS + `gpx/` + `images/` + a few small
+files) actually ships to users. When adding new source captures, keep webarchives out
+and watch the per-file limit:
 
 ```bash
-git status                       # alltrails/ should NOT appear
-du -sh --exclude=.git --exclude=alltrails .   # deployed app size (~5 MB)
+du -sh .                      # whole repo, incl .git
+du -sh alltrails gpx images   # source vs deployed assets
+find . -path ./.git -prune -o -type f -size +90M -print   # anything near the 100 MB cap
 ```
 
 > Map **tiles are not in the repo.** They're fetched on demand from **USGS**
@@ -627,10 +628,14 @@ gpx/                     # ← repo root, served as-is by GitHub Pages
 ├── gpx/                 # GPX track files (one per trail)
 ├── images/              # Hero photos (<slug>.webp, ~1200×800)
 ├── docs/
-│   ├── DEVELOPMENT.md   # ← this file
-│   ├── DATA-PIPELINE.md # Trail data sourcing/extraction pipeline (see §5)
-│   └── I18N.md          # Internationalization: window.I18N, helpers, translation conventions
-└── alltrails/           # Source material (~166 MB) — GIT-IGNORED, never deployed
+│   ├── ARCHITECTURE.md          # Canonical, code-grounded design reference
+│   ├── DATA-PIPELINE.md         # Trail data sourcing/extraction pipeline (see §5)
+│   ├── DECISIONS-AND-LESSONS.md # ADRs + bugs/lessons from the build
+│   ├── DEVELOPMENT.md           # ← this file
+│   ├── I18N.md                  # Internationalization: window.I18N, helpers, conventions
+│   ├── IOS-PWA-GUIDE.md         # Offline/GPS/install/caching + iOS behavior
+│   └── README.md                # Docs index
+└── alltrails/           # AllTrails source — .html/.gpx committed (~8 MB); .webarchive git-ignored (secrets)
 ```
 
 > Note: the load order in `index.html` matters — Leaflet loads first, then
@@ -640,14 +645,14 @@ gpx/                     # ← repo root, served as-is by GitHub Pages
 
 ### What's git-ignored
 
-From `.gitignore`:
+From `.gitignore` (`alltrails/` itself is **not** ignored — its `.html`/`.gpx` are committed;
+only `.webarchive` saves are excluded):
 
 | Pattern | What it excludes | Why |
 | --- | --- | --- |
-| `alltrails/` | The ~166 MB AllTrails source folder | Large source material; not part of the app (see [§8](#8-github-pages-constraints)) |
 | `.DS_Store` | macOS Finder metadata | OS cruft |
-| `*.webarchive` | Safari web archive files | Editor/OS cruft, part of the source-scraping workflow |
+| `*.webarchive` | Safari page archives under `alltrails/` | They embed third-party secret tokens (a Mapbox token) that GitHub push protection blocks; the `.html`/`.gpx` source is committed instead |
 | `*.log` | Server / tooling logs | Build/run noise |
 
-Always run `git status` before committing to confirm none of these (especially
-`alltrails/` and stray `*.webarchive` files) are staged.
+Run `git status` before committing to confirm only intended files are staged (`.DS_Store`,
+`*.webarchive`, and `*.log` are ignored).

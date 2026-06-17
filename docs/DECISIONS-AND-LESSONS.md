@@ -5,8 +5,8 @@ Architecture decision records and engineering lessons for **Ume-chan's Trails**
 
 **Stack:** plain HTML/CSS/JS, [Leaflet 1.9.4](https://leafletjs.com/), per-trail raster topo tiles
 (USGS National Map for the US, GSI 地理院タイル for Japan — ADR-2, ADR-9), no build step, deployed
-on GitHub Pages. Twelve trails — eight in Washington State (USA) plus four in Japan (two Mt. Fuji
-routes plus Daibosatsu and Kinpu in Yamanashi) — each with a map, GPX track, live GPS, and an
+on GitHub Pages. Ten trails — eight in Washington State (USA) plus two in Japan (Mt. Fuji's
+Yoshida route and Mount Kinpu via Odarumi Pass, in Yamanashi) — each with a map, GPX track, live GPS, and an
 elevation profile. The UI is bilingual — Japanese by default with an English toggle (ADR-8).
 
 This document captures (1) the key architecture decisions — including the alternatives that were
@@ -123,7 +123,7 @@ Each trail card and detail screen shows a hero photo. The trail content and phot
 AllTrails. The app must work with **no network**.
 
 **Decision.**
-Commit the hero images as local `.webp` files under `images/` (now **twelve**, one per trail) and
+Commit the hero images as local `.webp` files under `images/` (now **ten**, one per trail) and
 reference them by relative path (e.g. `images/lake-22.webp`). They are precached by the service
 worker on install (`TRAIL_ASSETS` in `sw.js`).
 
@@ -141,7 +141,7 @@ worker on install (`TRAIL_ASSETS` in `sw.js`).
 
 **Consequences.**
 
-- Roughly **~2.9 MB of WebP** is committed under `images/` (twelve files, ~140–315 KB each).
+- Roughly **~2.5 MB of WebP** is committed under `images/` (ten files, ~140–315 KB each).
 - Attribution is shown in the UI ("Trail info & photo via AllTrails." plus a per-source map credit —
   "Map © USGS National Map" or "Map © GSI Japan (地理院タイル)", chosen by the trail's tile source;
   see ADR-9).
@@ -303,7 +303,7 @@ A **three-tier** caching strategy:
 
 1. **Shell + GPX + hero images — precached on service-worker install.**
    `SHELL` (HTML/CSS/JS/manifest/icon + Leaflet from unpkg) is added with `cache.addAll` and
-   **must succeed**; `TRAIL_ASSETS` (the twelve GPX files and twelve images) are added **best-effort**
+   **must succeed**; `TRAIL_ASSETS` (the ten GPX files and ten images) are added **best-effort**
    with `Promise.allSettled` so one failure doesn't abort install.
 
    ```js
@@ -410,7 +410,7 @@ let lang = (localStorage.lang === 'en' || localStorage.lang === 'ja')
 
 - **No build step / no framework (ADR-5)** rules out an i18n library — there is nothing to compile
   message catalogs or wire up a provider.
-- The **dataset is tiny** (twelve trails, a few dozen UI strings), so plain objects are more than
+- The **dataset is tiny** (ten trails, a few dozen UI strings), so plain objects are more than
   enough and keep everything **debuggable** and **offline-cacheable** as ordinary static JS.
 - **Merging-with-fallback** means a missing Japanese field **degrades gracefully to English**
   rather than rendering blank or throwing — important while translations are filled in.
@@ -445,7 +445,7 @@ let lang = (localStorage.lang === 'en' || localStorage.lang === 'ja')
 ### ADR-9: Per-trail tile source — GSI 地理院タイル for the Japan trails (USGS stays the US/default)
 
 **Context.**
-Expanding to four Japan trails (ADR-11) broke a hidden assumption in ADR-2: that there is **one**
+Expanding to the Japan trails (ADR-11) broke a hidden assumption in ADR-2: that there is **one**
 basemap. USGS National Map covers only the US, so the Japan trails would render on blank tiles.
 Japan needs its own topographic raster source that is **free, key-less, CORS-enabled** (the SW
 caches cross-origin tile responses), and **tolerant of the app's per-use caching** — the same bar
@@ -454,7 +454,7 @@ USGS cleared in ADR-2.
 **Decision.**
 Make the tile source **per-trail**. A `TILE_SOURCES` map in `app.js` defines two sources, and each
 trail optionally names one via a `tiles` field; **absent ⇒ `usgs`**, so the eight US trails were
-untouched. The four Japan trails set `tiles: "gsi"`, pointing at the official **GSI 地理院タイル
+untouched. Both Japan trails set `tiles: "gsi"`, pointing at the official **GSI 地理院タイル
 "std"** raster set from the Geospatial Information Authority of Japan (国土地理院):
 
 ```js
@@ -502,12 +502,12 @@ detail-screen attribution line.
 
 **Context.**
 ADR-7's tier 3 gave each trail its own "Download map for offline" button, a progress modal, and a
-per-card "✓ available offline" badge. With twelve trails across two tile sources that is a lot of
-surface area, and "are my maps saved?" had **twelve answers**. The user asked for a single button.
+per-card "✓ available offline" badge. With ten trails across two tile sources that is a lot of
+surface area, and "are my maps saved?" had **ten answers**. The user asked for a single button.
 
 **Decision.**
 Replace all of that with **one global button** (`#dl-all`) in the list header, beside the language
-toggle. One tap caches tiles for **all twelve trails across both sources** in a single foreground
+toggle. One tap caches tiles for **all ten trails across both sources** in a single foreground
 pass; the button is the **single source of truth** for download status and shows its own state:
 idle (`⬇ Save maps`) → live `NN%` → done (`✓ Maps saved`).
 
@@ -521,7 +521,7 @@ depends on a trail being open (the old `trailBox` read the live `trackPts`). On 
 
 **Rationale.**
 
-- **One source of truth** for "are my maps saved" — far simpler than reconciling twelve badges.
+- **One source of truth** for "are my maps saved" — far simpler than reconciling ten badges.
 - It's a direct, explicit, user-initiated **foreground** action, which is all iOS allows (no
   Background Fetch — unchanged from ADR-7).
 
@@ -532,8 +532,8 @@ depends on a trail being open (the old `trailBox` read the live `trackPts`). On 
 
 **Consequences.**
 
-- **All-or-nothing, not selective**, and it downloads more in one go: a real run cached **~2,723
-  tiles** (≈1,973 USGS + 750 GSI). Acceptable trade for the simpler model; the download is
+- **All-or-nothing, not selective**, and it downloads more in one go: a full run caches **~3,200
+  tiles** (≈2,760 USGS + ~465 GSI). Acceptable trade for the simpler model; the download is
   deduped, batched, and shows live progress.
 - The removed per-trail button, modal, and per-card badge are noted in Part 4. The dynamic
   download strings they used were also removed from `i18n.js` (`fn` is now empty — ADR-8).
@@ -565,11 +565,19 @@ from the display name, and surface the **seasonal-closure and reservation/fee fa
 
 - The two Fuji entries deliberately diverge from the raw AllTrails title (no "[CLOSED]"); the
   closure information is **not lost**, just relocated to `permit`/`tips`/`summary`.
-- **All four Japan trails are labeled `"Hard"`**, faithful to AllTrails' `difficulty_rating`, even
-  though **Gotemba** (12.5 mi / 7,775 ft, climbing to ~3,751 m) is the **single biggest climb in the
+- **All four Japan trails were labeled `"Hard"`**, faithful to AllTrails' `difficulty_rating`, even
+  though **Gotemba** (12.5 mi / 7,775 ft, climbing to ~3,751 m) was the **single biggest climb in the
   app** and is arguably "Very Hard." This is kept faithful to the documented pipeline on purpose —
   flagged here (and in Part 4) so it isn't "re-discovered" as a bug. See `docs/DATA-PIPELINE.md` for
   the Japan-trail sourcing notes (webarchive recovery, `trailGeoStats`).
+
+> **Update (2026-06):** of these four Japan trails, only **`fuji-yoshida`** remains —
+> `fuji-gotemba`, `daibosatsu`, and `kinpu` (Kanayama) were later removed, and a separate
+> Mt. Kinpu route via **Odarumi Pass** (`kinpu-odarumi`) was added. So the two Japan trails
+> today are `fuji-yoshida` and `kinpu-odarumi`. With Gotemba gone, the "single biggest climb"
+> note above is historical — the **Enchantments Traverse** (US, ~4,845 ft) is now the app's
+> biggest climb. The decision to include the Fuji **Yoshida** route (and to relocate the
+> `[CLOSED]` facts into `permit`/`tips`/`summary`) still stands.
 
 ---
 
@@ -700,12 +708,12 @@ satisfied from the cache, so source edits are invisible until the cache is inval
   reload re-fetches from disk).
 - To ship updates to users: **bump the cache version** so the new SW installs a fresh shell and the
   `activate` handler deletes the stale caches. The shell cache version is `APP_V` in `sw.js`
-  (currently **`'wa-trails-app-v4'`** — bumped each shell release; it was v2 when this bug was first
+  (currently **`'wa-trails-app-v9'`** — bumped each shell release; it was v2 when this bug was first
   written up), while the tile cache `TILE_V` (`'wa-trails-tiles-v1'`) is kept stable so downloaded
   tiles survive shell updates:
 
 ```js
-const APP_V  = 'wa-trails-app-v4';
+const APP_V  = 'wa-trails-app-v9';
 const TILE_V = 'wa-trails-tiles-v1';
 
 self.addEventListener('activate', e => {
@@ -717,7 +725,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v4'`, the shell is served
+**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v9'`, the shell is served
 cache-first, and `activate` deletes every cache except the current `APP_V` and `TILE_V`.
 
 **Lesson.** Cache-first service workers are great in production and **hostile during development**.
@@ -808,14 +816,14 @@ ADR-10 — across both USGS and GSI).
 
 **Functional checks (verified by reading the rendered DOM, cross-checked against `trails.js`).**
 
-- **Filter:** selecting **Hard** shows **7** trails — the three WA *Hard* routes (*Mount Pilchuck*,
-  *Bridal Veil Falls & Lake Serene*, *Skyline Loop*) plus all four Japan trails (*Fuji Yoshida*,
-  *Fuji Gotemba*, *Daibosatsu*, *Kinpu*), all labeled `diff: "Hard"`. **Very Hard** shows exactly one
-  (*The Enchantments Traverse*).
-- **Sort:** **distance ascending** begins **3.5 → 4.2 → 5.4 → 5.4 → 5.7 mi** (Talapus Lake → Fuji
-  Yoshida → Mount Pilchuck / Mount Daibosatsu → Skyline Loop). Confirmed against the `lengthMi`
-  values.
-- The list reports **12 trails**, matching the twelve entries in `trails.js` (eight WA + four Japan).
+- **Filter:** selecting **Hard** shows **4** trails — the three WA *Hard* routes (*Mount Pilchuck*,
+  *Bridal Veil Falls & Lake Serene*, *Skyline Loop*) plus **Fuji Yoshida** (Japan), all labeled
+  `diff: "Hard"`. **Moderate** shows **5** (including *Mount Kinpu / Odarumi Pass*); **Very Hard**
+  shows exactly one (*The Enchantments Traverse*).
+- **Sort:** **distance ascending** begins **3.5 → 4.2 → 5.2 → 5.4 → 5.7 mi** (Talapus Lake → Fuji
+  Yoshida → Mount Kinpu / Odarumi Pass → Mount Pilchuck → Skyline Loop). Confirmed against the
+  `lengthMi` values.
+- The list reports **10 trails**, matching the ten entries in `trails.js` (eight WA + two Japan).
 
 **Lessons.**
 
@@ -869,14 +877,15 @@ Several previously-flagged items were addressed and **verified against the curre
   download UI uses static `dlAll` / `dlAllDone` / `dlAllAria` keys plus a bare percentage. New
   per-source attribution keys `attribTrail` / `attribUsgs` / `attribGsi` were added in both
   languages.
-- **`sw.js` bumped to `wa-trails-app-v4`.** `TRAIL_ASSETS` now precaches **twelve** GPX files and
-  twelve hero images (eight WA + four Japan), and the cache-first tile handler matches **both**
+- **`sw.js` cache bumped to `wa-trails-app-v9`.** `TRAIL_ASSETS` now precaches **ten** GPX files and
+  ten hero images (eight WA + two Japan), and the cache-first tile handler matches **both**
   `nationalmap.gov` and `cyberjapandata.gsi.go.jp` (ADR-9). `TILE_V` stays `wa-trails-tiles-v1` so
   downloaded tiles survive the shell bump (the cache-version-as-release-lever practice from Bug 3 is
   unchanged).
 
 **Known-faithful, do-not-"fix":**
 
-- **All four Japan trails are `"Hard"`** per AllTrails' `difficulty_rating`, even though **Gotemba**
-  (12.5 mi / 7,775 ft, to ~3,751 m) is the biggest climb in the app and is arguably "Very Hard"
-  (ADR-11). Kept faithful to the documented pipeline on purpose — not a bug.
+- **Difficulty labels stay faithful to AllTrails' `difficulty_rating`**, not re-judged — e.g.
+  **Fuji Yoshida** is `"Hard"` (short at 4.2 mi but +4,701 ft to ~3,710 m). Not a bug. (The
+  earlier note here flagged the now-removed **Gotemba** route as an arguable "Very Hard"; see
+  ADR-11's update. With Gotemba gone, *The Enchantments Traverse* is the only `"Very Hard"`.)

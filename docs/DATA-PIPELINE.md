@@ -1,14 +1,24 @@
 # Ume-chan's Trails — Data Pipeline
 
-How the source data for the twelve bundled trails was extracted from saved
+How the source data for the ten bundled trails was extracted from saved
 AllTrails web pages and turned into the app's runtime assets
 (`trails.js`, `gpx/*.gpx`, `images/*.webp`). This document exists so the
 process is **reproducible** when adding a new trail.
 
 > The original eight Washington trails were extracted from saved `.html`
-> pages; the four newer Japan trails came from `.webarchive`-only saves and a
+> pages; the Japan trails came from `.webarchive`-only saves and a
 > cleaner embedded-stats source (`trailGeoStats`). The differences are flagged
 > in §1, §2b/§2d, and §6 — read those before adding a non-US trail.
+>
+> **Update (2026-06):** the app now ships **10 trails (8 Washington + 2
+> Japan)**. Three Japan trails that were extracted earlier — Mt. Fuji: Gotemba
+> Trail, Mount Daibosatsu Loop, and Mount Kinpu (Kanayama) — were removed from
+> the app; their `trails.js` entries, GPX, and hero images are gone, though
+> their saved AllTrails source pages remain in `alltrails/` as history. The
+> remaining Japan trails are Mt. Fuji: Yoshida Trail and Mount Kinpu (Odarumi
+> Pass). The narrative below still discusses the removed routes where they
+> illustrate the process (e.g. the four-Fuji-route cross-link gotcha) — those
+> passages are historical and flagged.
 
 > TL;DR for the impatient: skip to
 > [Reproducing the pipeline for a new trail](#6-reproducing-the-pipeline-for-a-new-trail).
@@ -19,22 +29,28 @@ process is **reproducible** when adding a new trail.
 
 | Path | Status | What it is |
 | --- | --- | --- |
-| `alltrails/` | **git-ignored** (see `.gitignore`) | Raw source: saved AllTrails `.html` page exports, `.webarchive` Safari archives, and `.gpx` downloads. Large (~340 MB), never deployed. |
+| `alltrails/` | **partly committed** | Raw source: saved AllTrails `.html` page exports and `.gpx` downloads **are committed** (~8 MB). The `.webarchive` Safari archives are kept locally but **git-ignored** — they embed third-party secret tokens (a Mapbox access token) that GitHub push protection blocks. Not deployed by the app either way. |
 | `trails.js` | committed | The final trail metadata array (`window.TRAILS`). The product of the metadata stages below. |
 | `gpx/*.gpx` | committed | One GPX track per trail. Loaded and parsed **at runtime** by `app.js` (not pre-baked into JSON). |
 | `images/*.webp` | committed | One hero photo per trail, `1200×800` WebP. |
 | `sw.js` | committed | Service worker. Lists every GPX + image in `TRAIL_ASSETS` so they are cached on install for full offline use. |
 | `app.js` | committed | Runtime: GPX parse, haversine distance, elevation smoothing, map + elevation profile. |
 
-The app is a static PWA showing **8 Washington State trails + 4 Japan trails**:
+The app is a static PWA showing **8 Washington State trails + 2 Japan trails**:
 
 **Washington (USGS topo basemap):**
 Lake 22, Snow Lake, Lake Valhalla, Talapus Lake, Mount Pilchuck,
 Bridal Veil Falls & Lake Serene, Skyline Loop, The Enchantments Traverse.
 
 **Japan (GSI 地理院タイル basemap — each carries `tiles:"gsi"` in `trails.js`):**
-Mt. Fuji: Yoshida Trail (5th Station Ascent), Mt. Fuji: Gotemba Trail,
-Mount Daibosatsu Loop, Mount Kinpu (Kanayama).
+Mt. Fuji: Yoshida Trail (5th Station Ascent), Mount Kinpu (Odarumi Pass).
+
+> **Update (2026-06):** the Japan list was trimmed from four to two. Mt. Fuji:
+> Gotemba Trail, Mount Daibosatsu Loop, and Mount Kinpu (Kanayama) were removed.
+> Mount Kinpu (Odarumi Pass) is a **different** route from the removed Kinpu
+> (Kanayama) and is still present. Note also that the `alltrails/` `.html`/`.gpx`
+> source is now committed (the `.webarchive` archives stay git-ignored — see the
+> §0 table and `.gitignore`).
 
 ---
 
@@ -65,7 +81,7 @@ Lake_22_Trail.gpx
 ```
 
 > ### Japan trails: `.webarchive`-only (recover HTML from `WebMainResource`)
-> The four Japan trails were saved as **`.webarchive` only — there is no
+> The Japan trails were saved as **`.webarchive` only — there is no
 > `.html` file** for them. That is fine: the rendered page HTML is also
 > inside the webarchive, under the top-level plist key
 > **`WebMainResource` → `WebResourceData`** (the raw bytes of the main
@@ -74,6 +90,12 @@ Lake_22_Trail.gpx
 > below (§2a/§2b/§2d) works unchanged** once you've recovered it. (Contrast
 > with §4, which reads `WebSubresources` from the *same* archive to get the
 > embedded images; here it's `WebMainResource` for the document itself.)
+>
+> **Update (2026-06):** only two Japan trails ship now (Yoshida, Kinpu /
+> Odarumi Pass). The Japan `.gpx` files are committed, but their `.webarchive`
+> saves (and those of the three removed routes) are kept locally and **git-ignored**
+> — webarchives embed third-party secret tokens that GitHub push protection blocks.
+> The recovery technique is unchanged.
 >
 > ```python
 > import plistlib
@@ -110,8 +132,8 @@ yields the human-facing fields:
 | `name` | `name` | e.g. `"Lake 22 Trail"` |
 | `description` | seed for `summary` / `description` | Marketing blurb; hand-edited (see §2c). |
 | `geo.latitude`, `geo.longitude` | `center` | Strings; cast to number. Used as the map's fallback center. |
-| `aggregateRating.ratingValue` | `rating` | e.g. `4.7` |
-| `aggregateRating.reviewCount` | `reviews` | e.g. `18454` (matches `trails.js`). |
+| `aggregateRating.ratingValue` | `rating` | e.g. `4.7`. **Update (2026-06): no longer used** — the `rating` field was removed from every `trails.js` object and the UI no longer shows star ratings. The value is still present in the source page; it just isn't carried into the app. |
+| `aggregateRating.reviewCount` | `reviews` | e.g. `18454` (matched `trails.js` at the time). **Update (2026-06): no longer used** — the `reviews` field was removed from every `trails.js` object. (The saved-page filenames still read e.g. "18,454 Reviews" — that is legitimate source-data history.) |
 | `image[0]` | hero image URL | An `images.alltrails.com` URL — see §4 for how it is decoded/upscaled. |
 | `address.addressLocality` | seed for `area` | e.g. `"Granite Falls, Washington, United States"` → trimmed to `"Granite Falls, WA"`. |
 
@@ -187,11 +209,13 @@ constant for elevation, and `1609.344` inline (`mi → km`) for distance display
 > the page before committing them. The final values that shipped (table
 > below) were verified this way.
 >
-> This is **especially** dangerous on the two Mt. Fuji pages: each Fuji page
-> cross-links **all four Fuji routes** plus many nearby trails, so a naïve
+> This is **especially** dangerous on the Mt. Fuji pages: each Fuji page
+> cross-links **every Fuji route** plus many nearby trails, so a naïve
 > `length` / `elevation_gain` regex easily matches the wrong route. For the
 > Japan trails we sidestepped the problem entirely by reading the headline
 > stats from the page's own `trailGeoStats` block instead — see §2d.
+> (**Update (2026-06):** only the Yoshida Fuji route still ships, but the same
+> cross-link hazard applies to its page — and to any new Fuji route you add.)
 
 Representative extractor (returns *all* embedded stat objects so you can pick
 the primary one):
@@ -224,8 +248,8 @@ def extract_stat_objects(html_path):
 The §2b extractor walks every embedded trail-stat object and asks you to pick
 the primary one by matching the headline length. That works for the Washington
 pages, but on the **Fuji pages it is too error-prone** (those pages cross-link
-all four Fuji routes plus many nearby trails — see the gotcha above). For the
-four Japan trails we read the headline stats from a single, unambiguous block
+every Fuji route plus many nearby trails — see the gotcha above). For the
+Japan trails we read the headline stats from a single, unambiguous block
 the page embeds for **the trail you're actually looking at**: **`trailGeoStats`**.
 
 It is plain (not backslash-escaped) JSON, all **in metric**, and maps cleanly:
@@ -240,27 +264,43 @@ It is plain (not backslash-escaped) JSON, all **in metric**, and maps cleanly:
 | `durationFormatted` | string | `time` | e.g. `"3 h 46 min"` — copied straight into `trails.js` |
 
 `difficulty_rating` and `route_type` are **still** read the §2b way:
-`difficulty_rating` `5 → Hard` (all four Japan trails are Hard); `route_type`
+`difficulty_rating` `5 → Hard` (the Yoshida route is Hard); `route_type`
 `O → Out & back`, `L → Loop`, `P → Point to point` unchanged.
 
-JSON-LD (§2a) still supplies `name`, `address.addressLocality` (→ `area`),
-`aggregateRating` `ratingValue`+`reviewCount` (→ `rating`/`reviews`), and the
-hero `image[0]` URL exactly as for the Washington trails.
+JSON-LD (§2a) still supplies `name`, `address.addressLocality` (→ `area`) and
+the hero `image[0]` URL exactly as for the Washington trails. (It also carried
+`aggregateRating` `ratingValue`+`reviewCount`, but **the `rating`/`reviews`
+fields were removed from `trails.js` and the UI — see §2a — so those are no
+longer extracted into the app.**)
 
-Verified `trailGeoStats` values that shipped (compare to the table below):
+Verified `trailGeoStats` values that shipped at extraction time (the bottom two
+rows are the **removed** Gotemba/Daibosatsu/Kinpu-Kanayama routes, kept here as
+a record of the technique):
 
 | slug | `length` | = miles | `elevationGain` | = gain (ft) | `elevationMax` | `durationMinutes` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `fuji-yoshida` | 6,759 m | 4.2 | 1,433 m | 4,701 | 3,704 m | 226 |
-| `fuji-gotemba` | 20,117 m | 12.5 | 2,370 m | 7,775 | 3,751 m | 710 |
-| `daibosatsu` | 8,690 m | 5.4 | 614 m | 2,014 | 2,045 m | 221 |
-| `kinpu` | 15,772 m | 9.8 | 1,312 m | 4,304 | 2,594 m | 442 |
+| `fuji-gotemba` *(removed)* | 20,117 m | 12.5 | 2,370 m | 7,775 | 3,751 m | 710 |
+| `daibosatsu` *(removed)* | 8,690 m | 5.4 | 614 m | 2,014 | 2,045 m | 221 |
+| `kinpu` *(Kanayama, removed)* | 15,772 m | 9.8 | 1,312 m | 4,304 | 2,594 m | 442 |
+
+> **Update (2026-06):** the three rows marked *(removed)* are no longer in the
+> app — they are kept only to document the `trailGeoStats` extraction. The
+> shipping Mount Kinpu (Odarumi Pass) route (`kinpu-odarumi`) is a separate,
+> shorter trail (5.2 mi / 1,673 ft, Moderate, Out & back — see the final-stats
+> table) and was **not** sourced from a `trailGeoStats`/AllTrails page the same
+> way; its stats live in `trails.js`. The Odarumi Pass page saved in
+> `alltrails/` is "Odarumi Toge - Mount Kinpu, Yamanashi, Japan."
 
 > The Yoshida GPX is a **one-way ascent** (5th Station → crater rim), and the
 > Yoshida page's `trailGeoStats` is **also** the one-way ascent (4.2 mi /
-> 4,701 ft) — they agree, which is why the route is `Point to point`. The
-> Gotemba (round-trip out & back), Daibosatsu (loop), and Kinpu (out & back)
-> GPX lengths likewise match their official `trailGeoStats` lengths.
+> 4,701 ft) — they agree, which is why the route is `Point to point`.
+> **Update (2026-06):** the Yoshida GPX was **replaced** with a new track
+> (now **2,438** track points, **0** waypoints — see §5); its route is still
+> the one-way ascent and the shipped 4.2 mi / 4,701 ft stats are unchanged.
+> Historically the Gotemba (round-trip out & back), Daibosatsu (loop), and
+> Kinpu/Kanayama (out & back) GPX lengths likewise matched their official
+> `trailGeoStats` lengths — but those three routes have since been removed.
 
 ### 2c. Hand-curated prose
 
@@ -272,15 +312,22 @@ extraction. (The map/photo attribution lines in `app.js` credit AllTrails for
 trail info and photos, and the per-trail basemap — USGS for US trails, GSI
 地理院タイル for Japan — via `trailSource(trail).creditKey`.)
 
-> ### The "[CLOSED]" wrinkle (both Mt. Fuji pages)
-> Both Fuji pages are flagged **`[CLOSED]`** on AllTrails — Fuji climbs only
+> ### The "[CLOSED]" wrinkle (the Mt. Fuji pages)
+> The Fuji pages are flagged **`[CLOSED]`** on AllTrails — Fuji climbs only
 > run roughly **July–September**, and the Yoshida route added a **2024+
 > advance reservation + ¥2,000 entry fee + daily cap (~4,000)**. Decision: we
-> **include both** trails, **drop the literal "[CLOSED]"** from the display
-> `name`, and fold the seasonal-closure + reservation/fee facts into the
-> hand-curated `permit`, `summary`, and `tips[]` instead. Difficulty is kept
-> at AllTrails' value (**all four Japan trails are Hard**) even though Gotemba
-> (7,775 ft) is the single biggest climb in the entire app.
+> **include** the Fuji trail(s), **drop the literal "[CLOSED]"** from the
+> display `name`, and fold the seasonal-closure + reservation/fee facts into
+> the hand-curated `permit`, `summary`, and `tips[]` instead. (The committed
+> Yoshida GPX still carries `[CLOSED]` in its internal `<name>`; only the
+> displayed `trails.js` `name` is cleaned up.) Difficulty is kept at AllTrails'
+> value.
+>
+> **Update (2026-06):** historically this applied to **both** Fuji routes, and
+> Gotemba (7,775 ft) was then the single biggest climb in the app. With Gotemba
+> removed, only the Yoshida route remains, and the **biggest climb in the
+> current app is The Enchantments Traverse (4,845 ft)**, followed by Yoshida
+> (4,701 ft).
 
 ### Final shipped stats (reference)
 
@@ -295,14 +342,17 @@ trail info and photos, and the per-trail basemap — USGS for US trails, GSI
 | `skyline-loop` | Skyline Loop | 5.7 | 1,781 | Hard | Loop |
 | `enchantments` | The Enchantments Traverse | 19.1 | 4,845 | Very Hard | Point to point |
 | `fuji-yoshida` | Mt. Fuji: Yoshida Trail (5th Station Ascent) | 4.2 | 4,701 | Hard | Point to point |
-| `fuji-gotemba` | Mt. Fuji: Gotemba Trail | 12.5 | 7,775 | Hard | Out & back |
-| `daibosatsu` | Mount Daibosatsu Loop | 5.4 | 2,014 | Hard | Loop |
-| `kinpu` | Mount Kinpu (Kanayama) | 9.8 | 4,304 | Hard | Out & back |
+| `kinpu-odarumi` | Mount Kinpu (Odarumi Pass) | 5.2 | 1,673 | Moderate | Out & back |
 
-The four Japan trails (`tiles:"gsi"`) additionally carry `rating`/`reviews`
-**4.6 / 448**, **4.7 / 137**, **4.6 / 29**, **4.8 / 2** and `durationFormatted`
-times **3 h 46 min**, **11 h 50 min**, **3 h 41 min**, **7 h 22 min**
-respectively (from §2a / §2d).
+The two Japan trails carry `tiles:"gsi"`. Their `durationFormatted`-derived
+`time` values are **3 h 46 min** (Yoshida) and **3 h 15 min** (Kinpu / Odarumi
+Pass). **Update (2026-06):** the `rating`/`reviews` columns that used to follow
+this table were dropped — those fields no longer exist in `trails.js` and star
+ratings were removed from the UI (the list-card slot the star occupied now
+shows the hike `time` ⏱). Three Japan trails — `fuji-gotemba` (12.5 mi /
+7,775 ft), `daibosatsu` (5.4 mi / 2,014 ft), and `kinpu`/Kanayama (9.8 mi /
+4,304 ft) — were removed from this table; their figures survive in the §2d
+historical `trailGeoStats` table above.
 
 ---
 
@@ -343,10 +393,10 @@ So the number you read and the squiggle you see come from **two different
 sources on purpose.** If someone "corrects" `gainFt` to a raw-GPX sum, the
 numbers will inflate by ~50–60 %. Don't.
 
-The same rule covers the four Japan trails: their `gainFt` comes from the
-DEM-based `trailGeoStats.elevationGain` (§2d), **not** the raw GPX. (So
-Gotemba ships at 7,775 ft, not whatever its noisy 3,233-point track would sum
-to.)
+The same rule covers the Japan trails: the Yoshida `gainFt` comes from the
+DEM-based `trailGeoStats.elevationGain` (§2d), **not** the raw GPX. (Mount Kinpu
+/ Odarumi Pass's `gainFt` is likewise an authoritative DEM-style figure stored
+in `trails.js`, not a raw-GPX sum.)
 
 > Note: the moving-average window in `app.js` (15) is for *display shape*. The
 > w11/w21/w31 figures above were from an offline calibration experiment used
@@ -450,6 +500,11 @@ saved as `images/<slug>.webp` (all eight verified at `1200×800`).
 > `1200×800 cover, webp` with `upscale_alltrails_url()` below and re-fetched.
 > Result: `images/{fuji-yoshida,fuji-gotemba,daibosatsu,kinpu}.webp`, all
 > `1200×800`, **~140–313 KB** each.
+>
+> **Update (2026-06):** of those four, only `fuji-yoshida` still ships;
+> `fuji-gotemba`, `daibosatsu`, and `kinpu` were removed and their `.webp` heroes
+> deleted. The current second Japan trail, `kinpu-odarumi`, was added later via
+> the same pipeline.
 
 ```python
 import base64, json, urllib.parse, urllib.request
@@ -510,7 +565,7 @@ committed under `gpx/` and parsed live in the browser by `app.js`
 - **Elevation smoothing:** `smoothEle()` runs (window 15) to populate `p.se`
   for the profile curve (see §3).
 - **Bounds / framing:** the GPX `<metadata><bounds>` element is present in all
-  twelve files. At runtime the map actually frames the track via
+  ten files. At runtime the map actually frames the track via
   `map.fitBounds(trackLayer.getBounds())` (computed from the drawn polyline);
   the offline-tile bounding box (`gpxBox()` in `app.js`) is computed from the
   track points when available, falling back to `trail.center ± 0.02°`.
@@ -530,12 +585,10 @@ counts in the committed GPX:
 | `Bridal_Veil_..._Lake_Serene_Trail.gpx` | 1,823 | 0 |
 | `Skyline_Loop.gpx` | 1,258 | 0 |
 | `The_Enchantments_Traverse.gpx` | 7,153 | 0 |
-| `Mt_Fuji_Yoshida.gpx` | 366 | 0 |
-| `Mt_Fuji_Gotemba.gpx` | 3,233 | 0 |
-| `Mount_Daibosatsu_Loop.gpx` | 1,384 | 0 |
-| `Mount_Kinpu_Kanayama.gpx` | 903 | 0 |
+| `Mt_Fuji_Yoshida.gpx` | 2,438 | 0 |
+| `Mount_Kinpu_Odarumi.gpx` | 1,507 | 0 |
 
-(All four Japan GPX have **0** waypoints, so they show only trailhead/end
+(Both Japan GPX have **0** waypoints, so they show only trailhead/end
 endpoint markers — no amber waypoint dots or dashed profile lines.)
 
 (Lake 22's five waypoints are e.g. *Bridge*, *Waterfall*, *Vista* — they
@@ -607,12 +660,14 @@ Ordered checklist to add one trail end-to-end:
 1. **Save the source.** From the AllTrails trail page, save the
    `.webarchive` (Safari → File → Save As → *Web Archive*) — and ideally the
    `.html` too — and download the route `.gpx`. Drop them in `alltrails/`
-   (git-ignored). If you only have the `.webarchive` (as with all four Japan
+   (the `.html`/`.gpx` are committed; `.webarchive` is **git-ignored** — it embeds
+   third-party secrets). If you only have the `.webarchive` (as with the Japan
    trails), recover the page HTML from its `WebMainResource.WebResourceData`
    bytes first (§1) — every HTML-based step below then works as written.
 2. **Extract JSON-LD metadata** from the HTML (`@type: "LocalBusiness"`):
-   name, geo lat/lon (→ `center`), `aggregateRating` (→ `rating`, `reviews`),
-   `address.addressLocality` (→ `area`), and the hero `image` URL. (§2a)
+   name, geo lat/lon (→ `center`), `address.addressLocality` (→ `area`), and the
+   hero `image` URL. (§2a) (`aggregateRating` is no longer carried into the app —
+   the `rating`/`reviews` fields were removed; see §2a.)
 3. **Pull the official numeric stats.** Read length / gain / max / duration
    from the page's **`trailGeoStats`** block (§2d) — this is the cleanest
    source and is **required** for cross-linked pages like the Fuji routes,
@@ -627,7 +682,7 @@ Ordered checklist to add one trail end-to-end:
    image URL's base64 config to `1200×800 cover, webp` and fetch it. Save as
    `images/<slug>.webp`. (§4)
 5. **Write the `trails.js` entry.** Use the existing objects as the template
-   (`slug`, `name`, `area`, `img`, `gpx`, `rating`, `reviews`, `lengthMi`,
+   (`slug`, `name`, `area`, `img`, `gpx`, `lengthMi`,
    `gainFt`, `diff`, `route`, `time`, `season`, `dogs`, `permit`, `center`,
    `summary`, `description`, `tips[]`). For a **non-US trail add
    `tiles:"gsi"`** so it uses the GSI 地理院タイル basemap instead of USGS topo
@@ -640,7 +695,7 @@ Ordered checklist to add one trail end-to-end:
    the filenames exactly.
 7. **Register both in the service worker.** Add the new `gpx/...` and
    `images/...` paths to `TRAIL_ASSETS` in `sw.js` so they are precached for
-   offline. Bump `APP_V` (currently `wa-trails-app-v4`) so clients pick up the
+   offline. Bump `APP_V` (currently `wa-trails-app-v9`) so clients pick up the
    new asset list. (`sw.js`'s tile cache-first rule already matches both
    `nationalmap.gov` and `cyberjapandata.gsi.go.jp`, so a `tiles:"gsi"` trail's
    tiles cache offline with no further change.)
