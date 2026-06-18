@@ -164,20 +164,23 @@ img { display:block; }
    It's a SIBLING of the card's <a> (inside .card-wrap), so tapping it never navigates. */
 .card-wrap { position:relative; flex-shrink:0; }
 .card-dl {
-  position:absolute; top:11px; right:11px; z-index:3;
-  width:44px; height:44px;                 /* 44px tap target; visible chip is the inner span */
+  position:absolute; top:12px; right:12px; z-index:3;   /* +1px vs the badge's 11px to clear the card's border, so both sit on the same line */
+  width:28px; height:28px;                 /* same height as the difficulty badge → centers align */
   display:flex; align-items:center; justify-content:center;
   padding:0; border:none; background:none; cursor:pointer; -webkit-tap-highlight-color:transparent;
 }
+.card-dl::before {                         /* invisible 44px tap target (iOS HIG), centered on the chip */
+  content:""; position:absolute; top:50%; left:50%; width:44px; height:44px; transform:translate(-50%,-50%);
+}
 .card-dl .cdl-ic {
   display:flex; align-items:center; justify-content:center;
-  width:34px; height:34px; border-radius:50%;
+  width:28px; height:28px; border-radius:50%;
   background:rgba(255,255,255,0.92);
   -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
   box-shadow:0 1px 4px rgba(14,22,18,0.18);
   color:var(--pine-d); transition:transform .1s, background .15s, color .15s;
 }
-.card-dl .ic { width:18px; height:18px; }
+.card-dl .ic { width:15px; height:15px; }
 .card-dl:active .cdl-ic { transform:scale(0.9); }
 .card-dl.busy .cdl-ic {                     /* determinate progress ring; --p (0–100) set from JS */
   color:var(--pine-d);

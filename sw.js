@@ -1,4 +1,4 @@
-const APP_V = 'wa-trails-app-v18';   // bumped: per-trail download buttons on list cards + green walked-line halo
+const APP_V = 'wa-trails-app-v19';   // bumped: align per-trail download chip with the difficulty badge (same size + horizontal line)
 
 importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 
