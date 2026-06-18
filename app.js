@@ -106,7 +106,7 @@ let walkedDist = 0, progIdx = -1;   // monotonic distance-along reached (m); las
 let walkedLayer = null;             // green polyline drawn over the red base track
 let reacqMiss = 0;                  // consecutive off-window fixes (triggers a full re-acquire)
 let pendingResume = null;           // a saved session offered for resume on the current trail
-let resumeOnOpen = false;           // set by the list "resume hike" banner → auto-resume on open
+let resumeOnOpen = false;           // bootRoute (cold relaunch) or the list "resume hike" banner → auto-resume on open
 let gpsWasHidden = false;           // GPS was live when last backgrounded (→ refresh fix on return)
 let locatingTimer = null;           // safety auto-hide for the "locating…" indicator
 
@@ -318,7 +318,7 @@ async function openDetail(trail) {
   setSheet('peek');
   initMap();
   await loadTrail(trail);
-  if(resumeOnOpen){           // arrived via the list "resume hike" banner → resume straight away
+  if(resumeOnOpen){           // arrived via cold-relaunch auto-route (bootRoute) or the list banner → resume straight away
     resumeOnOpen=false;
     const s=readSession();
     if(s && s.slug===trail.slug && (Date.now()-(s.savedAt||0)<=SESSION_MAX_AGE_MS) && savedElapsedMs(s)>=RESUME_MIN_MS) resumeSession(s);
@@ -984,8 +984,9 @@ function resumeSession(s){
   persistSession();                                 // re-stamp savedAt now that we're live again
 }
 
-// List-screen "resume hike" banner — after a full relaunch the user lands on the list (start_url is
-// "./", so the trail hash is gone), so surface a saved, fresh session there as a one-tap way back in.
+// List-screen "resume hike" banner — the fallback way back into a saved session. On a cold relaunch
+// bootRoute() already auto-routes a fresh active hike straight to its trail; this banner surfaces a
+// saved session on the list for the sub-threshold case and after the user has navigated back here.
 function updateListResume(){
   const el=$('#list-resume'); if(!el) return;
   const s=readSession();

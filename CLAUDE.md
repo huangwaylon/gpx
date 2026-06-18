@@ -91,7 +91,7 @@ trail and auto-resumes** the live session (the elapsed clock counted through the
 "resume hike" banner is the fallback), and after a few rejected fixes a **stale-window re-acquire**
 re-snaps your position — built for the pocket-the-phone-then-check-at-the-summit pattern. Offline is
 three tiers: SW precache (shell+i18n+GPX+images, in Cache Storage) →
-tiles served from **IndexedDB** (cache-first, both hosts; see `tiles-db.js`) → a **single global
+tiles served from **IndexedDB** (IndexedDB-first, both hosts; see `tiles-db.js`) → a **single global
 "download all maps" button** (`downloadAll`) in the list header that fills that tile store for every
 trail across both sources. Saved tiles live in IndexedDB rather than Cache Storage so the app shell
 launches fast even with ~5k tiles saved (WebKit is slow to open a Cache holding thousands of

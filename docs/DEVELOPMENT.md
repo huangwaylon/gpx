@@ -97,17 +97,18 @@ how you [verify offline behavior](#6-testing).)
 **This is the single most common source of "my change isn't showing up."**
 
 `sw.js` registers a service worker that caches the app shell — `index.html`,
-`app.css`, `app.js`, `trails.js`, `i18n.js`, `manifest.json`, the PNG icons, the
-Leaflet assets, and all bundled GPX + hero images — using a **cache-first**
-strategy. That is exactly what makes the app work offline, but during
-development it means:
+`app.css`, `app.js`, `trails.js`, `i18n.js`, `tiles-db.js`, `manifest.json`, the
+PNG icons, the Leaflet assets, and all bundled GPX + hero images — using a
+**cache-first** strategy. (Saved map tiles are kept separately, in **IndexedDB**
+via `tiles-db.js` — see [ADR-12 below](#shipping-updates-the-right-way-bump-app_v).)
+That is exactly what makes the app work offline, but during development it means:
 
 > After you edit `app.js`, `app.css`, `index.html`, `trails.js`, `i18n.js`,
 > etc., a normal reload serves the **stale cached version**. Your change is on
 > disk but the SW hands the browser the old copy.
 
 To see your change you must **unregister the service worker and delete its
-caches**, then reload.
+caches** (and, for a full offline reset, the IndexedDB tile store), then reload.
 
 ### Option A — DevTools console snippet (fastest)
 
@@ -117,18 +118,24 @@ Paste this into the DevTools **Console** on the running app, then let it reload:
 (async () => {
   for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
   for (const k of await caches.keys()) await caches.delete(k);
+  indexedDB.deleteDatabase('wa-trails-tiles');   // saved map tiles
   location.reload();
 })();
 ```
 
 This unregisters every service worker for the origin, deletes **all** caches
-(both the app-shell cache and the downloaded map-tile cache), and reloads.
+(the single app-shell cache, `wa-trails-app-v15`), and deletes the IndexedDB
+database that holds the downloaded map tiles (`wa-trails-tiles`), then reloads.
+Dropping the tile DB is only needed when you want a clean offline reset; for an
+ordinary "just show my edited code" cycle, clearing the SW + shell cache is
+enough (the tile DB doesn't hold any of your shell code).
 
 ### Option B — DevTools UI
 
 **Application → Storage → Clear site data** (click the **Clear site data**
-button). This wipes service workers, Cache Storage, localStorage, etc. for the
-origin in one click. Then reload.
+button). This wipes service workers, Cache Storage, IndexedDB (including the
+`wa-trails-tiles` tile store), localStorage, etc. for the origin in one click.
+Then reload.
 
 > Tip: While actively iterating, open DevTools → **Application → Service
 > Workers** and tick **"Update on reload"** (and optionally **"Bypass for
@@ -143,29 +150,40 @@ For **returning users**, the correct way to force everyone onto a new version on
 deploy is to bump the cache version constant at the top of `sw.js`:
 
 ```js
-const APP_V  = 'wa-trails-app-v11';  // ← bump this (…-v12, …-v13) when you ship shell changes
-const TILE_V = 'wa-trails-tiles-v1'; // map-tile cache; bump only if tile handling changes
+const APP_V = 'wa-trails-app-v15';  // ← bump this (…-v16, …-v17) when you ship shell changes
 ```
 
+There is a **single** cache now — the app shell. (ADR-12: saved map **tiles
+moved out of Cache Storage into IndexedDB**, in `tiles-db.js`; there is no longer
+a `TILE_V` / `wa-trails-tiles-v1` tile cache. On WebKit, opening a Cache loads
+its whole record index, so a Cache holding ~5k saved tiles was slow to open on
+the launch critical path — a multi-second black screen on relaunch. IndexedDB
+does an indexed key lookup instead, so the shell launches fast no matter how many
+tiles are saved.)
+
 On `activate`, the worker deletes every cache whose key isn't the current
-`APP_V` / `TILE_V`:
+`APP_V` — which now includes any leftover `wa-trails-tiles-v1` from an older
+build:
 
 ```js
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.delete(k)));
+    await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
     self.clients.claim();
   })());
 });
 ```
 
-So changing `APP_V` from `wa-trails-app-v11` to `wa-trails-app-v12` invalidates
+So changing `APP_V` from `wa-trails-app-v15` to `wa-trails-app-v16` invalidates
 the old app-shell cache for all users and re-precaches the new shell on next
 load. **Bump `APP_V` whenever you change shell files** (`index.html`, `app.css`,
-`app.js`, `trails.js`, `i18n.js`, or the bundled asset lists). Leave `TILE_V`
-alone unless you change how tiles are cached — bumping it throws away users'
-downloaded offline maps.
+`app.js`, `trails.js`, `i18n.js`, `tiles-db.js`, or the bundled asset lists).
+Bumping `APP_V` **no longer wipes users' saved offline maps** — tiles live in
+IndexedDB and survive shell-cache bumps. (The one-time exception was already
+spent: v15 itself is the build where tiles migrated from Cache Storage to
+IndexedDB, so existing users re-download their offline maps once after picking up
+v15; future bumps don't disturb the tile store.)
 
 > The console snippet / Clear site data is for **your** machine during dev.
 > Bumping `APP_V` is for **users** on deploy. They are not interchangeable.
@@ -180,8 +198,8 @@ the codebase:
 
 - **Vanilla ES, in the browser, no modules/bundler.** Scripts are plain
   `<script src="…">` tags in `index.html`, loaded in order: Leaflet → `i18n.js`
-  → `trails.js` → `app.js`. There is no `import`/`export`; code shares state
-  through the global scope.
+  → `trails.js` → `tiles-db.js` → `app.js`. There is no `import`/`export`; code
+  shares state through the global scope.
 - **`'use strict';`** at the top of `app.js`.
 - **Single quotes** for strings throughout. Template literals (backticks) are
   used for HTML generation and interpolation.
@@ -217,10 +235,12 @@ the codebase:
   (e.g. `renderList()`, `renderSheetBody()`), then wiring up event listeners
   afterward.
 - **Constants up top.** Tunables live as `const`s at the top of `app.js`:
-  `TILE_CACHE`, `DL_MIN_Z`, `padFor(z)`, `FT`, plus the `TILE_SOURCES` map (the two
+  `DL_MIN_Z`, `padFor(z)`, `FT`, plus the `TILE_SOURCES` map (the two
   basemaps — `usgs` at `maxZoom` 16, `gsi` at 18) and the `trailSource(trail)` helper that
   picks one per trail; downloads run z10 up to each source's `maxZoom`. Reuse them rather than
-  hard-coding values.
+  hard-coding values. **Saved tiles are read/written through `TileStore`**
+  (`tiles-db.js`), an IndexedDB store — there is no `TILE_CACHE` constant
+  anymore (tiles no longer live in Cache Storage; see [§3](#3-the-service-worker-gotcha-read-this)).
 - **CSS custom properties** drive theming in `app.css` (`:root { --paper, --pine,
   --gps, --safe-t, … }`), including iOS safe-area insets. The design is
   light/"paper", mobile-first, and responsive (portrait + landscape).
@@ -403,9 +423,16 @@ const TRAIL_ASSETS = [
 ];
 ```
 
-These are precached on service-worker `install` (best-effort) and also filled on
-first network fetch. If you skip this step, the trail still works **online**,
-but its GPX/photo won't be guaranteed available offline.
+These are precached into the app-shell cache on service-worker `install`
+(best-effort) and also filled on first network fetch. If you skip this step, the
+trail still works **online**, but its GPX/photo won't be guaranteed available
+offline.
+
+> **Map tiles aren't precached here.** `TRAIL_ASSETS` is only the GPX + hero
+> image. The new trail's offline map **tiles** are fetched into the IndexedDB
+> tile store (`tiles-db.js`) when a user taps the global **Save maps** button —
+> `downloadAll()` covers every trail across both sources automatically, so there
+> is nothing to register per-trail for tiles.
 
 > Paths in `sw.js` are relative to the site root, with **no leading `./`** for
 > trail assets (e.g. `gpx/...`, `images/...`) — match the existing entries.
@@ -414,12 +441,15 @@ but its GPX/photo won't be guaranteed available offline.
 
 Editing `trails.js`, `i18n.js`, and the precache list is a shell change. To make
 returning users pick it up on deploy, bump `APP_V` in `sw.js` (currently
-`wa-trails-app-v11`, so bump to the next version — see
+`wa-trails-app-v15`, so bump to the next version — see
 [the SW section](#3-the-service-worker-gotcha-read-this)):
 
 ```js
-const APP_V = 'wa-trails-app-v12';
+const APP_V = 'wa-trails-app-v16';
 ```
+
+(This re-precaches the new shell + asset list; it does **not** disturb users'
+saved map tiles, which live in IndexedDB — see [§3](#3-the-service-worker-gotcha-read-this).)
 
 ### Verify the new trail locally
 
@@ -514,21 +544,24 @@ reload — it should come up in Japanese.
 
 1. With the app loaded, tap the header's global **⬇ Save maps** button
    (`#dl-all`) and **wait for it to read ✓ Maps saved**. This downloads tiles
-   for **all 10 trails** across **both** sources (USGS + GSI) into the tile
-   cache in one pass.
+   for **all 10 trails** across **both** sources (USGS + GSI) into the IndexedDB
+   tile store (`wa-trails-tiles`, via `tiles-db.js`) in one pass.
 2. Go offline: either **stop the local server** (`Ctrl+C`) or, in Chrome
    DevTools, **Network → Offline**.
 3. **Reload** the page.
 4. Confirm the **app still loads** — the shell (HTML/CSS/JS), trail data, GPX,
    and hero images all come from the service-worker cache.
 5. Open **any** trail (a Washington one *and* a Japan one) and confirm its **map
-   tiles still render** from the tile cache — USGS topo for the US trail, GSI
-   地理院タイル for the Japan trail.
+   tiles still render** from the IndexedDB tile store — USGS topo for the US
+   trail, GSI 地理院タイル for the Japan trail.
 6. Go back online (restart the server / untick Offline) when done.
 
 If the app fails to load with the server stopped, the service worker isn't
 caching the shell correctly — check `SHELL` / `TRAIL_ASSETS` in `sw.js` and the
-DevTools **Application → Cache Storage** entries.
+DevTools **Application → Cache Storage** entry (the single `wa-trails-app-v15`
+cache). If the shell loads but **tiles** don't render offline, check
+**Application → IndexedDB → `wa-trails-tiles` → `tiles`** for saved entries (and
+re-run **Save maps** if it's empty).
 
 > **GSI tiles in local dev:** the GSI 地理院タイル endpoint is free, keyless, and
 > CORS-enabled, and loads fine from a normal browser on a home/office network.
@@ -605,8 +638,8 @@ find . -path ./.git -prune -o -type f -size +90M -print   # anything near the 10
 
 > Map **tiles are not in the repo.** They're fetched on demand from **USGS**
 > (US trails) and **GSI 地理院タイル** (Japan trails) and cached client-side (in
-> the browser's Cache Storage) when a user taps the global **Save maps** button.
-> They never count against repo size.
+> the browser's **IndexedDB**, via `tiles-db.js`) when a user taps the global
+> **Save maps** button. They never count against repo size.
 
 ---
 
@@ -621,7 +654,8 @@ gpx/                     # ← repo root, served as-is by GitHub Pages
 ├── app.js               # Routing, Leaflet map, GPX parsing, GPS, elevation, tile download, i18n helpers
 ├── i18n.js              # UI strings + per-trail Japanese translations (window.I18N)
 ├── trails.js            # window.TRAILS — trail metadata, English base content (edit to add trails)
-├── sw.js                # Service worker: offline caching (SHELL + TRAIL_ASSETS, APP_V/TILE_V)
+├── tiles-db.js          # Tiny IndexedDB tile store (window.TileStore = get/has/put) — saved map tiles live here, NOT Cache Storage; loaded by the page AND importScripts'd by the SW
+├── sw.js                # Service worker: precaches the app shell (SHELL + TRAIL_ASSETS) in one cache (APP_V), cache-first; serves map tiles from IndexedDB (via tiles-db.js)
 ├── manifest.json        # PWA manifest (name, icons, standalone display)
 ├── icon-180/192/512.png # App icon (apple-touch-icon + manifest) — Enchantments photo crop
 ├── .nojekyll            # Disables Jekyll on GitHub Pages (serve files verbatim)
@@ -641,8 +675,10 @@ gpx/                     # ← repo root, served as-is by GitHub Pages
 
 > Note: the load order in `index.html` matters — Leaflet loads first, then
 > `i18n.js` (defines `window.I18N`), then `trails.js` (defines `window.TRAILS`),
-> then `app.js` (consumes both). `i18n.js` is part of the app shell and is
-> precached by the service worker.
+> then `tiles-db.js` (defines `window.TileStore`), then `app.js` (consumes all
+> three). `i18n.js` and `tiles-db.js` are part of the app shell and are
+> precached by the service worker (`tiles-db.js` is also loaded inside the SW
+> via `importScripts`).
 
 ### What's git-ignored
 

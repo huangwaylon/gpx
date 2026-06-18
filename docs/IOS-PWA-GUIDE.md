@@ -72,44 +72,58 @@ The **Cache API** (`caches.open`, `cache.put`, `cache.match`, `cache.addAll`) is
 > **Updated by ADR-12.** Map **tiles moved out of the Cache API into IndexedDB** (`tiles-db.js`).
 > On WebKit, opening a Cache that holds thousands of tile records is slow, and that open sat on the
 > launch critical path → a multi-second black screen on relaunch once maps were saved. Cache Storage
-> now holds **only the app shell**; saved tiles live in IndexedDB (fast keyed lookup). The
-> "two caches / no IndexedDB" description below is **historical** — kept for the shell-cache details.
+> now holds **only the app shell** — a **single** versioned cache — and saved tiles live in IndexedDB
+> (fast keyed lookup). The app therefore **does** use IndexedDB now (it didn't before ADR-12); any
+> "no IndexedDB / two caches" wording elsewhere in this guide is **superseded** by this ADR.
 
-The app uses the Cache API for **the app shell**, and **IndexedDB** for saved map tiles. The shell
-cache is keyed by version string so it can be rotated cleanly:
+The app uses the Cache API for **the app shell only**, and **IndexedDB** for saved map tiles. There
+is now a **single** Cache-Storage cache, keyed by version string so it can be rotated cleanly:
 
 | Cache name (constant) | Contents | Population strategy |
 |---|---|---|
-| **`wa-trails-app-v11`** (`APP_V` in `sw.js`) | App shell + bundled trail data | `addAll` on SW `install` (shell), plus best-effort `add` of GPX + hero images; topped up on cache miss at runtime. |
-| **`wa-trails-tiles-v1`** (`TILE_V` in `sw.js`, `TILE_CACHE` in `app.js`) | Map tiles — USGS topo (US trails) **and** GSI 地理院タイル (Japan trails) | Filled cache-first on `fetch`, and bulk-filled by the user-initiated "Save maps" download. |
+| **`wa-trails-app-v15`** (`APP_V` in `sw.js`) | App shell (incl. `tiles-db.js`) + bundled trail data (GPX + hero images) | Precached on SW `install` via `fetch(u,{cache:'reload'})` + `cache.put` — shell must-succeed, trail assets best-effort; topped up on cache miss at runtime. |
+
+Saved **map tiles** (USGS topo for US trails, GSI 地理院タイル for Japan trails) are **not** in any
+Cache-Storage cache — they live in the IndexedDB store defined by `tiles-db.js` (DB `wa-trails-tiles`,
+object store `tiles`, keyed by tile URL), filled IndexedDB-first on `fetch` and by the user-initiated
+"Save maps" download. See *Storage & the 7-day eviction rule* and *The offline strategy* for the
+handlers.
 
 `sw.js` declarations:
 
 ```js
 const APP_V = 'wa-trails-app-v15';   // tiles now live in IndexedDB (tiles-db.js), not a cache
+importScripts('./tiles-db.js');       // shared tile store → self.TileStore (also loaded by the page)
 ```
 
-**App-shell cache (`APP_V`).** On `install` the SW precaches the shell (HTML, CSS, JS, manifest, icon, and Leaflet's JS/CSS from unpkg). The shell `addAll` is treated as **must-succeed**; the bundled trail assets are added **best-effort** so a single failed asset cannot abort installation:
+**App-shell cache (`APP_V`).** On `install` the SW precaches the shell (HTML, CSS, JS — **including the now-required `tiles-db.js`** — manifest, icon, and Leaflet's JS/CSS from unpkg). Each file is fetched with `{cache:'reload'}` and stored with `cache.put` (not `addAll`), so a new version never stores a **stale** copy of a shell file from the HTTP cache — important now that `tiles-db.js` is a required shell file. The shell is **must-succeed**; the bundled trail assets are added **best-effort** so a single failed asset cannot abort installation:
 
 ```js
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const c = await caches.open(APP_V);
-    await c.addAll(SHELL);                                   // shell must succeed
-    await Promise.allSettled(TRAIL_ASSETS.map(u => c.add(u)));// assets best-effort
+    await Promise.all(SHELL.map(async u => {                  // shell must succeed
+      const res = await fetch(u, { cache: 'reload' });
+      if (!res.ok) throw new Error('precache failed: ' + u);
+      await c.put(u, res);
+    }));
+    await Promise.allSettled(TRAIL_ASSETS.map(async u => {    // assets best-effort
+      const res = await fetch(u, { cache: 'reload' });
+      if (res.ok) await c.put(u, res);
+    }));
     self.skipWaiting();
   })());
 });
 ```
 
-The `activate` handler deletes any cache that is **not** one of the two current versions, so bumping `APP_V`/`TILE_V` cleanly evicts stale data:
+The `activate` handler deletes **every** cache except `APP_V` — so bumping `APP_V` cleanly evicts stale data, and (on upgrade from a tiles-in-Cache build) it **drops the old `wa-trails-tiles-v1` tile cache** too. Tiles now live in IndexedDB, so users simply re-download once:
 
 ```js
 const keys = await caches.keys();
-await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.delete(k)));
+await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
 ```
 
-**Tile cache (`TILE_V`).** Served cache-first; both `ok` and opaque (`res.type === 'opaque'`) responses are stored, so tiles persist regardless of CORS outcome. In practice both sources are CORS-enabled and fetched with `{ mode: 'cors' }`, so tiles are cached as **real (non-opaque)** responses (see *The offline strategy* for the fetch handler).
+**Shell serving.** The shell branch is served **cache-first, scoped to `APP_V`** (`caches.open(APP_V).then(c => c.match(req)…)`) rather than via a global `caches.match()` — a global match can make WebKit open/scan unrelated stores, so scoping keeps shell serving fast. A navigation that misses falls back to `cache.match('./index.html')`. Map tiles are served from IndexedDB on a separate branch (see *The offline strategy*); both tile sources are CORS-enabled and fetched with `{ mode: 'cors' }`, so the stored bytes replay as **real (non-opaque)** responses.
 
 ---
 
@@ -132,16 +146,23 @@ await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.dele
   rescue is the **session** itself: see *Live trail-progress survives a reload* below.
   **User guidance to document in-product:** *Keep your screen on while navigating; the blue dot stops updating when the phone sleeps.* (The app already tries to prevent sleep via Wake Lock — see next section — but Wake Lock itself is unreliable on older iOS, so the manual guidance still matters.)
 
-- **Live trail-progress survives a reload.** Even though fixes stop with the screen off, the
-  tracking *session* (the progress high-water mark + the elapsed clock) is mirrored to
-  `localStorage` on every accepted fix and on `visibilitychange → hidden`, with an **absolute**
-  start timestamp. If iOS reloads or evicts the PWA mid-hike, reopening the trail offers to
-  **resume**: the elapsed time is still correct (it counted through the gap), and after a few fixes
-  a **stale-window re-acquire** re-snaps your position and fills progress to where you stand —
-  measured against the known GPX, not a recorded track. On wake the app also forces a fresh fix
-  (`getCurrentPosition`) and arms an immediate re-acquire, so a quick glance refreshes the dot and
-  progress within ~a second rather than waiting on iOS to resume the frozen watch. See
-  `ARCHITECTURE.md` §10a.
+- **Live trail-progress survives a reload — and a cold relaunch auto-resumes.** Even though fixes
+  stop with the screen off, the tracking *session* (the progress high-water mark + the elapsed clock)
+  is mirrored to `localStorage` on every accepted fix and on `visibilitychange → hidden`, with an
+  **absolute** start timestamp. If iOS reloads or evicts the PWA mid-hike, a **cold relaunch lands
+  straight back on the trail screen and auto-resumes** the live session: at boot, `bootRoute()` (called
+  instead of `routeFromHash()`) sees no hash, finds a **fresh, resumable** saved session — slug ∈
+  `TRAILS`, `Date.now() - savedAt ≤ SESSION_MAX_AGE_MS` (18 h), and `savedElapsedMs ≥ RESUME_MIN_MS`
+  (20 s, to skip accidental starts) — sets `resumeOnOpen=true`, and `history.replaceState(…, '#/trail/'+slug)`
+  before routing. The **timer keeps counting** (it counted through the gap, thanks to the absolute
+  start), and after a few fixes a **stale-window re-acquire** re-snaps your position and fills progress
+  to where you stand — measured against the known GPX, not a recorded track. `replaceState` keeps the
+  **Back button** returning to the list; the list `#list-resume` "resume hike" banner is the **fallback**
+  (e.g. if the session is too old/short to auto-resume). On wake the app also forces a fresh fix
+  (`getCurrentPosition`), arms an immediate re-acquire, and calls `updateHUD()` so the elapsed clock
+  **repaints the instant the phone wakes** (the 1 s `setInterval` is suspended while backgrounded on
+  iOS) — a quick glance refreshes the dot, progress, and clock within ~a second rather than waiting on
+  iOS to resume the frozen watch. See `ARCHITECTURE.md` §10a.
 
 - Instead of pre-checking permission (impossible on iOS), the app **reacts to the error**. `watchPosition`'s error callback inspects the standard `GeolocationPositionError` code; **code `1` is `PERMISSION_DENIED`**:
 
@@ -223,31 +244,31 @@ await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.dele
 ### How this app handles it
 - **Implication:** **downloaded map tiles can simply vanish after a week of not opening the app** — exactly the scenario where a user downloads a trail on Sunday and hikes it the *next* weekend. The app must not assume cached tiles are still present.
 - **`localStorage` is evicted too.** The 7-day rule covers *all* script-writable storage, including `localStorage`. The only thing the app keeps there is the **language preference** (`localStorage.lang`), so after 7 days of non-use that preference can reset and the app falls back to its **Japanese default** on next launch — the same eviction mechanism that drops the tile cache also drops the saved language. This is benign (the user just re-toggles to English), but worth knowing when reasoning about "why did my settings reset." See *Internationalization (i18n)* and `docs/I18N.md`.
-- The app **verifies cache state on every startup** rather than trusting it. `refreshCacheStatus()` runs during boot and, for each trail, checks whether a **representative sample tile** (the trail's center tile at zoom 14, built from *that trail's* tile source) is still in the tile cache. The result drives the single global **"Save maps"** button: it is set to the **"done"** state (`✓ Maps saved` / `✓ 保存済み`) only if **every** trail's sample tile is present; if any is missing it stays **"idle"** (`⬇ Save maps` / `⬇ 地図を保存`):
+- The app **verifies cache state on every startup** rather than trusting it. `refreshCacheStatus()` runs during boot and, for each trail, checks whether a **representative sample tile** (the trail's center tile at zoom 14, built from *that trail's* tile source) is still in the **IndexedDB tile store** (`TileStore.has(url)` — a cheap key-count probe that never deserializes the bytes). The result drives the single global **"Save maps"** button: it is set to the **"done"** state (`✓ Maps saved` / `✓ 保存済み`) only if **every** trail's sample tile is present; if any is missing it stays **"idle"** (`⬇ Save maps` / `⬇ 地図を保存`):
 
   ```js
   async function refreshCacheStatus(){
-    if(dlState==='busy' || !('caches'in window)) return;
+    if(dlState==='busy' || !('indexedDB'in window)) return;
     try{
-      const cache=await caches.open(TILE_CACHE);
       let all=true;
       for(const trail of TRAILS){
         const {x,y}=ll2t(trail.center[0],trail.center[1],14);
         const u=trailSource(trail).url.replace('{z}',14).replace('{y}',y).replace('{x}',x);
-        if(!(await cache.match(u))){ all=false; break; }   // sample-tile probe (per-trail source)
+        if(!(await TileStore.has(u))){ all=false; break; }   // sample-tile probe (per-trail source)
       }
       dlState = all ? 'done' : 'idle';
     }catch(_){}
   }
   ```
 
-  Boot order in `app.js` runs the probe **before** reflecting the button state, then updates the button label:
+  Boot in `app.js` runs the probe **off the critical path** — it is **not** awaited before routing the first screen. `bootRoute()` paints first, and the saved-maps button state updates a tick later when the IndexedDB probe resolves:
 
   ```js
-  renderList();
+  bootRoute();                    // route + paint the first screen immediately (not blocked on the probe)
   ...
-  await refreshCacheStatus();
-  updateDlBtn();   // reflect detected offline-maps state (idle / done)
+  // Detect saved-maps state OFF the critical path; awaiting it before first paint used to stall launch
+  // once many tiles were saved (ADR-12).
+  refreshCacheStatus().then(updateDlBtn);
   ```
 
   If eviction has occurred, at least one trail's sample tile is missing → `dlState` becomes `'idle'` → the button reverts from "✓ Maps saved" to "⬇ Save maps." So the **UI self-corrects** after eviction. (Note the all-or-nothing semantics: because the download is global, the button only shows "saved" when *every* trail is covered — there are no per-trail badges anymore.)
@@ -335,7 +356,7 @@ Exact source:
 ### Network Information API is unsupported
 `navigator.connection` (downlink, effectiveType, `change` events) is **not implemented** on iOS. Don't branch on connection quality.
 
-- **How this app handles it.** It doesn't depend on `navigator.connection` at all. Offline resilience is handled structurally by the **cache-first service worker** (a request simply succeeds from cache when the network is down). The recommended online/offline signal on iOS is **`navigator.onLine` plus the `online`/`offline` events** — currently the app does not display an explicit offline banner.
+- **How this app handles it.** It doesn't depend on `navigator.connection` at all. Offline resilience is handled structurally by the **service worker** (the app shell is served cache-first, and map tiles are served IndexedDB-first — see *The offline strategy* — so requests simply succeed from local storage when the network is down). The recommended online/offline signal on iOS is **`navigator.onLine` plus the `online`/`offline` events** — currently the app does not display an explicit offline banner.
   **Recommendation (optional):** add an `offline`/`online` listener to show a subtle "Offline — showing saved maps" chip:
 
   ```js
@@ -432,30 +453,40 @@ const TRAIL_ASSETS = [
 
 > Verified: the repo contains exactly **10 GPX files** and **10 `.webp` hero images**, matching the 10 trails in `trails.js` — 8 in Washington (`lake-22`, `snow-lake`, `lake-valhalla`, `talapus-lake`, `mount-pilchuck`, `bridal-veil`, `skyline-loop`, `enchantments`) and 2 in Japan (`fuji-yoshida`, `kinpu-odarumi`). The GPX/image lists in `sw.js` are bundled at install time — this is *trail metadata*, not map imagery.
 
-### Tier 2 — Map tiles served cache-first with network fallback
-Any request to a **USGS National Map tile (US trails) or a GSI 地理院タイル tile (Japan trails)** is intercepted and served **cache-first**: return the cached tile if present, otherwise fetch, store (including any **opaque** cross-origin responses), and return — falling back to a `503` if offline and uncached. The branch matches **both** tile hosts:
+### Tier 2 — Map tiles served IndexedDB-first with network fallback
+Any request to a **USGS National Map tile (US trails) or a GSI 地理院タイル tile (Japan trails)** is intercepted and served **IndexedDB-first** (`isTile(url)` = host includes `nationalmap.gov` or `cyberjapandata.gsi.go.jp`): if the tile's bytes are in the IndexedDB store, replay them as a fresh `Response`; otherwise fetch, store the bytes on `res.ok` (kept alive via `e.waitUntil`), and return — falling back to a `503` if offline and uncached. The stored value is `{ body:ArrayBuffer, type }`, keyed by the tile URL; both sources are CORS so the body is readable:
 
 ```js
-// sw.js — fetch handler (tiles)
-if (url.includes('nationalmap.gov') || url.includes('cyberjapandata.gsi.go.jp')) {
-  e.respondWith(caches.open(TILE_V).then(cache =>
-    cache.match(url).then(hit => hit || fetch(e.request).then(res => {
-      if (res.ok || res.type === 'opaque') cache.put(url, res.clone());
+// sw.js — fetch handler (tiles), IndexedDB-first via TileStore (tiles-db.js)
+const isTile = url => url.includes('nationalmap.gov') || url.includes('cyberjapandata.gsi.go.jp');
+
+if (isTile(url)) {
+  e.respondWith((async () => {
+    try {
+      const rec = await TileStore.get(url);
+      if (rec) return new Response(rec.body, { headers: { 'Content-Type': rec.type } });
+    } catch (_) {}
+    try {
+      const res = await fetch(e.request);
+      if (res.ok) {                                   // keep the SW alive to finish the write
+        const type = res.headers.get('Content-Type') || 'image/png';
+        e.waitUntil(res.clone().arrayBuffer().then(body => TileStore.put(url, { body, type })).catch(() => {}));
+      }
       return res;
-    }).catch(() => new Response('', { status: 503 })))
-  ));
+    } catch (_) { return new Response('', { status: 503 }); }
+  })());
   return;
 }
 ```
 
-This means simply **panning the map while online warms the cache** for free — but it does **not** guarantee complete coverage at all zooms, which is what Tier 3 is for.
+This means simply **panning the map while online warms the store** for free — but it does **not** guarantee complete coverage at all zooms, which is what Tier 3 is for.
 
-> **Two tile sources, one cache.** US trails use USGS topo (`{z}/{y}/{x}`); Japan trails use GSI 地理院タイル (`{z}/{x}/{y}.png`, Japanese labels on the `std` layer). Both are 256-px, EPSG:3857 Web-Mercator XYZ tiles and are CORS-enabled (`Access-Control-Allow-Origin: *`), so they cache as **real** (non-opaque) responses. The two URL templates put the `x`/`y` tokens in a **different order**, but `app.js` substitutes them by name (`.replace('{z}'…).replace('{y}'…).replace('{x}'…)`), so the same tile math drives both. They share the single `wa-trails-tiles-v1` cache. (Practical note: GSI works fine from real iPhones / home networks; it can `403` from some datacenter IPs, which is irrelevant to end users.)
+> **Two tile sources, one IndexedDB store.** US trails use USGS topo (`{z}/{y}/{x}`); Japan trails use GSI 地理院タイル (`{z}/{x}/{y}.png`, Japanese labels on the `std` layer). Both are 256-px, EPSG:3857 Web-Mercator XYZ tiles and are CORS-enabled (`Access-Control-Allow-Origin: *`), so their bytes are stored as **readable (non-opaque)** records. The two URL templates put the `x`/`y` tokens in a **different order**, but `app.js` substitutes them by name (`.replace('{z}'…).replace('{y}'…).replace('{x}'…)`), so the same tile math drives both. They share the single IndexedDB tile store (`tiles-db.js` — DB `wa-trails-tiles`, store `tiles`), keyed by tile URL. (Practical note: GSI works fine from real iPhones / home networks; it can `403` from some datacenter IPs, which is irrelevant to end users.)
 
 ### Tier 3 — User explicitly downloads every trail's tiles ("Save maps")
-A **single global** button in the list header — **"Save maps"** (`#dl-all`, sitting next to the language toggle) — pre-caches tiles for **all 10 trails across both tile sources** into `wa-trails-tiles-v1` in one tap. There is **no** per-trail download button or download modal anymore.
+A **single global** button in the list header — **"Save maps"** (`#dl-all`, sitting next to the language toggle) — pre-caches tiles for **all 10 trails across both tile sources** into the **IndexedDB tile store** in one tap. There is **no** per-trail download button or download modal anymore.
 
-`downloadAll()` walks every trail, computes each trail's bounding box from its (already-precached) GPX via `gpxBox()`, builds the full tile-URL list for that trail **using its own source template** across **z10 up to that source's `maxZoom`** (USGS 16, GSI 18), dedupes everything with a `Set`, then fetches in batches of 8 with inline progress:
+`downloadAll()` walks every trail, computes each trail's bounding box from its (already-precached) GPX via `gpxBox()`, builds the full tile-URL list for that trail **using its own source template** across **z10 up to that source's `maxZoom`** (USGS 16, GSI 18), dedupes everything with a `Set`, then fetches the missing tiles in batches of 8 with inline progress. When the **service worker controls the page**, its tile `fetch` handler stores each fetched tile in IndexedDB, so `downloadAll()` just **requests the misses**; before the SW has claimed the page (rare — a first-ever load) the page **stores directly** via `TileStore.put`, keeping the download reliable either way:
 
 ```js
 const DL_MIN_Z = 10;   // overview floor; ceiling = each source's maxZoom (USGS 16, GSI 18)
@@ -480,7 +511,7 @@ function tileURLsFor(box, src){
 }
 
 async function downloadAll(){
-  if (dlState === 'busy' || !('caches' in window)) return;
+  if (dlState === 'busy' || !('indexedDB' in window)) return;
   dlState = 'busy'; updateDlBtn(); updateDlProgress(0, 1);
   let urls = [];
   for (const trail of TRAILS){                       // every trail…
@@ -488,13 +519,16 @@ async function downloadAll(){
     urls.push(...tileURLsFor(box, trailSource(trail)));   // …via its own source
   }
   urls = [...new Set(urls)];                          // dedupe across trails
-  const total = urls.length || 1; let done = 0;
-  const cache = await caches.open(TILE_CACHE), BATCH = 8;
+  const total = urls.length || 1; let done = 0; const BATCH = 8;
+  // SW (when it controls the page) stores each fetched tile in IndexedDB → just request misses;
+  // before it's claimed the page, store directly so the download still works.
+  const swStores = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
   for (let i = 0; i < urls.length; i += BATCH){
     await Promise.allSettled(urls.slice(i, i+BATCH).map(async u => {
-      try{ if(!(await cache.match(u))){               // skip already-cached
+      try{ if(!(await TileStore.has(u))){            // skip already-stored
         const r = await fetch(u, { mode:'cors' });
-        if (r.ok || r.type === 'opaque') await cache.put(u, r);
+        if (!swStores && r.ok){ const type = r.headers.get('Content-Type')||'image/png';
+          await TileStore.put(u, { body: await r.arrayBuffer(), type }); }
       } }catch(_){}
       done++; updateDlProgress(done, total);
     }));
@@ -519,15 +553,15 @@ Because the download is now **global**, the meaningful number is the **total acr
 - A compact trail (e.g. a short out-and-back like **Talapus Lake** or **Mount Pilchuck**) contributes on the order of **~150** tiles.
 - A large, spread-out route (e.g. **The Enchantments Traverse**) produces a **much larger** bounding box and therefore **many more** tiles — on the order of **a thousand** — because box-area × 7 zooms grows with geographic extent. (Tile counts roughly **quadruple per added zoom level**, and zooms 15–16 dominate the total.)
 
-Summed across everything (and deduped), a full "Save maps" run caches roughly **~3,200 tiles ≈ 2,760 USGS** (the 8 Washington trails) **+ ~465 GSI** (the 2 Japan trails). At a typical **~15–25 KB** per 256×256 topo PNG tile:
+Summed across everything (and deduped), a full "Save maps" run caches roughly **~5,200 tiles ≈ 2,830 USGS** (the 8 Washington trails) **+ ~2,480 GSI** (the 2 Japan trails — the GSI z17–18 levels roughly *doubled* the total). At a typical **~20 KB** per 256×256 topo PNG tile:
 
 | Scope | Approx tiles | Approx storage |
 |---|---|---|
 | One compact trail | ~150 | **~3 MB** |
 | The Enchantments (largest box) | ~1,200 | **~20–30 MB** |
-| **All 10 trails, both sources (a full "Save maps")** | **~3,200** | **roughly ~50–80 MB total** |
+| **All 10 trails, both sources (a full "Save maps")** | **~5,200** | **roughly ~100 MB total** |
 
-This is well within the large installed-PWA quota on iOS 17+ (~60% of disk), so storage size is **not** the limiting factor — *eviction* (the 7-day rule) is.
+This is well within the large installed-PWA quota on iOS 17+ (~60% of disk), so storage size is **not** the limiting factor — *eviction* (the 7-day rule, which applies equally to the IndexedDB tile store) is.
 
 ### Why a single foreground download instead of background prefetch
 This is the central design decision, and it's driven by both platform limits and product sense:

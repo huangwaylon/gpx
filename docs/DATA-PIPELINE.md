@@ -697,10 +697,10 @@ Ordered checklist to add one trail end-to-end:
    the filenames exactly.
 7. **Register both in the service worker.** Add the new `gpx/...` and
    `images/...` paths to `TRAIL_ASSETS` in `sw.js` so they are precached for
-   offline. Bump `APP_V` (currently `wa-trails-app-v11`) so clients pick up the
-   new asset list. (`sw.js`'s tile cache-first rule already matches both
-   `nationalmap.gov` and `cyberjapandata.gsi.go.jp`, so a `tiles:"gsi"` trail's
-   tiles cache offline with no further change.)
+   offline. Bump `APP_V` (currently `wa-trails-app-v15`) so clients pick up the
+   new asset list. (`sw.js`'s tile handler — `isTile()` — already matches both
+   `nationalmap.gov` and `cyberjapandata.gsi.go.jp` and serves/stores their tiles
+   in **IndexedDB**, so a `tiles:"gsi"` trail's tiles save offline with no further change.)
 8. **Verify the GPX.** Run the §5 verifier. Confirm `length_mi` ≈ the
    AllTrails distance, bounds look right, and waypoint count is what you
    expect. The inflated `raw_gain_ft` is expected — do not ship it.

@@ -5,15 +5,11 @@
 > Every claim below is grounded in the source as of this writing; `file:line` references
 > point at the exact code.
 
-> ⚠️ **Superseded in part by ADR-12 (tile storage).** Saved map tiles now live in **IndexedDB**
-> (`tiles-db.js` → `window.TileStore`), **not** the Cache API. So throughout this document, the
-> `TILE_V` / `TILE_CACHE` (`wa-trails-tiles-v1`) cache, the "tiles served cache-first from a tile
-> cache", `downloadAll()` writing to a Cache, and the `app.js`↔`sw.js` same-cache-name coupling are
-> **historical** for tile storage. Current behavior: the SW serves tiles **IndexedDB-first** and
-> stores on miss; the shell is served **scoped to `APP_V`** (now `wa-trails-app-v15`); and `activate`
-> deletes **every** cache except `APP_V` — i.e. it **no longer preserves** the old tile cache, it
-> drops it (tiles re-download into IndexedDB). The shell-caching and all non-tile subsystems below
-> remain accurate. See ADR-12 in `docs/DECISIONS-AND-LESSONS.md`.
+> **Tile storage (ADR-12):** saved map tiles live in **IndexedDB** (`tiles-db.js` →
+> `window.TileStore`), **not** the Cache API. Cache Storage holds **only** the app shell, in a
+> single cache `APP_V` (`wa-trails-app-v15`). The body below reflects this; for the rationale see
+> ADR-12 in `docs/DECISIONS-AND-LESSONS.md`. **Cold-relaunch auto-resume (ADR-13):** a relaunch
+> mid-hike lands straight on the trail screen and resumes the live session (see §10a).
 
 ---
 
@@ -64,9 +60,9 @@ There is **no build step, no server, no framework, and no transpilation**. The r
 deployable files are served verbatim. Third-party code (Leaflet's CSS and JS) is pulled
 straight from `unpkg.com` rather than vendored or bundled. Routing is **hash-based**
 specifically so the app keeps working on GitHub Pages (no server-side rewrite rules) and
-while fully offline (see §4). This keeps the mental model tiny: open `index.html`, four
-script tags load in order (`leaflet.js` → `i18n.js` → `trails.js` → `app.js`), and the app
-boots on `window load`.
+while fully offline (see §4). This keeps the mental model tiny: open `index.html`, five
+script tags load in order (`leaflet.js` → `i18n.js` → `trails.js` → `tiles-db.js` → `app.js`),
+and the app boots on `window load`.
 
 ```
                           ┌───────────────────────────────────────────────┐
@@ -74,28 +70,29 @@ boots on `window load`.
                           │     (app shell: #list + #detail sections)      │
                           └───────────────┬───────────────────────────────┘
                                           │ <script> tags, in order
-        ┌──────────────────┬──────────────┼──────────────┬───────────────┐
-        ▼                  ▼              ▼               ▼               ▼
- leaflet@1.9.4 (unpkg)  i18n.js       trails.js        app.js
-   map engine + CSS    window.I18N  window.TRAILS[10] ALL app logic
-                      (UI + JA text)                       │
-        ┌───────────────────────────────────────────────────────────┼───────────────┐
-        ▼                  ▼                ▼              ▼          ▼                ▼
-   renderList()       openDetail()      initMap()     loadTrail()  GPS subsystem   downloadAll()
-   (list screen)     (detail screen)   (Leaflet)     (GPX parse)  (watchPosition) (Cache API)
-        │                  │                │              │                            │
-        ▼                  ▼                ▼              ▼                            ▼
-   #trail-list        #sheet + #map    USGS / GSI      drawTrack()                 caches.open(
-   cards              bottom sheet     tiles  ───────►    drawProfile()                'wa-trails-
-                                            ▲                                        tiles-v1')
-                                            │                                            │
-                                            └──────────────┬─────────────────────────────┘
-                                                           ▼
-                                                  ┌──────────────────┐
-                                                  │     sw.js        │  cache-first fetch
-                                                  │  APP_V  (shell)  │  ◄── HTML/CSS/JS/GPX/img
-                                                  │  TILE_V (tiles)  │  ◄── USGS + GSI tiles
-                                                  └──────────────────┘
+   ┌──────────────┬──────────────┬────────┼────────────┬───────────────────┐
+   ▼              ▼              ▼         ▼             ▼                   ▼
+leaflet@1.9.4   i18n.js      trails.js  tiles-db.js   app.js
+ (unpkg)       window.I18N window.TRAILS window.    ALL app logic
+ map+CSS      (UI+JA text)    [10]     TileStore         │
+   ┌────────────────────────────────────────────────────┼───────────────┐
+   ▼              ▼                ▼              ▼       ▼                ▼
+ renderList()  openDetail()    initMap()     loadTrail() GPS subsystem  downloadAll()
+ (list screen)(detail screen) (Leaflet)     (GPX parse)(watchPosition)(IndexedDB tiles)
+   │              │                │              │                          │
+   ▼              ▼                ▼              ▼                          ▼
+ #trail-list   #sheet + #map   USGS / GSI     drawTrack()              TileStore.put()
+ cards         bottom sheet    tiles  ───────►   drawProfile()         (IndexedDB
+                                    ▲                                   'wa-trails-tiles')
+                                    │                                          │
+                                    └──────────────┬───────────────────────────┘
+                                                   ▼
+                                          ┌──────────────────────┐
+                                          │        sw.js         │
+                                          │  APP_V (shell cache) │ ◄── HTML/CSS/JS/GPX/img
+                                          │   cache-first, scoped│
+                                          │  IndexedDB-first ────┼──► TileStore (USGS+GSI)
+                                          └──────────────────────┘
 ```
 
 ---
@@ -195,12 +192,13 @@ artifact and its responsibility. (Source-only material is noted at the bottom.)
 
 | Path | Type | Responsibility |
 |---|---|---|
-| `index.html` | HTML | **App shell.** Declares the `#list` and `#detail` screens, the `.head-actions` wrapper holding the global download button (`#dl-all`) and language toggle (`#lang-toggle`), PWA `<meta>` tags, manifest/icon links, `data-i18n`/`data-i18n-aria` hooks, and the four `<script>` tags. |
+| `index.html` | HTML | **App shell.** Declares the `#list` and `#detail` screens, the `.head-actions` wrapper holding the global download button (`#dl-all`) and language toggle (`#lang-toggle`), PWA `<meta>` tags, manifest/icon links, `data-i18n`/`data-i18n-aria` hooks, and the five `<script>` tags. |
 | `app.js` | JS | **All application logic** — routing, i18n helpers (§1a), list/detail rendering, Leaflet map, GPX parsing & geometry, elevation profile, GPS, bottom-sheet drag, the global tile-download, SW registration. Single `'use strict'` script, no exports. |
 | `app.css` | CSS | **All styles** — design tokens (CSS custom properties), both screens, cards, the language-toggle button, the global download button (`.dl-all-btn`, incl. its `--p` progress gradient), bottom sheet, the GPS-dot pulse animation, Leaflet overrides, and the landscape media query. |
 | `trails.js` | JS data | **Data model (English base).** Defines `window.TRAILS`, the array of 10 trail objects — 8 Washington + 2 Japan (see §3). |
 | `i18n.js` | JS data | **i18n tables.** Defines `window.I18N` — UI strings, dynamic-string functions, enum/season/waypoint tables, and per-trail Japanese content (see §1a). Loads before `trails.js`/`app.js`. |
-| `sw.js` | JS (SW) | **Service worker.** Precaches the shell + bundled trail assets on `install`; serves cache-first for tiles and shell on `fetch`; prunes old caches on `activate`. |
+| `sw.js` | JS (SW) | **Service worker.** Precaches the shell + bundled trail assets on `install` (each fetched with `{cache:'reload'}` so a new version never stores a stale shell file); on `fetch` serves map tiles **IndexedDB-first** (via `tiles-db.js`) and the shell **cache-first, scoped to `APP_V`**; on `activate` deletes **every** cache except `APP_V`. |
+| `tiles-db.js` | JS (shared) | **IndexedDB tile store.** Defines `window.TileStore` (`get`/`has`/`put`) over DB `wa-trails-tiles` / store `tiles` (out-of-line key = full tile URL). Loaded by **both** the page (`<script src>`, before `app.js`) and the SW (`importScripts`), so they share one store: the SW reads tiles to serve them; the page writes/probes them. Saved tiles live here, **not** in Cache Storage. |
 | `manifest.json` | JSON | **Web App Manifest** — name (`梅ちゃんのトレイル`), `start_url`/`scope` (`./`), `display:standalone`, theme/background colors, the PNG icons. |
 | `icon-180.png` / `icon-192.png` / `icon-512.png` | PNG | **App icon** — a square center-crop of the Enchantments (Colchuck Lake) hero photo. `icon-180.png` is the iOS `apple-touch-icon`; the 192/512 sizes are the manifest icons (`purpose:"any"`). |
 | `.nojekyll` | marker | Empty file that disables GitHub Pages' Jekyll processing so files (and any leading-underscore paths) are served verbatim. |
@@ -220,8 +218,8 @@ git-ignored `alltrails/` entirely; that rule was dropped this session so the sou
 travel with the repo.)
 
 > Note: the load order in `index.html` matters — Leaflet (`L`) loads first, then `i18n.js`
-> defines `window.I18N`, then `trails.js` defines `window.TRAILS`, all **before** `app.js`
-> runs.
+> defines `window.I18N`, then `trails.js` defines `window.TRAILS`, then `tiles-db.js` defines
+> `window.TileStore`, all **before** `app.js` runs.
 
 ---
 
@@ -296,14 +294,16 @@ CSS hides the inactive screen entirely (`.screen[hidden]{display:none}`, `app.cs
 
 Navigation is driven entirely by `location.hash`:
 
-- **`routeFromHash()`** (`app.js:176`) matches the hash against
+- **`routeFromHash()`** (`app.js:200`) matches the hash against
   `^#\/trail\/([\w-]+)`. If it matches and a trail with that `slug` exists, it calls
   `openDetail(t)`; otherwise it falls back to `showList()`.
-- It runs **on boot** (called at the end of the `load` handler, `app.js:171`) and **on every
-  hash change** (`window.addEventListener('hashchange', routeFromHash)`, `app.js:174`).
-- Each card **is an `<a href="#/trail/<slug>">` anchor** (`app.js:208`), so tapping it drives
+- It runs **on boot** — though indirectly: the `load` handler calls **`bootRoute()`** (§10a),
+  which (after optionally seeding the hash for a mid-hike resume) calls `routeFromHash()` once —
+  and **on every hash change** (`window.addEventListener('hashchange', routeFromHash)`,
+  `app.js:198`).
+- Each card **is an `<a href="#/trail/<slug>">` anchor** (`renderList`), so tapping it drives
   the hash directly — there is no JS click handler that assigns the hash. Only the back button
-  sets `location.hash = ''` (`app.js:241`). Either way the single `hashchange` listener
+  sets `location.hash = ''` (`bindGlobal`). Either way the single `hashchange` listener
   re-routes; there is no direct screen-swapping from the click handlers.
 
 ### Why hash routing
@@ -485,8 +485,9 @@ defines a **`TILE_SOURCES`** table (`app.js:66-75`) with two entries, and a tiny
 trail's optional `tiles` field (§3) picks the basemap (absent ⇒ `usgs`, `"gsi"` ⇒ GSI).
 `initMap()` then builds the layer from the resolved source's fields:
 `L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:8, attribution:src.leaflet,
-crossOrigin:true })` (`app.js:421`). `crossOrigin:true` is what lets the offline download read
-the tiles back out of the Cache API, and the **attribution is now dynamic per source**.
+crossOrigin:true })` (`app.js`, in `initMap`). `crossOrigin:true` is what lets the SW read a
+fetched tile's bytes back out to store them in IndexedDB (the body must be CORS-readable), and
+the **attribution is now dynamic per source**.
 
 The two sources:
 
@@ -507,13 +508,15 @@ trails cap display at z16 and Japan trails zoom in to z18; downloads follow the 
 ceiling (z10–16 for USGS, z10–18 for GSI). GSI tiles serve CORS-open
 (`Access-Control-Allow-Origin: *`); its `std` layer labels are in Japanese.
 
-### Cache-first behavior
+### IndexedDB-first behavior
 
-Tiles are **not** loaded by the page directly from the network when cached. The service worker
-intercepts any tile request — i.e. any URL whose host is `nationalmap.gov` **or**
-`cyberjapandata.gsi.go.jp` — and serves **cache-first** from the `TILE_V` cache, only hitting
-the network on a miss and storing the response (§12, §15; `sw.js:50-57`). So a previously-visited
-or pre-downloaded trail renders its map from cache with no connectivity.
+Tiles are **not** loaded by the page directly from the network when already saved. The service
+worker intercepts any tile request — i.e. any URL whose host is `nationalmap.gov` **or**
+`cyberjapandata.gsi.go.jp` — and serves **IndexedDB-first** from the `TileStore` (`tiles-db.js`):
+on a hit it replays the stored bytes as a fresh `Response`; only on a miss does it hit the
+network, and it then stores the fetched tile back into IndexedDB (§12, §15; `sw.js`, tile branch
+of `fetch`). So a previously-visited or pre-downloaded trail renders its map from IndexedDB with
+no connectivity.
 
 ---
 
@@ -745,12 +748,17 @@ view back; tapping the FAB again re-engages follow (the second branch of `toggle
 
 ### Screen Wake Lock
 
-- **`reqWake()`** (`app.js:729`) requests `navigator.wakeLock.request('screen')` (guarded by a
+- **`reqWake()`** (`app.js`) requests `navigator.wakeLock.request('screen')` (guarded by a
   feature check, errors swallowed) so the screen stays on while navigating.
-- **`relWake()`** (`app.js:730`) releases it and nulls `wakeLock`.
+- **`relWake()`** (`app.js`) releases it and nulls `wakeLock`.
 - **Re-acquire on visibility.** Wake locks are dropped when a tab is backgrounded, so a
-  `visibilitychange` listener (`app.js:731`) re-requests the lock when the page becomes visible
-  again **and** GPS is still active **and** no lock is currently held.
+  `visibilitychange` listener (`app.js`) re-requests the lock when the page becomes visible
+  again **and** GPS is still active **and** no lock is currently held. The same listener also
+  **repaints the elapsed clock immediately** (`if (tracking) updateHUD();`) the instant the page
+  becomes visible: iOS suspends the 1 s `setInterval` while backgrounded, which would otherwise
+  leave the displayed time stale by up to ~1 s until the next tick (the elapsed value itself is
+  derived from the absolute `trackStartTs`, so it is always correct — only the on-screen repaint
+  needed the nudge). See §10a for the rest of the wake-from-background behavior.
 
 ---
 
@@ -759,96 +767,122 @@ view back; tapping the FAB again re-engages follow (the second branch of `toggle
 A second floating action button, `#btn-track` (`.map-fab.track`, `index.html:76`), starts a
 **live trail-progress** session: each GPS fix is snapped to the trail, the walked portion fills
 green over the red base, and a `#track-hud` banner (`index.html:79`) shows percent + elapsed time.
-Its click is bound to `toggleTrack` in `bindGlobal()` (`app.js:257`); the HUD's ✕ button
-(`#th-close`) is bound to `endTracking` (`app.js:258`), which forgets any saved session (below)
-before stopping.
+Its click is bound to `toggleTrack` in `bindGlobal()`; the HUD's ✕ button (`#th-close`) is bound
+to `endTracking`, which forgets any saved session (below) before stopping.
 
 ### Start / pause / stop
 
-- **`toggleTrack()`** (`app.js:761`): if not tracking, `startTracking()`; otherwise it toggles
+- **`toggleTrack()`** (`app.js`): if not tracking, `startTracking()`; otherwise it toggles
   **pause/resume**, banking elapsed time on pause (`trackElapsedMs += now - trackStartTs`) and
   resuming the clock from now (reopening GPS if it had been closed). Persists the session either way.
-- **`startTracking()`** (`app.js:769`): resets progress (`walkedDist=0`, `progIdx=-1`,
+- **`startTracking()`** (`app.js`): resets progress (`walkedDist=0`, `progIdx=-1`,
   `reacqMiss=0`), removes any old `walkedLayer`, shows the HUD, starts GPS if it isn't already
   running (tracking needs live fixes), starts a 1 s `hudTimer` so the elapsed clock ticks even
   without new fixes, and writes the first `persistSession()` snapshot.
-- **`stopTracking()`** (`app.js:784`): resets the **in-memory** session — hides the HUD, removes
+- **`stopTracking()`** (`app.js`): resets the **in-memory** session — hides the HUD, removes
   the green overlay, zeroes progress/elapsed — but **leaves GPS as-is** (the location dot can stay
   on) **and leaves the saved session in `localStorage` intact**, so reopening the trail can still
   offer a resume. It's called by `showList()`/`openDetail()` to reset per-trail.
-- **`endTracking()`** (`app.js:793`) = `clearSession()` + `stopTracking()`: the **explicit** end
+- **`endTracking()`** (`app.js`) = `clearSession()` + `stopTracking()`: the **explicit** end
   (HUD ✕), which also forgets the saved session.
-- **`updateTrackBtn()`** (`app.js:794`) toggles the `.tracking` class and swaps the PLAY/PAUSE
+- **`updateTrackBtn()`** (`app.js`) toggles the `.tracking` class and swaps the PLAY/PAUSE
   icon + aria-label.
 
 ### Snapping a fix to the trail — `updateProgress()`
 
-`updateProgress(lat,lon,accuracy)` (`app.js:816`), fed from `onPos` (§10), snaps each fix to a
+`updateProgress(lat,lon,accuracy)` (`app.js`), fed from `onPos` (§10), snaps each fix to a
 track vertex and advances the walked distance:
 
-- **Off-trail gate.** `offTrailGate(acc)` (`app.js:778`) = `max(25, min(60, 2.5*acc))` m — fixes
+- **Off-trail gate.** `offTrailGate(acc)` (`app.js`) = `max(25, min(60, 2.5*acc))` m — fixes
   whose nearest vertex is farther than the gate are rejected (progress holds), scaled to GPS
   accuracy (looser under tree cover).
-- **First fix** uses `acquireIdx()` (`app.js:782`): among in-gate vertices it takes the one with
+- **First fix** uses `acquireIdx()` (`app.js`): among in-gate vertices it takes the one with
   the **smallest distance-along**, so an out-and-back's trailhead/return overlap can't be mistaken
   for near-complete progress.
 - **Subsequent fixes** use `nearestIdx()` over a **forward window** only —
   `[progIdx - SNAP_BACK_M, progIdx + SNAP_FWD_M]` (constants `SNAP_BACK_M=80`, `SNAP_FWD_M=250` m,
-  `app.js:58-59`) — so the return leg of an out-and-back (which overlaps the outbound) can't match
+  `app.js:57-58`) — so the return leg of an out-and-back (which overlaps the outbound) can't match
   the wrong leg.
 - **Stale-window re-acquire.** A frozen window can never reach a far-off fix — pocket the phone at
   the trailhead, pull it out at the summit, and every fix lands kilometres past the window and is
-  rejected, stranding progress near the last snap. After **`REACQUIRE_AFTER` = 3** (`app.js:64`)
+  rejected, stranding progress near the last snap. After **`REACQUIRE_AFTER` = 3** (`app.js:63`)
   consecutive out-of-window rejections (counted in `reacqMiss`), `updateProgress` falls back to
   `acquireIdx()` for that fix, re-snapping from scratch so progress jumps to where you actually are.
   Since `walkedDist` is monotonic and `acquireIdx` is smallest-distance-along, this only ever fills
   *forward* on a curated route — it never un-colors.
 - **Monotonic advance.** `walkedDist` only ever grows; it recolors via `recolorProgress()`
-  (`app.js:813`) — a green polyline (`C.green`) over the red base, built from `renderPts` with
+  (`app.js`) — a green polyline (`C.green`) over the red base, built from `renderPts` with
   `.d ≤ walkedDist` plus an exact split vertex from `pointAtDistance(D)` — only when the
   high-water mark actually advances.
 
 ### The HUD — `updateHUD()`
 
-`updateHUD()` (`app.js:829`) fills the `#track-hud` percent (`.th-pct`), progress bar (`.th-fill`),
+`updateHUD()` (`app.js`) fills the `#track-hud` percent (`.th-pct`), progress bar (`.th-fill`),
 and elapsed time (`.th-num`, from `fmtElapsed(elapsedMs())`). **Out-and-back progress** is measured
 against the **far end** (`turnDist`, §8) so reaching the turnaround reads 100%; loops and
 point-to-point measure against the full `totalDist`. At 100% it shows a localized message
-(`trackTurnaround` for out-and-back, else `trackComplete`).
+(`trackTurnaround` for out-and-back, else `trackComplete`). It is also called immediately on
+`visibilitychange → visible` (§10) so the displayed clock repaints the moment the phone wakes.
 
 ### Surviving a reload — session persistence & resume
 
 iOS suspends and may **evict** a backgrounded PWA, so a long screen-off stretch (the phone
 pocketed on a climb) can reload the page mid-hike and lose the in-memory session. The session is
-therefore mirrored to `localStorage` under **`SESSION_KEY`** (`app.js:114`):
+therefore mirrored to `localStorage` under **`SESSION_KEY`** (`app.js`):
 
-- **`persistSession()`** (`app.js:876`) writes `{slug, walkedDist, progIdx, trackStartTs,
+- **`persistSession()`** (`app.js`) writes `{slug, walkedDist, progIdx, trackStartTs,
   trackElapsedMs, paused, savedAt}` on **every accepted fix** (end of `updateProgress`), on
   pause/resume, on `startTracking`, and on **`visibilitychange → hidden`** (the last capturing
   state just before iOS suspends us). `trackStartTs` is an **absolute** `Date.now()`, so a restored
-  running clock keeps counting *through* the gap.
-- **`maybeOfferResume(trail)`** (`app.js:893`), called at the end of `openDetail()` after the track
+  running clock keeps counting *through* the gap; `savedAt` records last activity (used for the
+  freshness window).
+- **`maybeOfferResume(trail)`** (`app.js`), called at the end of `openDetail()` after the track
   loads, reads the saved record and — if it's **this** trail's, **fresh** (`savedAt` within
-  `SESSION_MAX_AGE_MS` = 18 h, `app.js:115`), and **non-trivial** (`savedElapsedMs ≥ 60 s`) — shows
-  the **`#track-resume`** prompt (a sibling banner of the HUD in `index.html`), rendered by
-  `renderResumePrompt()` (`app.js:902`) with the saved percent + elapsed and re-localized live by
-  `setLang()`.
-- **`resumeSession(s)`** (`app.js:915`) restores `walkedDist`/`progIdx`/`paused`, redraws the green
+  `SESSION_MAX_AGE_MS` = 18 h, `app.js`), and **non-trivial** (`savedElapsedMs ≥ RESUME_MIN_MS`,
+  i.e. 20 s) — shows the **`#track-resume`** prompt (a sibling banner of the HUD in `index.html`),
+  rendered by `renderResumePrompt()` (`app.js`) with the saved percent + elapsed and re-localized
+  live by `setLang()`.
+- **`resumeSession(s)`** (`app.js`) restores `walkedDist`/`progIdx`/`paused`, redraws the green
   overlay, reopens GPS, restarts the HUD timer, and re-stamps the session. Bound to the prompt's
   **Resume**; **Dismiss** calls `clearSession()`. Because the windowed snap resumes from the
   restored `progIdx`, the **stale-window re-acquire** (above) snaps you to your real position within
   a few fixes.
 
+`RESUME_MIN_MS` (20 s, `app.js`) is the single short-session floor shared by every resume path —
+`bootRoute`, `maybeOfferResume`, `openDetail`'s `resumeOnOpen` branch, and `updateListResume` — so
+an accidental tap-and-leave never offers (or auto-triggers) a resume. It replaced an earlier
+hardcoded 60 s threshold.
+
+### Auto-resume on cold relaunch — `bootRoute()`
+
+When iOS evicts the PWA mid-hike, a relaunch starts at `start_url: "./"` with **no hash**, so plain
+`routeFromHash()` would drop the hiker on the **list**. **`bootRoute()`** (`app.js`) — called once
+from the `load` handler **instead of** `routeFromHash()` — fixes that: if there is **no
+`location.hash`** *and* a fresh resumable session exists (its `slug` is a real trail,
+`Date.now() - savedAt ≤ SESSION_MAX_AGE_MS`, and `savedElapsedMs ≥ RESUME_MIN_MS`), it sets
+`resumeOnOpen = true` and **`history.replaceState(null, '', '#/trail/' + slug)`**, then calls
+`routeFromHash()`. Net effect: a cold relaunch mid-hike lands **straight on the trail screen and
+auto-resumes** (the elapsed clock kept counting through the gap) rather than on the list.
+
+- **`replaceState`** (not assigning `location.hash`) sets the route without firing a second
+  `hashchange`, and — because it *replaces* rather than pushes — the **Back button** (hash → `''`)
+  still returns to the list, so navigation is never trapped.
+- **`resumeOnOpen`** is consumed by `openDetail()`: after the track loads it reads the saved
+  session and resumes it directly (rather than re-showing the `#track-resume` prompt).
+- `bootRoute` runs **only at boot**. A genuine deep link (hash already set) or no fresh session
+  falls straight through to normal `routeFromHash()` routing.
+- The list **"resume hike" banner** (`#list-resume` / `updateListResume()`) is now the
+  **fallback** — surfaced on the list screen for the cases auto-resume doesn't cover — rather than
+  the primary path back in.
+
 **Faster checks (screen-on refresh).** The common case for a "check the screen" hiker is a *short*
-lock where the page survives (no reload → no resume prompt). For that, the `visibilitychange`
-handler does more than re-acquire the wake lock: when the page returns to visible and GPS was live,
-it **arms an immediate re-acquire** (`reacqMiss = REACQUIRE_AFTER`) and **kicks a fresh fix** via
+lock where the page survives (no reload → no resume needed). For that, the `visibilitychange`
+handler does more than re-acquire the wake lock: it **repaints the clock at once**
+(`if (tracking) updateHUD()`, §10), and when the page returns to visible **and** GPS was live it
+**arms an immediate re-acquire** (`reacqMiss = REACQUIRE_AFTER`) and **kicks a fresh fix** via
 `getCurrentPosition({maximumAge:0})`, so the dot and progress refresh within ~a second of looking
 rather than after several windowed misses — and regardless of whether iOS resumed the frozen watch.
-A `#gps-locating` "Locating…" pill (`setLocating()`) covers the brief GPS cold-start, and a
-`#list-resume` banner (`updateListResume()`, bound in `bindGlobal`) surfaces a fresh saved session on
-the **list** screen after a full relaunch (where `start_url: "./"` drops the trail hash) as a one-tap
-way back in — `resumeOnOpen` makes that tap resume directly instead of re-showing the prompt.
+A `#gps-locating` "Locating…" pill (`setLocating()`) covers the brief GPS cold-start.
 
 This does **not** add background tracking (impossible on iOS web — see `IOS-PWA-GUIDE.md`): no GPS
 fixes are captured while the screen is off, and no breadcrumb path is recorded. It makes the
@@ -915,21 +949,22 @@ debounced handler also re-runs `setSheet(sheetState)` so the FABs and sheet heig
 ## 12. Offline tile download subsystem
 
 A single global button **pre-caches the map tiles for *all* trails** (across both tile
-sources) so every map works with no connectivity. It is driven from one button in the list
-header — **`#dl-all`** (`.dl-all-btn`, `index.html:38`) — bound to `downloadAll` in
-`bindGlobal()` (`app.js:245`). There is **no per-trail download button and no download modal**
+sources) so every map works with no connectivity. **Saved tiles go into IndexedDB**
+(`tiles-db.js` → `TileStore`), not the Cache API. The download is driven from one button in the
+list header — **`#dl-all`** (`.dl-all-btn`, `index.html:38`) — bound to `downloadAll` in
+`bindGlobal()` (`app.js`). There is **no per-trail download button and no download modal**
 anymore; iOS has no background fetch, so this is a single foreground, user-initiated action
 with inline progress on the button itself.
 
 ### Button state — `dlState` / `updateDlBtn()` / `updateDlProgress()`
 
 The button's appearance is driven by the module-level **`dlState`** (`'idle' | 'busy' |
-'done'`, `app.js:84`):
+'done'`, `app.js:88`):
 
-- **`updateDlBtn()`** (`app.js:954`) toggles the `.busy` / `.done` classes and sets the
+- **`updateDlBtn()`** (`app.js`) toggles the `.busy` / `.done` classes and sets the
   static label — `t('dlAll')` in `idle`, `t('dlAllDone')` in `done`. `applyStaticI18n()` calls
   it so the label tracks the language (§1a).
-- **`updateDlProgress(done,total)`** (`app.js:963`) computes a percentage, writes it to the
+- **`updateDlProgress(done,total)`** (`app.js`) computes a percentage, writes it to the
   button's **`--p` CSS custom property** (which drives the gradient fill of `.dl-all-btn.busy`,
   `app.css:89-92`), and — while `busy` — sets the button text to the live `"NN%"`.
 
@@ -937,12 +972,12 @@ The button's appearance is driven by the module-level **`dlState`** (`'idle' | '
 
 The download converts a lat/lon box to **XYZ tile ranges** at each zoom:
 
-- **`ll2t(lat, lon, z)`** (`app.js:899`) is the standard slippy-map projection:
+- **`ll2t(lat, lon, z)`** (`app.js`) is the standard slippy-map projection:
   `n = 2^z`, `x = floor(n*(lon+180)/360)`, and
   `y = floor(n*(1 - ln(tan(φ) + sec(φ))/π)/2)` with `φ = lat·π/180`. Returns `{x, y}`.
-- **`tRange(b, z)`** (`app.js:897`) projects the SW and NE corners and returns the inclusive
+- **`tRange(b, z)`** (`app.js`) projects the SW and NE corners and returns the inclusive
   `{x0,x1,y0,y1}` tile range (min/max-ed so corner order doesn't matter).
-- **`DL_MIN_Z = 10`** (`app.js`) — the overview floor for downloads. Each trail caches from
+- **`DL_MIN_Z = 10`** (`app.js:11`) — the overview floor for downloads. Each trail caches from
   z10 up to **its source's `maxZoom`**: **z10–16** for USGS, **z10–18** for GSI. The upper bound
   is the source's real native ceiling, so no 404-ing tiles are requested.
 
@@ -969,38 +1004,54 @@ substituting tokens **by name** into that source's template
 the same routine builds both the USGS `{z}/{y}/{x}` and the GSI `{z}/{x}/{y}` URLs correctly
 (§7), each to its own zoom ceiling.
 
-### Batched fetch into the Cache API — `downloadAll()`
+### Batched fetch into IndexedDB — `downloadAll()`
 
-**`downloadAll()`** (`app.js:932`) is the whole flow:
+**`downloadAll()`** (`app.js`) is the whole flow:
 
-1. Bail if already `busy` or `caches` is unavailable; set `dlState='busy'`, `updateDlBtn()`,
-   and seed the progress bar (`updateDlProgress(0,1)`).
+1. Bail if already `busy` **or** IndexedDB is unavailable (`!('indexedDB' in window)`); set
+   `dlState='busy'`, `updateDlBtn()`, and seed the progress bar (`updateDlProgress(0,1)`).
 2. **Gather every tile URL across all trails.** For each `trail` of `TRAILS`, `await
    gpxBox(trail)` and push `tileURLsFor(box, trailSource(trail))` — i.e. each trail
    contributes tiles from **its own** source (USGS to z16 or GSI to z18). The combined list is then
-   **deduped** with a `Set` (`app.js:941`), so tiles shared by overlapping trails are fetched
-   once.
-3. Open the **`TILE_CACHE`** cache (`'wa-trails-tiles-v1'`, `app.js:7` / `app.js:943`) and
-   iterate the URLs in **batches of 8** (`BATCH = 8`). For each URL it skips ones already cached
-   (`cache.match`), otherwise `fetch(u, {mode:'cors'})` and `cache.put` it if the response is
-   `ok` **or** `opaque`. Each settled request bumps `done` and calls `updateDlProgress(done,
-   total)`. `Promise.allSettled` ensures one failed tile doesn't abort the batch.
+   **deduped** with a `Set`, so tiles shared by overlapping trails are fetched once.
+3. Iterate the URLs in **batches of 8** (`BATCH = 8`). For each URL it **skips ones already
+   present** (`await TileStore.has(u)`), otherwise `fetch(u, {mode:'cors'})`. **Who stores the
+   bytes depends on whether a Service Worker controls the page:**
+   - **Controlled** (`navigator.serviceWorker.controller` truthy — the normal case): the SW's tile
+     `fetch` handler intercepts the request and writes the response into IndexedDB itself, so the
+     page only has to **trigger** the fetch.
+   - **Uncontrolled** (rare — a first-ever load before the SW has claimed the page): the page
+     **stores directly** via `TileStore.put(u, {body: await r.arrayBuffer(), type})` when the
+     response is `ok`.
+
+   Each settled request bumps `done` and calls `updateDlProgress(done, total)`.
+   `Promise.allSettled` ensures one failed tile doesn't abort the batch. The page opens **no Cache**
+   at any point.
 4. On completion set `dlState='done'` and `updateDlBtn()` (green "✓ Maps saved" label).
 
-> Because the page writes into the **same cache name** (`wa-trails-tiles-v1`) the service worker
-> reads from, every pre-downloaded trail — US or Japan — is served cache-first by the SW with
-> zero further network use (see §15).
+> Because the page and the SW share the **same IndexedDB store** (`tiles-db.js` →
+> `wa-trails-tiles`), every pre-downloaded trail — US or Japan — is later served **IndexedDB-first**
+> by the SW with zero further network use (see §15).
+
+> **Scale.** A full "Save maps" is now **~5,200 tiles** (≈2,830 USGS across the 8 WA trails +
+> ≈2,480 GSI across the 2 Japan trails — the GSI z17–18 levels roughly doubled the old GSI count),
+> about **~100 MB** at ~20 KB/tile. (The earlier "~3,200 tiles / ~50–80 MB" figures predate the
+> z17–18 GSI levels.) iOS's 7-day eviction applies to the IndexedDB store just as it did to the old
+> tile cache.
 
 ### Status sampling — `refreshCacheStatus()`
 
-**`refreshCacheStatus()`** (`app.js:972`) decides the button's startup state. It opens
-`TILE_CACHE` and, for **each** trail, computes the **z14 center tile** (`ll2t(center, 14)`),
-builds that tile's URL **from that trail's own source** (so the GSI trails are probed against
-the GSI URL), and checks `cache.match`. It sets `dlState='done'` **only if every trail's sample
-tile is present**, otherwise `'idle'`. It runs once on boot (awaited, then `updateDlBtn()`
-reflects the result), and skips while a download is `busy`. (It samples a single representative
-tile per trail rather than verifying the whole set — so a partially-downloaded set can still
-read as `done`; see the open caveats in `CLAUDE.md`.)
+**`refreshCacheStatus()`** (`app.js`) decides the button's startup state. It bails if IndexedDB is
+unavailable (`!('indexedDB' in window)`), and otherwise, for **each** trail, computes the **z14
+center tile** (`ll2t(center, 14)`), builds that tile's URL **from that trail's own source** (so the
+GSI trails are probed against the GSI URL), and checks **`TileStore.has(u)`** (an indexed key
+count — it never deserializes the bytes). It sets `dlState='done'` **only if every trail's sample
+tile is present**, otherwise `'idle'`. It runs **off the boot critical path**: boot calls
+`refreshCacheStatus().then(updateDlBtn)` **without awaiting it before routing** (ADR-12 — awaiting a
+Cache open here is what used to stall launch once many tiles were saved). It also skips while a
+download is `busy`. (It samples a single representative tile per trail rather than verifying the
+whole set — so a partially-downloaded set can still read as `done`; see the open caveats in
+`CLAUDE.md`.)
 
 ---
 
@@ -1012,44 +1063,46 @@ these directly and re-render by rewriting `innerHTML`.
 
 | Variable | Decl | Holds |
 |---|---|---|
-| `map` | `app.js:79` | The current Leaflet map instance (or `null`). |
-| `curTrail` | `app.js:79` | The trail object currently open in detail (or `null`). |
-| `trackLayer` | `app.js:79` | The red track polyline `L.polyline` (used for `fitBounds`). |
-| `trackPts` | `app.js:80` | Parsed track points: `{lat, lon, ele, d, se}` with cumulative distance `d` and smoothed elevation `se`. |
-| `trackWpts` | `app.js:80` | Parsed waypoints: `{lat, lon, name, d, _marker}` with snapped along-track distance `d` and the retained Leaflet marker. |
-| `totalDist` | `app.js:81` | Total track length in meters (for profile x-scaling). |
-| `gpsWatch` | `app.js:81` | `watchPosition` id while GPS is active (`null` when off). |
-| `gpsMk` | `app.js:81` | The pulsing GPS-position marker (or `null`). |
-| `gpsAcc` | `app.js:81` | The GPS accuracy circle (or `null`). |
-| `gpsFollow` | `app.js:81` | Whether the map auto-recenters on the user. |
-| `curPos` | `app.js:82` | Last known `{lat, lon}` fix (or `null`). |
-| `wakeLock` | `app.js:82` | The active Screen Wake Lock sentinel (or `null`). |
-| `sheetState` | `app.js:83` | Bottom-sheet state: `'peek' | 'full'`. |
-| `dlState` | `app.js:84` | Global offline-maps download state: `'idle' | 'busy' | 'done'` — drives the `#dl-all` button (§12). |
-| `eleLo` / `eleHi` / `eleRange` | `app.js:87` | Cached smoothed-elevation bounds for the profile Y scale (set in `loadTrail`, §8). |
-| `renderPts` | `app.js:90` | Downsampled track points (with cumulative `.d`) for the polyline, reused by the green walked overlay (§10a). |
-| `turnIdx` / `turnDist` / `isOutAndBack` | `app.js:93` | Far-end (turnaround) index/distance and out-and-back flag, used by live-tracking progress (§8, §10a). |
-| scrub state | `app.js:96` | `scrubbing`, `scrubMk`, `scrubRAF`, `scrubX`, `scrubRect`, `scrubCardRect` — elevation-scrub gesture state (§9). |
-| tracking state | `app.js:104-115` | `tracking`/`paused`, `trackStartTs`/`trackElapsedMs`/`hudTimer`, `walkedDist`/`progIdx`, `walkedLayer`, `reacqMiss` (consecutive off-window fixes → re-acquire), `pendingResume` (saved session offered for resume), plus `SESSION_KEY`/`SESSION_MAX_AGE_MS` — the live trail-progress session, mirrored to `localStorage` so it survives a reload (§10a). |
-| `lang` | `app.js:123` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
-| `listFilter` | `app.js:188` | Active difficulty filter (`'all'` or a `diffKey`). |
-| `listSort` | `app.js:188` | Active sort (`'dist'`, `'gain'`, or `null`). |
-| `peekH` | `app.js:849` | Cached bottom-sheet peek height in px (computed by `computePeekH()`, §11). |
-| `rzT` | `app.js:997` | Debounce timer handle for the resize handler. |
+| `map` | `app.js:83` | The current Leaflet map instance (or `null`). |
+| `curTrail` | `app.js:83` | The trail object currently open in detail (or `null`). |
+| `trackLayer` | `app.js:83` | The red track polyline `L.polyline` (used for `fitBounds`). |
+| `trackPts` | `app.js:84` | Parsed track points: `{lat, lon, ele, d, se}` with cumulative distance `d` and smoothed elevation `se`. |
+| `trackWpts` | `app.js:84` | Parsed waypoints: `{lat, lon, name, d, _marker}` with snapped along-track distance `d` and the retained Leaflet marker. |
+| `totalDist` | `app.js:85` | Total track length in meters (for profile x-scaling). |
+| `gpsWatch` | `app.js:85` | `watchPosition` id while GPS is active (`null` when off). |
+| `gpsMk` | `app.js:85` | The pulsing GPS-position marker (or `null`). |
+| `gpsAcc` | `app.js:85` | The GPS accuracy circle (or `null`). |
+| `gpsFollow` | `app.js:85` | Whether the map auto-recenters on the user. |
+| `curPos` | `app.js:86` | Last known `{lat, lon}` fix (or `null`). |
+| `wakeLock` | `app.js:86` | The active Screen Wake Lock sentinel (or `null`). |
+| `sheetState` | `app.js:87` | Bottom-sheet state: `'peek' | 'full'`. |
+| `dlState` | `app.js:88` | Global offline-maps download state: `'idle' | 'busy' | 'done'` — drives the `#dl-all` button (§12). |
+| `eleLo` / `eleHi` / `eleRange` | `app.js:91` | Cached smoothed-elevation bounds for the profile Y scale (set in `loadTrail`, §8). |
+| `renderPts` | `app.js:94` | Downsampled track points (with cumulative `.d`) for the polyline, reused by the green walked overlay (§10a). |
+| `turnDist` / `isOutAndBack` | `app.js:97` | Far-end (turnaround) distance and out-and-back flag, used by live-tracking progress (§8, §10a). |
+| scrub state | `app.js:100` | `scrubbing`, `scrubMk`, `scrubRAF`, `scrubX`, `scrubRect`, `scrubCardRect` — elevation-scrub gesture state (§9). |
+| tracking state | `app.js:103-118` | `tracking`/`paused`, `trackStartTs`/`trackElapsedMs`/`hudTimer`, `walkedDist`/`progIdx`, `walkedLayer`, `reacqMiss` (consecutive off-window fixes → re-acquire), `pendingResume` (saved session offered for resume), `resumeOnOpen` (a list-banner / cold-relaunch resume that auto-resumes on open), `gpsWasHidden` (GPS was live when last backgrounded → kick a fresh fix on return), `locatingTimer` (safety auto-hide for the "Locating…" pill), plus `SESSION_KEY`/`SESSION_MAX_AGE_MS` (18 h)/`RESUME_MIN_MS` (20 s) — the live trail-progress session, mirrored to `localStorage` so it survives a reload (§10a). |
+| `lang` | `app.js:126` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
+| `listFilter` | `app.js:227` | Active difficulty filter (`'all'` or a `diffKey`). |
+| `listSort` | `app.js:227` | Active sort (`'dist'`, `'gain'`, or `null`). |
+| `peekH` | `app.js` | Cached bottom-sheet peek height in px (computed by `computePeekH()`, §11). |
+| `rzT` | `app.js` | Debounce timer handle for the resize handler. |
 
 Two trivial DOM helpers are also defined globally: **`$`** (`querySelector`) and **`$$`**
-(`querySelectorAll` → array) (`app.js:104-105`). The i18n helpers `t` / `tf` / `loc` / `trDiff` /
+(`querySelectorAll` → array) (`app.js:120-121`). The i18n helpers `t` / `tf` / `loc` / `trDiff` /
 `trRoute` / `trDogs` / `trWpt` / `trSeason` and the unit formatters `fmtDist` / `fmtGain` /
 `fmtTime` / `fmtElevRange` are documented in §1a.
 
-Module-level **constants** (`app.js`): `TILE_CACHE` (`'wa-trails-tiles-v1'`), `DL_MIN_Z` (10),
-the zoom-aware padding helper `padFor(z)` (0.05° / 0.03° / 0.015° / 0.008° / 0.004°), `FT`
-(3.28084), `MI_PER_KM` (1.609344), the profile-geometry constants `PROF_H` (96) / `PROF_PAD_B`
-(14) / `PROF_PAD_T` (12), the `C` colour palette (track/marker hex, mirroring app.css), the
-live-tracking snap window `SNAP_FWD_M` (250) / `SNAP_BACK_M` (80), the inline-SVG icon set
-(`ICON_PATHS` + `ICON_PLAY`/`ICON_PAUSE`), the difficulty `DIFF` table, and the per-trail
-basemap table **`TILE_SOURCES`** with its resolver **`trailSource()`** (§7) — these replace the
-old single `TILE_URL` constant.
+Module-level **constants** (`app.js`): `DL_MIN_Z` (10), the zoom-aware padding helper `padFor(z)`
+(0.05° / 0.03° / 0.015° / 0.008° / 0.004°), `FT` (3.28084), `MI_PER_KM` (1.609344), the
+profile-geometry constants `PROF_H` (96) / `PROF_PAD_B` (14) / `PROF_PAD_T` (12), the `C` colour
+palette (track/marker hex, mirroring app.css), the live-tracking snap window `SNAP_FWD_M` (250) /
+`SNAP_BACK_M` (80) and `REACQUIRE_AFTER` (3), the session-resume constants `SESSION_MAX_AGE_MS`
+(18 h) / `RESUME_MIN_MS` (20 s), the inline-SVG icon set (`ICON_PATHS` + `ICON_PLAY`/`ICON_PAUSE`),
+the difficulty `DIFF` table, and the per-trail basemap table **`TILE_SOURCES`** with its resolver
+**`trailSource()`** (§7). There is **no `TILE_CACHE` constant** anymore — saved tiles live in
+IndexedDB, in the **`wa-trails-tiles`** store defined by `tiles-db.js` (`window.TileStore`), which
+`app.js` calls (`TileStore.has`/`put`) rather than opening a Cache.
 
 ---
 
@@ -1099,58 +1152,75 @@ and leave a gap at the bottom; the fixed-inset approach fills the true screen.
 
 ## 15. Caching layers
 
-The app has **two distinct Service-Worker caches**, declared at the top of `sw.js`:
+Saved data lives in **two stores with different roles**: a **single Service-Worker cache** for the
+app shell, and a **separate IndexedDB store** for map tiles. (Tiles moved out of Cache Storage in
+ADR-12 — see the rationale below and in `docs/DECISIONS-AND-LESSONS.md`.)
 
-| Cache name | Constant | Contents | Written by |
+| Store | Name / constant | Contents | Written by |
 |---|---|---|---|
-| `wa-trails-app-v11` | `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js`), manifest, icon, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. | SW `install` (`addAll(SHELL)` + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
-| `wa-trails-tiles-v1` | `TILE_V` (`sw.js:2`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL. | SW `fetch` (cache-first fill on miss) **and** the page's `downloadAll()` pre-cache. |
+| Cache Storage | `wa-trails-app-v15` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
+| IndexedDB | `wa-trails-tiles` / store `tiles` (`tiles-db.js`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL → `{body, type}`. | The page's `downloadAll()` (directly when the SW hasn't claimed the page) and the SW's tile `fetch` handler (on every network fill, the normal case). |
 
-> The cache **names** retain the historic `wa-trails-` prefix (an internal identifier — it is
-> not user-facing and is intentionally left unchanged so a deploy doesn't needlessly evict the
-> existing tile cache). The product is "Ume-chan's Trails"; only this internal cache key keeps
-> the old prefix.
+> The store **names** retain the historic `wa-trails-` prefix (an internal identifier — not
+> user-facing). The product is "Ume-chan's Trails"; only these internal keys keep the old prefix.
 
 ### Shell precache (`install`)
 
-On `install` (`sw.js:28-36`), the SW opens `APP_V`, **`addAll(SHELL)`** (which must all succeed —
-`SHELL` lists `./`, `index.html`, `app.css`, `app.js`, `trails.js`, **`i18n.js`**,
-`manifest.json`, `icon-180.png`, `icon-192.png`, `icon-512.png`, and the two Leaflet CDN URLs, `sw.js:4-9`), then **best-effort**
-caches `TRAIL_ASSETS` (the **10 GPX + 10 webp** — 8 Washington + 2 Japan, `sw.js:12-24`) with
-`Promise.allSettled` so a single failed asset doesn't break install. It calls `skipWaiting()`.
-Bundling the GPX and images means a trail's track and photo are available with **zero network**,
-even one the user has never opened.
+On `install` (`sw.js`, `install` handler), the SW opens `APP_V` and precaches each `SHELL` entry by
+**fetching it with `{cache:'reload'}` and `cache.put`-ing the result** (rather than `addAll`).
+Bypassing the HTTP cache this way means a freshly-deployed version can never store a **stale** shell
+file — e.g. an `index.html` that predates a just-added script. `SHELL` lists `./`, `index.html`,
+`app.css`, `app.js`, `trails.js`, **`i18n.js`**, **`tiles-db.js`**, `manifest.json`,
+`icon-180.png`, `icon-192.png`, `icon-512.png`, and the two Leaflet CDN URLs (`sw.js:5-10`); these
+**must all succeed** (a failed shell fetch throws and fails the install). It then **best-effort**
+caches `TRAIL_ASSETS` (the **10 GPX + 10 webp** — 8 Washington + 2 Japan, `sw.js:13-25`), also with
+`{cache:'reload'}`, wrapped in `Promise.allSettled` so a single failed asset doesn't break install.
+It calls `skipWaiting()`. Bundling the GPX and images means a trail's track and photo are available
+with **zero network**, even one the user has never opened.
 
 ### Activation / cleanup (`activate`)
 
-On `activate` (`sw.js:38-44`), the SW deletes any cache whose name is **neither** `APP_V`
-**nor** `TILE_V`, then `clients.claim()`. This is the version-migration mechanism: bumping
-`APP_V` (now `…-v11`) on a deploy evicts the previous shell cache automatically,
-while the tile cache (`TILE_V`) is deliberately preserved across shell upgrades so users don't
-lose downloaded maps.
+On `activate` (`sw.js`, `activate` handler), the SW deletes **every** cache whose name is **not**
+`APP_V` (`keys.filter(k => k !== APP_V)`), then `clients.claim()`. Because the shell cache is now
+the **only** Cache Storage cache, this both performs the normal version migration (bumping `APP_V`
+on a deploy evicts the previous shell cache) **and drops the old `wa-trails-tiles-v1` tile cache**
+left over from pre-ADR-12 builds. That deliberate drop is safe — tiles now live in IndexedDB — and
+is in fact what restores fast launch for a user upgrading from a tiles-in-Cache build (freeing that
+large cache). Users simply re-download tiles once into IndexedDB.
+
+> **Note:** the old version of this doc claimed `activate` *preserves* the tile cache so downloads
+> survive shell upgrades. That is no longer true (and is the **opposite** of current behavior): the
+> tile cache is dropped on activate; tile durability now comes from IndexedDB, which `activate`
+> never touches.
 
 ### Fetch strategy (`fetch`)
 
-`fetch` (`sw.js:46-69`) has two branches:
+`fetch` (`sw.js`, `fetch` handler) has two branches:
 
-1. **Tiles (cache-first).** Any URL whose host is `nationalmap.gov` **or**
-   `cyberjapandata.gsi.go.jp` is served from `TILE_V`: return the cached hit, else fetch, store
-   the clone if `ok` **or** `opaque`, and on network failure return an empty `503`
-   (`sw.js:50-57`). This single branch covers both basemap providers, and is what makes
-   downloaded tiles render offline.
-2. **Shell + bundled assets (cache-first, fill on miss).** Everything else tries
-   `caches.match` first; on a miss it fetches, and if `ok` **and** the request is same-origin or
-   an `unpkg.com` host, stores the clone in `APP_V`. On a network failure it falls back to the
-   cached `./index.html` for **navigations** (so the app still launches offline), or an empty
-   `503` otherwise (`sw.js:61-68`).
+1. **Tiles (IndexedDB-first).** Any URL whose host is `nationalmap.gov` **or**
+   `cyberjapandata.gsi.go.jp` is served from the `TileStore`: `await TileStore.get(url)` and, on a
+   hit, replay the stored bytes as `new Response(rec.body, {headers:{'Content-Type':rec.type}})`.
+   On a miss it `fetch`es; if the response is `ok` it keeps the SW alive
+   (`e.waitUntil(res.clone().arrayBuffer() → TileStore.put(url, {body, type}))`) to store the tile,
+   and returns the network response. On network failure it returns an empty `503`. This single
+   branch covers both basemap providers and is what makes saved tiles render offline.
+2. **Shell + bundled assets (cache-first, scoped to `APP_V`).** Everything else opens **`APP_V`
+   specifically** and tries `cache.match(req)` — **not** a global `caches.match()`. (A global match
+   can make WebKit open/scan unrelated stores; scoping keeps shell serving off any large store and
+   was part of the ADR-12 fast-launch fix.) On a miss it fetches, and if `ok` **and** the request is
+   same-origin or an `unpkg.com` host, stores the clone in `APP_V`. On a network failure it falls
+   back to the cached `./index.html` for **navigations** (so the app still launches offline), or an
+   empty `503` otherwise.
 
 ### How the page-level download ties in
 
-The crucial coupling: `app.js`'s `TILE_CACHE` (`app.js:7`) and `sw.js`'s `TILE_V` (`sw.js:2`)
-are the **same string**, `'wa-trails-tiles-v1'`. So when `downloadAll()` writes tiles into the
-cache (§12), the service worker's tile branch later finds and serves them — the page is the
-**writer**, the SW is the **reader**, sharing one named cache. The `activate` cleanup explicitly
-spares `TILE_V`, so those downloads persist across app updates.
+The page and the SW share **one IndexedDB store** (`tiles-db.js` is loaded by both — the page via
+`<script src>`, the SW via `importScripts`), so they no longer need to agree on a cache name. During
+`downloadAll()` (§12) the page just **triggers** each tile fetch; when the SW controls the page its
+tile branch stores the bytes, and the page only stores directly on a first-ever load before the SW
+has claimed it. Afterward the SW serves every saved tile **IndexedDB-first**. The `activate` cleanup
+touches only Cache Storage, so IndexedDB tiles persist across app updates (subject only to iOS's
+7-day eviction).
 
 ---
 
@@ -1160,8 +1230,12 @@ spares `TILE_V`, so those downloads persist across app updates.
 boot
    └─► load ─► applyStaticI18n() (fill [data-i18n], <title>, <html lang>; updateDlBtn())
             ─► renderList() ─► bindGlobal()
-            ─► await refreshCacheStatus() ─► updateDlBtn()  (#dl-all = idle | done)
-            ─► routeFromHash() ─► register sw.js
+            ─► bootRoute()  (no hash + fresh session? replaceState '#/trail/<slug>'
+            │                + resumeOnOpen=true) ─► routeFromHash()
+            ─► register sw.js
+            ─► refreshCacheStatus().then(updateDlBtn)   (#dl-all idle|done; OFF the
+            │                                            critical path — not awaited)
+            └─► if localStorage.perf==='1': console.info('[perf] sw-served shell ~Nms · …')
 
 user taps card
    └─► location.hash = "#/trail/<slug>"
@@ -1177,7 +1251,7 @@ user taps card
                │     ├─ L.map(center=t.center, zoom=13)
                │     ├─ zoom control @ topright
                │     └─ src tileLayer (USGS or GSI) ──► requests intercepted by sw.js
-               │                              └─ TILE_V cache-first
+               │                              └─ TileStore (IndexedDB) first
                └─ await loadTrail(t)
                      ├─ fetch(t.gpx) ──► sw.js serves from APP_V (works offline)
                      ├─ DOMParser ─► trackPts[] (d via hav), trackWpts[] (none on JP trails)
@@ -1206,7 +1280,15 @@ user taps "⬇ Save maps" (#dl-all, downloads ALL trails)
    └─► downloadAll()  ─► dlState='busy' ─► updateDlBtn()
          └─► for each trail: gpxBox(t) ─► tileURLsFor(box, trailSource(t))
              ─► dedupe (Set) over all trails/both sources, z10..src.maxZoom (USGS 16, GSI 18)
-             ─► batched fetch(8) ─► caches.open('wa-trails-tiles-v1').put()
+             ─► batched fetch(8); skip if TileStore.has(u)
+             │     ├─ SW controls page: SW's tile fetch handler stores it in IndexedDB
+             │     └─ else (first load): TileStore.put(u, {body, type}) directly
              ─► updateDlProgress(done,total) (NN% + --p fill)
              ─► dlState='done' ─► updateDlBtn() (green "✓ Maps saved")
+
+user reopens app mid-hike (iOS evicted the PWA, no hash)
+   └─► load ─► bootRoute(): fresh session? ─► replaceState '#/trail/<slug>'
+                            + resumeOnOpen=true ─► routeFromHash() ─► openDetail(t)
+         └─► after loadTrail: resumeSession(s)  (restore progress + green overlay;
+                              elapsed clock counted through the gap; Back ─► list)
 ```

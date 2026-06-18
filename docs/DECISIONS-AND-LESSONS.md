@@ -292,6 +292,11 @@ window.addEventListener('hashchange', routeFromHash);
 > (across both sources) in one foreground action. Tiers 1 and 2 (SW-precached shell/GPX/images;
 > cache-first tiles) are unchanged, as is the underlying constraint (iOS has no Background Fetch).
 > Read this ADR for the three-tier *structure* and ADR-10 for the current *download UX*.
+>
+> **Updated by ADR-12 (tiles → IndexedDB).** Tier 2's "cache-first tiles in a separate `TILE_V`
+> cache" is now **IndexedDB-first** via `tiles-db.js` (the SW reads/writes `TileStore`; there is no
+> longer a `TILE_V` tile cache), and tier 3's `downloadAll()` writes tiles into **IndexedDB**, not a
+> Cache. The three-tier *structure* and the iOS "no Background Fetch" constraint are unchanged.
 
 **Context.**
 The app must be usable with **no signal on the trail**. iOS Safari PWAs have **no Background Fetch
@@ -507,6 +512,11 @@ detail-screen attribution line.
 
 ### ADR-10: One global "download all maps" button (replaces per-trail download + modal + badge)
 
+> **Updated by ADR-12 (tiles → IndexedDB).** The "~3,200 tiles" figure below is now **~5,200**
+> (≈2,830 USGS + ≈2,480 GSI, after the GSI z17–18 levels were added — ADR-9), and `downloadAll()`
+> fills **IndexedDB** (via the service worker when it controls the page; see ADR-12), not a
+> `TILE_CACHE`. The one-button UX described here is otherwise unchanged.
+
 **Context.**
 ADR-7's tier 3 gave each trail its own "Download map for offline" button, a progress modal, and a
 per-card "✓ available offline" badge. With ten trails across two tile sources that is a lot of
@@ -663,6 +673,95 @@ elevation render from the precached GPX.
 
 ---
 
+### ADR-13: Auto-resume the active hike's trail screen on cold relaunch
+
+**Context.**
+iOS routinely kills the installed PWA mid-hike — the screen locks, the user switches apps, the
+process is reaped to reclaim memory. The manifest `start_url` is `"./"`, so a cold relaunch routed
+to the **list** screen, not the trail the hiker was actually on. A live-tracking session already
+survived the kill (it's mirrored to `localStorage` with an absolute start timestamp — ADR-12's
+sibling work), and the list showed a **`#list-resume`** banner the hiker could tap to get back. But
+that is one extra tap, at exactly the moment a cold, gloved, or distracted hiker least wants
+friction: reopening the app should simply bring them back to where they were.
+
+**Decision.**
+Add a **boot-only** routing step, `bootRoute()` (`app.js`), called once from the `load` handler
+**in place of** the bare `routeFromHash()`. If there is **no `location.hash`** *and* a fresh
+resumable session exists — its `slug` is in `TRAILS`, `Date.now() - savedAt ≤ SESSION_MAX_AGE_MS`
+(18 h), and `savedElapsedMs ≥ RESUME_MIN_MS` — it sets `resumeOnOpen = true` and
+`history.replaceState(null, '', '#/trail/' + slug)`, then calls `routeFromHash()`. So a cold
+relaunch mid-hike lands **straight on the trail and auto-resumes**: the elapsed clock, derived from
+the absolute `trackStartTs`, has kept counting through the gap, so it shows the true elapsed time on
+arrival.
+
+```js
+function bootRoute() {
+  const s = readSession();
+  if (!location.hash && s && TRAILS.some(x => x.slug === s.slug)
+      && (Date.now() - (s.savedAt || 0) <= SESSION_MAX_AGE_MS) && savedElapsedMs(s) >= RESUME_MIN_MS) {
+    resumeOnOpen = true;
+    history.replaceState(null, '', '#/trail/' + s.slug);
+  }
+  routeFromHash();
+}
+```
+
+Two supporting changes ship with it:
+
+- A new constant **`RESUME_MIN_MS = 20000`** *replaces* the old hardcoded **`60000`** in every place
+  a resume is offered or performed — `openDetail`'s `resumeOnOpen` branch, `maybeOfferResume`,
+  `updateListResume`, and `bootRoute` — so the threshold is consistent everywhere: an active hike
+  (> 20 s) is reliably offered/resumed, while a trivial accidental start (< 20 s) is ignored.
+  `SESSION_MAX_AGE_MS` stays **18 h** (measured from `savedAt`/last activity).
+- `visibilitychange → visible` now calls `if (tracking) updateHUD();`, so the elapsed clock
+  **repaints immediately on wake**. The 1 s `setInterval` that drives the HUD is suspended while the
+  app is backgrounded on iOS; without this the displayed time could sit stale for up to ~1 s after
+  the app comes back to the foreground.
+
+An opt-in boot perf log (`localStorage.perf === '1'`) emits
+`console.info('[perf] sw-served shell ~Nms · …')` for on-device before/after measurement of boot +
+route.
+
+**Rationale.**
+- "I reopened the app, take me back to my hike" is the correct behavior for a tool whose whole job
+  is to be reopened repeatedly on the trail — it removes a tap at the worst moment for friction.
+- Using **`replaceState`** rather than assigning `location.hash` avoids firing a **second**
+  `hashchange` (the route is already set before `routeFromHash()` runs) **and** keeps the Back button
+  working: Back pops the hash to `''`, which routes to the list. Because `bootRoute()` runs **only at
+  boot**, Back is never re-trapped on the trail.
+- The threshold unification (`RESUME_MIN_MS`) means the banner, the auto-resume, and the offer-on-
+  open all agree on what counts as a "real" hike, so behavior can't diverge between entry paths.
+
+**Alternatives considered and rejected.**
+- **Keep the list-only resume banner (the 1-tap status quo).** Rejected as a UX gap: it still drops
+  the hiker on the list and makes them find and tap the banner, contradicting "reopening should bring
+  me back to the trail." The banner is **kept as the fallback** for sub-threshold sessions and for
+  after the user has navigated back to the list.
+- **Auto-route inside `routeFromHash()` itself.** Rejected: `routeFromHash` also runs on every
+  `hashchange`, so resuming there would fire on the **Back button**'s `hashchange` (hash → `''`) and
+  immediately bounce the user back onto the trail — **trapping** them. Confining the behavior to a
+  boot-only `bootRoute()` + `replaceState` is precisely what avoids that.
+- **Decouple "leave the map" from "stop tracking" on Back.** A cleaner model in the abstract
+  (Back leaves the map view without ending the hike), but a larger routing/state refactor —
+  **deferred**.
+
+**Consequences.**
+- An **un-ended hike stays "active"** and auto-resumes on *every* relaunch until either the user taps
+  the HUD ✕ (`endTracking → clearSession`) or **18 h** pass since last activity (`savedAt`), at which
+  point the session is treated as stale and dropped. This is intentional — a hiker who pockets the
+  phone for hours still wants the hike back — but it means "stop" is an explicit action, not implied
+  by closing the app.
+- The `#list-resume` banner remains the resume path for sub-threshold sessions and for the post-
+  Back-navigation case.
+
+**Verification.** Chrome with network emulation off and a deterministic GPS shim: an active hike
+(> 20 s) relaunches **straight onto the trail** with the timer still running; a < 20 s session stays
+on the **list** (no hijack); **Back returns to the list** and is not re-trapped on the trail;
+the **HUD repaints on wake** even with the 1 s interval killed while backgrounded; GPS and the green
+progress fill resume; no console errors.
+
+---
+
 ## Part 2 — Bugs found during build & testing
 
 All four bugs below are **fixed in the current source**; each entry notes the verification.
@@ -790,25 +889,26 @@ satisfied from the cache, so source edits are invisible until the cache is inval
   reload re-fetches from disk).
 - To ship updates to users: **bump the cache version** so the new SW installs a fresh shell and the
   `activate` handler deletes the stale caches. The shell cache version is `APP_V` in `sw.js`
-  (currently **`'wa-trails-app-v11'`** — bumped each shell release; it was v2 when this bug was first
-  written up), while the tile cache `TILE_V` (`'wa-trails-tiles-v1'`) is kept stable so downloaded
-  tiles survive shell updates:
+  (currently **`'wa-trails-app-v15'`** — bumped each shell release; it was v2 when this bug was first
+  written up). There is now **only one cache** (the shell): tiles moved out of Cache Storage into
+  IndexedDB in **ADR-12**, so the old `TILE_V` (`'wa-trails-tiles-v1'`) tile cache is gone and
+  `activate` deletes **every** cache except the current `APP_V`:
 
 ```js
-const APP_V  = 'wa-trails-app-v11';
-const TILE_V = 'wa-trails-tiles-v1';
+const APP_V = 'wa-trails-app-v15';   // tiles moved out of Cache Storage into IndexedDB (ADR-12)
 
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k!==APP_V && k!==TILE_V).map(k => caches.delete(k)));
+    await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
     self.clients.claim();
   })());
 });
 ```
 
-**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v11'`, the shell is served
-cache-first, and `activate` deletes every cache except the current `APP_V` and `TILE_V`.
+**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v15'`, there is no `TILE_V`, the
+shell is served cache-first (scoped to `APP_V` — ADR-12), and `activate` deletes every cache except
+the current `APP_V`.
 
 **Lesson.** Cache-first service workers are great in production and **hostile during development**.
 Keep a fixed "clear SW + caches" step in the dev loop and treat the cache version as the release
@@ -960,11 +1060,12 @@ Several previously-flagged items were addressed and **verified against the curre
   download UI uses static `dlAll` / `dlAllDone` / `dlAllAria` keys plus a bare percentage. New
   per-source attribution keys `attribTrail` / `attribUsgs` / `attribGsi` were added in both
   languages.
-- **`sw.js` cache bumped to `wa-trails-app-v11`.** `TRAIL_ASSETS` now precaches **ten** GPX files and
-  ten hero images (eight WA + two Japan), and the cache-first tile handler matches **both**
-  `nationalmap.gov` and `cyberjapandata.gsi.go.jp` (ADR-9). `TILE_V` stays `wa-trails-tiles-v1` so
-  downloaded tiles survive the shell bump (the cache-version-as-release-lever practice from Bug 3 is
-  unchanged).
+- **`sw.js` cache bumped to `wa-trails-app-v15`.** `TRAIL_ASSETS` now precaches **ten** GPX files and
+  ten hero images (eight WA + two Japan), and the tile fetch branch matches **both**
+  `nationalmap.gov` and `cyberjapandata.gsi.go.jp` (ADR-9). Saved tiles no longer live in a
+  `TILE_V` Cache — they moved to **IndexedDB** via `tiles-db.js` (ADR-12), so there is now only the
+  one shell cache and `activate` purges everything else; the cache-version-as-release-lever practice
+  from Bug 3 is unchanged.
 
 **Known-faithful, do-not-"fix":**
 

@@ -40,6 +40,7 @@ Deployable to GitHub Pages as-is.
 - `trails.js` — trail metadata (English base content)
 - `gpx/` — GPX tracks · `images/` — hero photos
 - `sw.js` — service worker (offline caching)
+- `tiles-db.js` — IndexedDB store for saved map tiles (shared by the page and the service worker)
 
 ## Documentation
 
