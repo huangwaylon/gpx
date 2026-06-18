@@ -86,6 +86,7 @@ let totalDist = 0, gpsWatch = null, gpsMk = null, gpsAcc = null, gpsFollow = fal
 let curPos = null, wakeLock = null;
 let sheetState = 'peek';          // 'peek' | 'full'
 let dlState = 'idle';             // global offline-maps download: 'idle' | 'busy' | 'done'
+const cardDl = new Map();         // per-trail download state by slug: 'idle' | 'busy' | 'done' (survives list re-renders)
 
 // Cached profile elevation bounds (smoothed), computed once per trail in loadTrail.
 let eleLo = 0, eleHi = 0, eleRange = 1;
@@ -103,7 +104,7 @@ let scrubbing = false, scrubMk = null, scrubRAF = 0, scrubX = 0, scrubRect = nul
 let tracking = false, paused = false;
 let trackStartTs = 0, trackElapsedMs = 0, hudTimer = null, hudTicks = 0;
 let walkedDist = 0, progIdx = -1;   // monotonic distance-along reached (m); last snapped vertex
-let walkedLayer = null;             // green polyline drawn over the red base track
+let walkedLayer = null, walkedHalo = null, walkedLine = null;   // green "walked" overlay: white halo + green line (a layerGroup), drawn over the red base track
 let reacqMiss = 0;                  // consecutive off-window fixes (triggers a full re-acquire)
 let pendingResume = null;           // a saved session offered for resume on the current trail
 let resumeOnOpen = false;           // bootRoute (cold relaunch) or the list "resume hike" banner → auto-resume on open
@@ -249,22 +250,29 @@ function renderList() {
 
   wrap.innerHTML = trails.map(trail => {
     const tr = loc(trail);
+    const dl = cardDl.get(trail.slug) || 'idle';   // per-trail download state survives this re-render
     return `
-    <a class="card" href="#/trail/${trail.slug}">
-      <div class="card-img-wrap">
-        <img class="card-img" src="${trail.img}" alt="${tr.name}" loading="lazy">
-        <span class="card-badge ${diffClass(trail.diff)}">${trDiff(trail.diff)}</span>
-        <div class="card-titlebar">
-          <div class="card-title">${tr.name}</div>
-          <div class="card-area">${icon('pin')}${tr.area}</div>
+    <div class="card-wrap">
+      <a class="card" href="#/trail/${trail.slug}">
+        <div class="card-img-wrap">
+          <img class="card-img" src="${trail.img}" alt="${tr.name}" loading="lazy">
+          <span class="card-badge ${diffClass(trail.diff)}">${trDiff(trail.diff)}</span>
+          <div class="card-titlebar">
+            <div class="card-title">${tr.name}</div>
+            <div class="card-area">${icon('pin')}${tr.area}</div>
+          </div>
         </div>
-      </div>
-      <div class="card-stats">
-        <span class="s">${icon('dist')}<span>${fmtDist(trail.lengthMi)}</span></span>
-        <span class="s">${icon('gain')}<span>${fmtGain(trail.gainFt)}</span></span>
-        <span class="s time">${icon('clock')}<span>${fmtTime(trail.time)}</span></span>
-      </div>
-    </a>`;
+        <div class="card-stats">
+          <span class="s">${icon('dist')}<span>${fmtDist(trail.lengthMi)}</span></span>
+          <span class="s">${icon('gain')}<span>${fmtGain(trail.gainFt)}</span></span>
+          <span class="s time">${icon('clock')}<span>${fmtTime(trail.time)}</span></span>
+        </div>
+      </a>
+      <button class="card-dl${dl==='done'?' done':dl==='busy'?' busy':''}" type="button" data-slug="${trail.slug}"
+              aria-label="${t(dl==='done'?'dlOneDone':'dlOne')}">
+        <span class="cdl-ic" aria-hidden="true">${icon(dl==='done'?'check':'download')}</span>
+      </button>
+    </div>`;
   }).join('');
 }
 
@@ -291,6 +299,13 @@ function bindGlobal() {
   $('#tr-resume').addEventListener('click', () => { const s=pendingResume; hideResumePrompt(); if(s) resumeSession(s); });
   $('#tr-dismiss').addEventListener('click', () => { clearSession(); hideResumePrompt(); });
   $('#dl-all').addEventListener('click', downloadAll);
+  // Per-trail download: one delegated listener on the stable list container (survives every
+  // renderList re-render). The button is a sibling of the card's <a>, so it doesn't navigate.
+  $('#trail-list').addEventListener('click', e => {
+    const b = e.target.closest('.card-dl'); if(!b) return;
+    e.preventDefault(); e.stopPropagation();
+    downloadOne(b.dataset.slug);
+  });
   $('#list-resume').addEventListener('click', () => {
     const slug = $('#list-resume').dataset.slug; if(!slug) return;
     resumeOnOpen = true; location.hash = '#/trail/' + slug;
@@ -906,7 +921,7 @@ function startTracking(){
   tracking=true; paused=false;
   trackStartTs=Date.now(); trackElapsedMs=0;
   walkedDist=0; progIdx=-1; reacqMiss=0;
-  if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; }
+  if(walkedLayer){ walkedLayer.remove(); walkedLayer=walkedHalo=walkedLine=null; }
   $('#track-hud').hidden=false;
   if(gpsWatch===null) startGPS();          // tracking needs live fixes
   startHudTimer();
@@ -919,7 +934,7 @@ function stopTracking(){
   tracking=false; paused=false; reacqMiss=0;
   clearInterval(hudTimer); hudTimer=null;
   const hud=$('#track-hud'); if(hud) hud.hidden=true;
-  if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; }
+  if(walkedLayer){ walkedLayer.remove(); walkedLayer=walkedHalo=walkedLine=null; }
   walkedDist=0; progIdx=-1; trackElapsedMs=0;
   updateTrackUI();
 }
@@ -993,9 +1008,14 @@ function recolorProgress(){
   const D=walkedDist, coords=[];
   for(const p of renderPts){ if(p.d<=D) coords.push([p.lat,p.lon]); else break; }
   if(D>0){ const j=pointAtDistance(D); if(j) coords.push([j.lat,j.lon]); }
-  if(coords.length<2){ if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; } return; }
-  if(!walkedLayer) walkedLayer=L.polyline(coords,{ color:C.green, weight:4, opacity:0.97, lineJoin:'round' }).addTo(map);
-  else walkedLayer.setLatLngs(coords);
+  if(coords.length<2){ if(walkedLayer){ walkedLayer.remove(); walkedLayer=walkedHalo=walkedLine=null; } return; }
+  if(!walkedLayer){
+    // Mirror the base track (drawTrack): a white halo UNDER the green line, so the walked overlay is
+    // exactly as wide as the red track and fully hides it — no red peeking out beside a thinner line.
+    walkedHalo=L.polyline(coords,{ color:'#fff', weight:7.5, opacity:0.85, lineJoin:'round' });
+    walkedLine=L.polyline(coords,{ color:C.green, weight:4, opacity:0.97, lineJoin:'round' });
+    walkedLayer=L.layerGroup([walkedHalo, walkedLine]).addTo(map);
+  } else { walkedHalo.setLatLngs(coords); walkedLine.setLatLngs(coords); }
 }
 
 function elapsedMs(){ return trackElapsedMs + ((tracking && !paused) ? Date.now()-trackStartTs : 0); }
@@ -1194,26 +1214,14 @@ function tileURLsFor(box, src){
   return urls;
 }
 
-async function downloadAll(){
-  if(dlState==='busy' || !('indexedDB'in window)) return;
-  // No connection → nothing can be fetched. Bail with a clear message instead of animating to a
-  // false "✓ saved" (every fetch would fail/return the SW's 503, yet the old code still flipped to
-  // done). navigator.onLine===false reliably catches the genuinely-offline trail case.
-  if(!navigator.onLine){ alert(t('dlOffline')); return; }
-  dlState='busy'; updateDlBtn(); updateDlProgress(0,1);
-  // Gather every tile URL across all trails (each via its own source), then dedupe.
-  let urls=[];
-  for(const trail of TRAILS){
-    const box=await gpxBox(trail);
-    urls.push(...tileURLsFor(box, trailSource(trail)));
-  }
+// Shared fetch+commit engine for BOTH the global and per-trail download buttons. Fetches each
+// missing tile and stores its bytes in IndexedDB on the PAGE (so reaching "saved" means the bytes
+// are committed — we don't lean on the SW's deferred e.waitUntil write, which iOS can cut off when
+// it suspends the backgrounded SW; on the SW-controlled path the SW also caches the same key, an
+// idempotent duplicate, not a 2nd fetch). Returns {ok, fail}; reports progress via onProgress.
+async function saveTiles(urls, onProgress){
   urls=[...new Set(urls)];
   const total=urls.length || 1; let done=0, ok=0, fail=0; const BATCH=8;
-  // The PAGE stores every tile it fetches (committing the bytes to IndexedDB before counting the
-  // tile saved). We don't lean on the SW's own tile-write: that write is deferred via e.waitUntil
-  // and can be cut off when iOS suspends the backgrounded SW, so "done" would mean "fetched", not
-  // "saved". Storing here makes "done"/"✓ saved" mean the bytes are actually committed. On the
-  // SW-controlled path the SW also caches the same key — an idempotent duplicate, not a 2nd fetch.
   for(let i=0;i<urls.length;i+=BATCH){
     await Promise.allSettled(urls.slice(i,i+BATCH).map(async u=>{
       try{
@@ -1224,12 +1232,41 @@ async function downloadAll(){
           else fail++;                                      // 404 / the SW's offline 503 → a real miss
         }
       }catch(_){ fail++; }
-      done++; updateDlProgress(done,total);
+      done++; if(onProgress) onProgress(done,total);
     }));
   }
-  // Only claim success if tiles were actually saved; if everything failed (e.g. connection dropped
-  // mid-run) fall back to idle so the button doesn't lie about offline readiness.
+  return {ok, fail};
+}
+// Every tile URL for one trail (its box across its source's zoom range). The tile math is already
+// shared (tileURLsFor/gpxBox/trailSource), so the global and per-trail paths build URLs identically.
+async function trailTileURLs(trail){ return tileURLsFor(await gpxBox(trail), trailSource(trail)); }
+
+// Global "save all maps": every trail's tiles across both sources, in one deduped pass.
+async function downloadAll(){
+  if(dlState==='busy' || !('indexedDB'in window)) return;
+  // No connection → nothing can be fetched. Bail with a clear message instead of animating to a
+  // false "✓ saved". navigator.onLine===false reliably catches the genuinely-offline trail case.
+  if(!navigator.onLine){ alert(t('dlOffline')); return; }
+  dlState='busy'; updateDlBtn(); updateDlProgress(0,1);
+  let urls=[];
+  for(const trail of TRAILS) urls.push(...await trailTileURLs(trail));
+  const {ok}=await saveTiles(urls, updateDlProgress);
+  // Provisional feedback, then reconcile to the honest "all trails saved?" state (and paint each
+  // card's status) — the global ✓ should mean every trail is saved, not just that some tiles landed.
   dlState = ok>0 ? 'done' : 'idle'; updateDlBtn();
+  refreshCacheStatus().then(updateDlBtn);
+}
+
+// Per-trail "save this map" (the card button). Same engine + offline guard as the global button,
+// scoped to one trail; state is tracked per-slug in cardDl so it survives list re-renders.
+async function downloadOne(slug){
+  if(cardDl.get(slug)==='busy' || !('indexedDB'in window)) return;
+  if(!navigator.onLine){ alert(t('dlOffline')); return; }
+  const trail=TRAILS.find(x=>x.slug===slug); if(!trail) return;
+  setCardDl(slug,'busy',0);
+  const {ok}=await saveTiles(await trailTileURLs(trail), (d,total)=>setCardDl(slug,'busy',Math.round(d/total*100)));
+  setCardDl(slug, ok>0?'done':'idle');
+  if(ok>0) refreshCacheStatus().then(updateDlBtn);          // this trail done may complete the global "✓ saved"
 }
 
 // Reflect the current state + language on the global download button (icon + label).
@@ -1249,16 +1286,39 @@ function updateDlProgress(done,total){
   if(dlState==='busy') b.querySelector('.dl-lbl').textContent=pct+'%';
 }
 
-// On startup decide the button state: 'done' only if a sample tile for EVERY trail
-// (its z14 center tile, from that trail's own source) is already cached; else 'idle'.
+// Paint one card's per-trail download button (idle/busy/done + busy %). cardDl is the source of
+// truth; the button DOM is rebuilt by renderList (filter/sort/lang) and re-reads cardDl, so a
+// running download — which holds its slug in a closure — repaints correctly on its next tick.
+function setCardDl(slug, state, pct){
+  cardDl.set(slug, state);
+  const b=document.querySelector('.card-dl[data-slug="'+slug+'"]'); if(!b) return;
+  b.classList.toggle('busy', state==='busy');
+  b.classList.toggle('done', state==='done');
+  if(state==='busy' && pct!=null) b.style.setProperty('--p', pct);   // unitless number → conic ring degrees
+  b.querySelector('.cdl-ic').innerHTML = icon(state==='done'?'check':'download');
+  b.setAttribute('aria-label', t(state==='done'?'dlOneDone':'dlOne'));
+}
+
+// Sample tile (z14 center, from the trail's own source) used to decide "saved". One probe, two
+// consumers: the per-trail card state and the global button (all trails saved).
+async function trailSaved(trail){
+  const {x,y}=ll2t(trail.center[0],trail.center[1],14);
+  const u=trailSource(trail).url.replace('{z}',14).replace('{y}',y).replace('{x}',x);
+  return TileStore.has(u);
+}
+
+// On startup (and after a download) decide the buttons' states from what's actually in IndexedDB:
+// each card is 'done' if its sample tile is present; the global button is 'done' only if EVERY
+// trail's is. Runs off the critical path; never blocks first paint. A download in flight is left
+// alone (don't stomp a 'busy' card).
 async function refreshCacheStatus(){
   if(dlState==='busy' || !('indexedDB'in window)) return;
   try{
     let all=true;
     for(const trail of TRAILS){
-      const {x,y}=ll2t(trail.center[0],trail.center[1],14);
-      const u=trailSource(trail).url.replace('{z}',14).replace('{y}',y).replace('{x}',x);
-      if(!(await TileStore.has(u))){ all=false; break; }
+      const saved=await trailSaved(trail);
+      if(cardDl.get(trail.slug)!=='busy') setCardDl(trail.slug, saved?'done':'idle');
+      if(!saved) all=false;
     }
     dlState = all ? 'done' : 'idle';
   }catch(_){}

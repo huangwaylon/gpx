@@ -1,4 +1,4 @@
-const APP_V = 'wa-trails-app-v17';   // bumped: wake-lock re-acquire, gap-refresh self-heal, durable map-save, out-and-back re-snap, minZoom=cached range
+const APP_V = 'wa-trails-app-v18';   // bumped: per-trail download buttons on list cards + green walked-line halo
 
 importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 

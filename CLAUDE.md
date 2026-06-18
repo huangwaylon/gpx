@@ -48,18 +48,24 @@ is fully translated.
    tile math substitutes tokens by name, so keep the right order in each template. Any new tile
    host must also be added to the tile branch (`isTile`) in `sw.js` so its tiles are served from
    (and saved to) the IndexedDB tile store (`tiles-db.js`).
-8. **One global "download all maps" button — don't reintroduce per-trail downloads.** Offline
-   tiles are fetched by the single `#dl-all` button (next to the language toggle), which caches
-   every trail across both sources. The old per-trail download button, the download modal, and
-   the per-card offline ✓ badge were deliberately removed; the button's own idle / percent /
-   done state is the single source of truth.
+8. **Two coexisting download affordances — the global "save all" and a per-trail button.** Offline
+   tiles are fetched by the global `#dl-all` button in the header (caches every trail across both
+   sources) **and** by a per-trail button on each list card's top-right (`.card-dl`, caches just that
+   trail). Both share one engine: `saveTiles()` (the fetch/commit loop), `trailTileURLs()`, and the
+   `trailSaved()` probe; the global path is `saveTiles` over all trails, the per-trail path is
+   `downloadOne(slug)`. Each button's own idle / percent / done state is its single source of truth —
+   the old download **modal** and a **separate** per-card ✓ badge stay removed (the button's `done`
+   state *is* the badge). Per-trail state lives in the `cardDl` slug→state map (survives `renderList`
+   re-renders); one delegated `#trail-list` listener handles all card buttons. (Per-trail download was
+   removed in an earlier iteration and deliberately re-added on 2026-06-18 — see ADR-15.)
+
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `index.html` | App shell — `#list` and `#detail` `<section class="screen">`; the global "download all maps" button (`#dl-all`) sits in the header next to the language toggle. Static text carries `data-i18n` keys. `<html lang="ja">` |
-| `app.js` | All logic — i18n, routing, map (per-trail tile source via `TILE_SOURCES`), GPX parse, GPS, elevation, global tile download |
+| `index.html` | App shell — `#list` and `#detail` `<section class="screen">`; the global "save all maps" button (`#dl-all`) sits in the header next to the language toggle (per-trail buttons are rendered into the list cards by `app.js`). Static text carries `data-i18n` keys. `<html lang="ja">` |
+| `app.js` | All logic — i18n, routing, map (per-trail tile source via `TILE_SOURCES`), GPX parse, GPS, elevation, global + per-trail tile download |
 | `i18n.js` | `window.I18N` — UI strings, dynamic-string fns, enum tables, waypoint names, and per-trail Japanese content |
 | `app.css` | Light (paper-cool), mobile-first, responsive styles (custom properties, safe-area insets, CJK font stack) |
 | `trails.js` | The data model — `window.TRAILS` array of 10 trail objects (8 US + 2 Japan; English base content). Optional `tiles` field picks the basemap (USGS default; `"gsi"` for Japan) |
@@ -95,16 +101,12 @@ reload) is handled by `onWake()` (`pageshow`/`visibilitychange`). After a few re
 **stale-window re-acquire** re-snaps your position (and a wake `restartWatch()`s a possibly-dead
 iOS `watchPosition`) — built for the pocket-the-phone-then-check-at-the-summit pattern. Offline is
 three tiers: SW precache (shell+i18n+GPX+images, in Cache Storage) →
-tiles served from **IndexedDB** (IndexedDB-first, both hosts; see `tiles-db.js`) → a **single global
-"download all maps" button** (`downloadAll`) in the list header that fills that tile store for every
-trail across both sources. Saved tiles live in IndexedDB rather than Cache Storage so the app shell
-launches fast even with ~5k tiles saved (WebKit is slow to open a Cache holding thousands of
-entries — see ADR-12). Full detail in `docs/ARCHITECTURE.md`.
-tiles served from **IndexedDB** (IndexedDB-first, both hosts; see `tiles-db.js`) → a **single global
-"download all maps" button** (`downloadAll`) in the list header that fills that tile store for every
-trail across both sources. Saved tiles live in IndexedDB rather than Cache Storage so the app shell
-launches fast even with ~5k tiles saved (WebKit is slow to open a Cache holding thousands of
-entries — see ADR-12). Full detail in `docs/ARCHITECTURE.md`.
+tiles served from **IndexedDB** (IndexedDB-first, both hosts; see `tiles-db.js`) → two download
+affordances that share one engine: the global **"save all maps" button** (`downloadAll` → `saveTiles`)
+in the list header that fills the store for every trail across both sources, and a **per-trail button**
+on each list card (`downloadOne` → `saveTiles`) that saves just that trail. Saved tiles live in
+IndexedDB rather than Cache Storage so the app shell launches fast even with ~5k tiles saved (WebKit is
+slow to open a Cache holding thousands of entries — see ADR-12). Full detail in `docs/ARCHITECTURE.md`.
 
 ## Internationalization (i18n)
 
@@ -211,7 +213,10 @@ These were flagged earlier and have since been addressed; noted so they don't ge
 - The `L()` localization helper was renamed `loc()` to stop shadowing Leaflet's global `L`.
 - The per-trail "Download map for offline" button, the `#dl-modal` download modal, and the
   per-card offline ✓ badge were all removed in favor of one global "download all maps" button
-  (`#dl-all`) in the header — it downloads every trail's tiles across both sources at once.
+  (`#dl-all`) in the header. **Update (2026-06-18): a per-trail download button was deliberately
+  re-added** to each list card (`.card-dl`), coexisting with the global button and sharing its engine
+  (`saveTiles`); the download **modal** and a **separate** ✓ badge stay gone — each button's `done`
+  state is its own status. See ADR-15 and Golden Rule #8.
 - **Saved map tiles moved from Cache Storage to IndexedDB** (`tiles-db.js`; `APP_V` bumped to
   `wa-trails-app-v15`). A full "Save maps" caches ~5k tiles; on WebKit a Cache holding that many
   entries is slow to open, and that open sat on the launch critical path → a multi-second black

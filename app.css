@@ -159,6 +159,36 @@ img { display:block; }
   box-shadow:0 1px 4px rgba(14,22,18,0.18);
 }
 .card-badge::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
+
+/* per-trail "save this map" button — frosted chip in the card's top-right, mirroring .card-badge.
+   It's a SIBLING of the card's <a> (inside .card-wrap), so tapping it never navigates. */
+.card-wrap { position:relative; flex-shrink:0; }
+.card-dl {
+  position:absolute; top:11px; right:11px; z-index:3;
+  width:44px; height:44px;                 /* 44px tap target; visible chip is the inner span */
+  display:flex; align-items:center; justify-content:center;
+  padding:0; border:none; background:none; cursor:pointer; -webkit-tap-highlight-color:transparent;
+}
+.card-dl .cdl-ic {
+  display:flex; align-items:center; justify-content:center;
+  width:34px; height:34px; border-radius:50%;
+  background:rgba(255,255,255,0.92);
+  -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+  box-shadow:0 1px 4px rgba(14,22,18,0.18);
+  color:var(--pine-d); transition:transform .1s, background .15s, color .15s;
+}
+.card-dl .ic { width:18px; height:18px; }
+.card-dl:active .cdl-ic { transform:scale(0.9); }
+.card-dl.busy .cdl-ic {                     /* determinate progress ring; --p (0–100) set from JS */
+  color:var(--pine-d);
+  background:
+    radial-gradient(closest-side, #fff 70%, transparent 72%),
+    conic-gradient(var(--pine) calc(var(--p,0) * 3.6deg), var(--pine-ring) 0);
+}
+.card-dl.done .cdl-ic {                      /* matches the global button's "saved" treatment */
+  background:var(--pine-soft); color:var(--pine-d);
+  box-shadow:0 0 0 1px var(--pine-ring), 0 1px 4px rgba(14,22,18,0.18);
+}
 .card-titlebar { position:absolute; bottom:0; left:0; right:0; z-index:2; padding:14px 16px 15px; }
 .card-title { font-family:var(--font-display); font-size:21px; font-weight:600; color:#fff;
   letter-spacing:-0.1px; line-height:1.16; text-shadow:0 1px 10px rgba(0,0,0,0.45); }

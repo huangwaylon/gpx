@@ -29,8 +29,9 @@ one, and lands on a full-screen trail-detail view with:
 - an **SVG elevation profile** that tracks the hiker's position along the route,
 - a draggable **bottom sheet** with trail stats, description, tips, and a details table.
 
-A single **"download all maps"** button in the list header pre-caches the map tiles for
-**every** trail (across both tile sources) in one tap (§12).
+A global **"save all maps"** button in the list header pre-caches the map tiles for **every** trail
+(across both tile sources) in one tap, and a **per-trail button** on each list card saves just that
+trail; both share one engine (§12).
 
 ### The two-screen, single-page model
 
@@ -349,9 +350,10 @@ trail is Easy-rated (`index.html:46-59`); each chip label carries a `data-i18n` 
    (no per-card click handler).
 
 `renderList()` is intentionally idempotent and is called several times: once on boot, after
-each filter/sort change, and after a **language switch** (from `setLang()`). It no longer
-renders any per-card offline badge — offline state is now surfaced by the single global
-download button (§12), not per card.
+each filter/sort change, and after a **language switch** (from `setLang()`). Each card now carries
+a per-trail download button (`.card-dl`) whose state is re-read from the `cardDl` map on every
+render (ADR-15); there is still no separate per-card offline *badge* — the button's own done state
+is the status.
 
 ### Difficulty badge classes
 
@@ -381,18 +383,21 @@ Module-level state holds the current view config: **`listFilter`** (default `'al
 global download button (`#dl-all` → `downloadAll`, `app.js:245`), the back button, the GPS
 FAB, and the sheet drag.
 
-### Offline state on the global download button (`dlState`)
+### Offline state on the download buttons (`dlState` + `cardDl`)
 
-Offline status is no longer shown per card. It lives entirely on the single global
-**`#dl-all`** button in the header, driven by the module-level **`dlState`** string
-(`'idle' | 'busy' | 'done'`, `app.js:84`). **`updateDlBtn()`** (`app.js:954`) reflects it:
+The global **`#dl-all`** button is driven by the module-level **`dlState`** string
+(`'idle' | 'busy' | 'done'`, `app.js:88`). **`updateDlBtn()`** reflects it:
 in `idle` the label is `t('dlAll')` ("⬇ Save maps" / "⬇ 地図を保存"); in `busy` the label is a
 live `"NN%"` percentage with a CSS gradient fill driven by a `--p` custom property
 (`.dl-all-btn.busy`, `app.css:89-92`); in `done` the label is `t('dlAllDone')` ("✓ Maps saved")
-and the button turns green (`.dl-all-btn.done`, `app.css:93`). On boot,
-`refreshCacheStatus()` (§12) probes one sample tile per trail and sets `dlState` to `'done'`
-only if **every** trail's sample is already cached, else `'idle'`. The full download/progress
-machinery is documented in §12.
+and the button turns green (`.dl-all-btn.done`, `app.css:93`).
+
+**Per-trail status (ADR-15) is also shown**, on each list card's `.card-dl` button. State lives in a
+`cardDl` slug→state `Map` (so it survives `renderList` re-renders) and is painted by **`setCardDl()`**:
+idle (download arrow), busy (a determinate conic ring driven by `--p`, `.card-dl.busy`), done (pine-soft
++ check, `.card-dl.done`). On boot, `refreshCacheStatus()` (§12) probes one sample tile per trail via
+`trailSaved()` and sets BOTH each card's state AND `dlState` to `'done'` only if **every** trail's
+sample is cached. The full download/progress machinery is documented in §12.
 
 ---
 

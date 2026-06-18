@@ -859,6 +859,53 @@ paused exemption and rejects stale/short/unknown sessions; bilingual strings ren
 
 ---
 
+### ADR-15: Re-add a per-trail download button — coexisting with the global "save all" (partially reverses ADR-10)
+
+> **Amends ADR-10.** ADR-10 removed per-trail downloads in favor of one global `#dl-all` button. This
+> ADR brings the per-trail button **back** as a coexisting affordance — but *not* the download modal or
+> a separate ✓ badge, which stay removed. The product decision (2026-06-18) was made deliberately, with
+> an expert design panel.
+
+**Context.**
+ADR-10's single global button is the right tool for "save everything before a trip with no signal," but
+it is heavy for the common case: a hiker doing **one** trail this weekend shouldn't fetch ~5,200 tiles
+across all ten trails (both sources) to get a few hundred. The global button's "✓ saved" is also a
+coarse heuristic (one z14 center tile per trail). A per-trail control is the right-sized primitive for
+the actual usage and gives honest, granular per-trail status.
+
+**Decision.**
+Add a per-trail **"save this map" button** to each list card's top-right (`.card-dl`), coexisting with
+the global `#dl-all`. The two are a hierarchy, not competitors: global = "save all", per-card = "save
+this one". Crucially we re-add **only the button** — the old `#dl-modal` and a **standalone** per-card ✓
+badge stay gone; each button's own idle / busy(%) / done state *is* its status (the same single-source-of-truth
+principle ADR-10 endorsed).
+
+**Implementation (no duplication).** One shared engine serves both paths:
+- `saveTiles(urls, onProgress)` — the dedupe + `BATCH=8` fetch loop that commits bytes to IndexedDB on
+  the **page** (so "done" means *saved*, preserving the ADR-12 / durability fix), returning `{ok, fail}`.
+- `trailTileURLs(trail)` — per-trail URL gather (the tile math was already DRY).
+- `trailSaved(trail)` — the z14-center probe, lifted out of `refreshCacheStatus`.
+- `downloadAll()` = `saveTiles` over all trails; `downloadOne(slug)` = `saveTiles` over one. Both reuse
+  the `navigator.onLine` offline guard.
+
+**State without a framework.** A `cardDl` `Map` (slug → `'idle'|'busy'|'done'`) is the source of truth;
+it survives `renderList` re-renders (filter/sort/language), and the rebuilt button DOM re-reads it. A
+single **delegated** `#trail-list` click listener handles all card buttons (the button is a sibling of
+the card's `<a>` inside `.card-wrap`, so it never navigates). `refreshCacheStatus()` now paints every
+card from `trailSaved` and sets the global "done" only if **all** trails are saved; finishing a per-card
+download re-probes so the global ✓ lights up if it was the last missing trail.
+
+**Visual.** A frosted-white circular chip mirroring the difficulty badge (opposite corner); idle = pine
+download arrow, busy = determinate conic progress ring, done = pine-soft fill + check. Icon-only with a
+bilingual `aria-label` (`dlOne` / `dlOneDone`). `APP_V` bumped to `wa-trails-app-v18`.
+
+**Verification.** Idle/busy/done render correctly; a per-card tap downloads that trail and does **not**
+navigate; state survives filter/sort/language re-renders; offline tap shows the `dlOffline` alert and
+stays idle (no false "saved"); global and per-card statuses stay consistent; both languages; no console
+errors. The green walked-line halo (a separate same-commit change) was verified to fully cover the red.
+
+---
+
 
 
 All four bugs below are **fixed in the current source**; each entry notes the verification.
