@@ -25,8 +25,8 @@ The interface is **bilingual: Japanese by default, with a one-tap toggle to Engl
 3. Launch from the home screen for full-screen, offline use
 
 Before heading out: tap **Save maps** (in the list header) while on Wi-Fi to cache every
-trail's tiles. Set *Auto-Lock* to a longer interval (Settings → Display & Brightness)
-so the screen stays on while navigating.
+trail's tiles. The app keeps the screen awake while a hike is active, so the map stays
+visible as you navigate.
 
 ## Tech
 

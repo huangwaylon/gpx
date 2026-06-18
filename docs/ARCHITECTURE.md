@@ -749,7 +749,9 @@ view back; tapping the FAB again re-engages follow (the second branch of `toggle
 ### Screen Wake Lock
 
 - **`reqWake()`** (`app.js`) requests `navigator.wakeLock.request('screen')` (guarded by a
-  feature check, errors swallowed) so the screen stays on while navigating.
+  feature check, errors swallowed) so the screen stays on while navigating. Reliable on the
+  iOS 26+ target. It only helps the phone-in-hand, watch-the-map case; the pocket-and-check
+  pattern is handled by GPS-gap recovery (§10a), independent of the lock.
 - **`relWake()`** (`app.js`) releases it and nulls `wakeLock`.
 - **Re-acquire on visibility.** Wake locks are dropped when a tab is backgrounded, so the
   **`onWake()`** handler (`app.js`, wired to **both `pageshow` and `visibilitychange → visible`**)

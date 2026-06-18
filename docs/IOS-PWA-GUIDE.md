@@ -20,7 +20,7 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | **Cache API** | Fully supported since iOS 11.1. | App **shell** only (`wa-trails-app-v15`). **Map tiles moved to IndexedDB** (`tiles-db.js`) — opening a Cache holding thousands of tile records is slow on WebKit and stalled launch (ADR-12). |
 | **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded, and the watch can come back **silently dead** (no fixes, no error). | GPS only works screen-on, foreground. On wake (`pageshow`/`visibilitychange`) the app **`restartWatch()`s** the watch + kicks a one-shot fix, and re-acquires Wake Lock. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
-| **`navigator.wakeLock` (standalone)** | Broken in standalone on iOS 16.4–18.3; works in standalone only from **18.4+**. | Calls `wakeLock.request('screen')`, re-acquires on visibility change. **GAP: no video-loop fallback.** Advise raising Auto-Lock. |
+| **`navigator.wakeLock` (standalone)** | Reliable in standalone PWAs on the **iOS 26+ target** (the 16.4–18.3 standalone breakage is below our floor). | Calls `wakeLock.request('screen')` in `startGPS()`, re-acquires on visibility change. Only relevant for phone-in-hand navigation; the pocket-and-check pattern is covered by GPS-gap recovery. No fallback needed. |
 | **`beforeinstallprompt`** | **Never fires** on iOS. | Installation is left to the user (Safari **Share → Add to Home Screen**); the app shows **no in-app install banner or prompt** and performs **no standalone detection**. |
 | **7-day storage eviction** | iOS evicts **all** script-writable storage after 7 days of no interaction. `persist()` does **not** help. | `refreshCacheStatus()` re-checks a sample tile for every trail on startup and sets the single download button to "saved" only if all are present. Affects `localStorage` too (e.g. the `lang` preference resets to JA default). **GAP: no auto re-prompt** when tiles are gone. |
 | **Manifest features** | `display:standalone` works; `fullscreen`/`minimal-ui` → standalone; `shortcuts`/`categories`/`screenshots` ignored; `id` needs iOS 17+. | Manifest uses `display:standalone` + `id:"/ume-trails"` and a Japanese `name`. Relies on Apple meta tags for capability; ships **both** `mobile-web-app-capable` and `apple-mobile-web-app-capable`. |
@@ -144,7 +144,7 @@ await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
   Because the watch dies when the screen sleeps, **no GPS is recorded while the screen is off, and
   no breadcrumb path is ever stored** — live tracking is a screen-on tool. What the app *does*
   rescue is the **session** itself: see *Live trail-progress survives a reload* below.
-  **User guidance to document in-product:** *Keep your screen on while navigating; the blue dot stops updating when the phone sleeps.* (The app already tries to prevent sleep via Wake Lock — see next section — but Wake Lock itself is unreliable on older iOS, so the manual guidance still matters.)
+  **User guidance to document in-product:** *Keep your screen on while navigating; the blue dot stops updating when the phone sleeps.* (The app also holds a Wake Lock while navigating — see next section — which is reliable on the iOS 26+ target, but the dot still stops the moment you lock the phone yourself, so the guidance still matters for the pocket-and-check pattern.)
 
 - **Live trail-progress survives a reload — and a cold relaunch auto-resumes.** Even though fixes
   stop with the screen off, the tracking *session* (the progress high-water mark + the elapsed clock)
@@ -194,35 +194,27 @@ await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
 ## Screen Wake Lock
 
 ### iOS behavior
-- The **Screen Wake Lock API** (`navigator.wakeLock.request('screen')`) is **broken in standalone / Home-Screen PWA mode on iOS 16.4 – 18.3**: the API may exist but fails to actually keep the screen awake when launched from the Home Screen. It became reliable **in standalone mode only from iOS 18.4+**. (It generally works earlier in a normal Safari tab, but the app's target is the installed/standalone experience.)
-- Net effect: on a large installed base of in-service iPhones (anything on iOS 16.4–18.3 running the app from the Home Screen), Wake Lock cannot be relied upon to keep the map visible during a hike.
+- The **Screen Wake Lock API** (`navigator.wakeLock.request('screen')`) is **reliable in standalone / Home-Screen PWA mode on the app's iOS 26+ target.** (Historically it was broken in standalone on iOS 16.4–18.3 and only became reliable from 18.4+, but those versions are below our supported floor, so that breakage no longer applies.)
+- A Wake Lock **only** keeps the screen awake while the page is **foreground with the screen already on**; iOS **auto-releases it the instant the page is hidden** (screen locked or app backgrounded). It cannot keep anything running while the phone is asleep or pocketed.
+
+### What it actually buys this app
+- The lock matters for exactly **one** usage mode: **phone-in-hand, watching the blue dot move** — it stops the screen dimming/locking mid-navigation so the user isn't tapping to wake it.
+- It does **little** for the dominant **pocket-it-and-check-at-the-summit** pattern: the screen is off (lock released) most of the time, and when the user pulls the phone out they're interacting, so Auto-Lock wouldn't fire anyway. That pattern is served instead by the **GPS-gap-recovery path** (`refreshGpsAfterGap()` / `restartWatch()` on wake — see the geolocation section), which is independent of the Wake Lock.
 
 ### How this app handles it
-- The app **does** call Wake Lock and re-acquires it when the page becomes visible again (e.g. after the user taps the screen back on), which covers iOS 18.4+ standalone and most tab usage:
+- The app calls Wake Lock from `startGPS()`, releases it in `stopGPS()`, and re-acquires it when the page becomes visible again:
 
   ```js
   async function reqWake(){ if('wakeLock' in navigator){ try{ wakeLock = await navigator.wakeLock.request('screen'); }catch(_){ } } }
   async function relWake(){ if(wakeLock){ try{ await wakeLock.release(); }catch(_){ } wakeLock=null; } }
 
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && gpsWatch !== null && !wakeLock) reqWake();
-  });
+  // in onWake() (visibilitychange→visible / pageshow):
+  if (gpsWatch !== null && !wakeLock) reqWake();
   ```
 
-  `reqWake()` is fired from `startGPS()`, and the `visibilitychange` listener re-acquires the lock because **Wake Locks are auto-released whenever a page is hidden** — re-acquisition on return is required even on platforms where Wake Lock works.
+  Re-acquisition on return is mandatory because **Wake Locks are auto-released whenever a page is hidden** — this is true on every platform, not an iOS quirk.
 
-- **GAP — no fallback for iOS < 18.4 standalone.** On 16.4–18.3 the `request()` call silently no-ops (the `catch(_)` swallows it), so the screen **will** sleep on schedule and GPS will stop. There is currently **no** fallback.
-  **Recommendations:**
-  1. **Silent looping `<video>` fallback** — the established hack for keeping iOS awake without Wake Lock: play a tiny, muted, `playsinline`, looping video while navigating. Start it alongside `reqWake()` when `wakeLock` ends up `null`, and pause it in `stopGPS()`/`relWake()`.
-
-     ```js
-     // sketch only — fallback when Wake Lock is unavailable/failed
-     async function reqWake(){
-       if ('wakeLock' in navigator){ try{ wakeLock = await navigator.wakeLock.request('screen'); }catch(_){} }
-       if (!wakeLock) startKeepAwakeVideo();   // muted, playsinline, loop
-     }
-     ```
-  2. **Advise raising Auto-Lock.** Surface a one-time tip: *Settings → Display & Brightness → Auto-Lock → Never (or a longer interval) while hiking.* This is the only fully reliable mitigation on affected iOS versions.
+- **No fallback is needed.** On the iOS 26+ target the `request()` succeeds, so there is no version where the screen sleeps despite the lock. The old pre-18.4 mitigations — a silent looping `<video>` keep-awake hack and a "raise Auto-Lock to Never" tip — are **not** implemented and are **not** worth adding: the supported iOS floor makes Wake Lock dependable, and the app's core usage pattern doesn't rely on it anyway.
 
 ---
 
@@ -601,7 +593,6 @@ This is the central design decision, and it's driven by both platform limits and
 ### Gap checklist (for the backlog)
 
 - [ ] **In-app browser / no-SW detection** → "Open in Safari" hint.
-- [ ] **Wake Lock fallback** for iOS 16.4–18.3 standalone → silent looping `<video>`; plus Auto-Lock tip.
 - [ ] **Eviction re-prompt** → persist a "wanted offline" intent; warn + offer re-download when the sample-tile probe fails; probe more than one tile per trail (the "Save maps" button is global all-or-nothing — no per-trail badge to nudge from).
 - [ ] **Offline status chip** via `navigator.onLine` + `online`/`offline` events.
 - [ ] **Geolocation error UX** for codes `2`/`3` (position unavailable / timeout).
@@ -610,3 +601,4 @@ This is the central design decision, and it's driven by both platform limits and
 Closed since the previous revision:
 
 - [x] **`mobile-web-app-capable`** meta tag — now shipped alongside the legacy `apple-mobile-web-app-capable` (both present in `index.html`).
+- [x] **Wake Lock fallback (silent `<video>` + Auto-Lock tip)** — **dropped, won't do.** It only addressed iOS 16.4–18.3 standalone, which is below the iOS 26+ target where Wake Lock is reliable; and the app's pocket-and-check usage doesn't depend on the lock anyway.

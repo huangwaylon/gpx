@@ -177,8 +177,12 @@ source (`.html` + `.gpx`, ~8 MB) keeps the whole repo around ~13 MB — well und
   trail), and GPS only works with the screen on.
 - **7-day storage eviction** — iOS clears caches after a week of non-use; downloaded tiles
   can vanish. `refreshCacheStatus()` re-checks per trail on load.
-- **Wake Lock** is unreliable in standalone PWAs before iOS 18.4; there's no video-loop
-  fallback yet (known gap). Advise users to raise Auto-Lock.
+- **Wake Lock** is reliable on the iOS 26+ target (standalone PWAs). The app acquires a screen
+  lock in `startGPS()`, releases it in `stopGPS()`, and re-acquires on wake (iOS auto-releases
+  it whenever the page hides). It only matters for the phone-in-hand, watch-the-map-move case;
+  the common pocket-it-and-check-at-the-summit pattern is served by the GPS-gap-recovery path
+  (`refreshGpsAfterGap`/`restartWatch`), which is independent of the lock. No Auto-Lock advice
+  or video-loop fallback is needed.
 - **Install is manual** (no `beforeinstallprompt`). The app no longer shows an install
   banner — installation is left to the user via Safari → Share → Add to Home Screen.
 
@@ -217,5 +221,4 @@ These were flagged earlier and have since been addressed; noted so they don't ge
 
 Still open: the global download button's "✓ saved" state is a heuristic
 (`refreshCacheStatus()` samples one z14 center tile per trail and requires all of them to be
-present), so a partially-downloaded set can still flip it to ✓; and there's no Wake-Lock video
-fallback for iOS < 18.4.
+present), so a partially-downloaded set can still flip it to ✓.
