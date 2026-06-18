@@ -483,7 +483,9 @@ function initMap() {
   const src = trailSource(curTrail);
   map = L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center, zoom:13, tap:true });
   const zoom = L.control.zoom({ position:'topright' }).addTo(map);
-  L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:8, attribution:src.leaflet, crossOrigin:true }).addTo(map);
+  // minZoom = DL_MIN_Z: the map can't zoom out past the cached overview level, so there's no blank-
+  // tile band offline (offline pre-cache starts at z10; allowing z8–9 showed gray tiles with no data).
+  L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:DL_MIN_Z, attribution:src.leaflet, crossOrigin:true }).addTo(map);
   map.on('dragstart', () => { gpsFollow = false; $('#btn-gps').classList.remove('on'); });
   zoom.getContainer().style.marginTop = 'calc(54px + env(safe-area-inset-top,0px))';
 }
@@ -836,8 +838,10 @@ function refreshGpsAfterGap(){
 // several and keep each handler idempotent. PERSIST on both visibilitychange→hidden AND pagehide
 // (whichever fires before suspension); WAKE on both visibilitychange→visible AND pageshow (bfcache
 // restore). Persisting on every accepted fix (updateProgress) is the durability backstop for a hard
-// kill that fires no event at all.
-function onHide(){ persistSession(); gpsWasHidden = gpsWatch!==null; }
+// kill that fires no event at all. Clearing gpsWakePending on hide is the self-heal for a wake-time
+// getCurrentPosition that iOS abandons mid-flight when the phone is re-pocketed (neither callback
+// fires): without it the flag sticks true and every later refreshGpsAfterGap bails, leaving GPS dead.
+function onHide(){ persistSession(); gpsWasHidden = gpsWatch!==null; gpsWakePending=false; }
 
 function onWake(){
   updateListResume();                  // keep the list's "resume hike" banner current after a resident wake
@@ -850,7 +854,12 @@ function onWake(){
   }
   if(tracking) updateHUD();             // repaint the clock now (the 1s interval was suspended while hidden)
   if(gpsWatch!==null){
-    if(!wakeLock) reqWake();
+    // iOS auto-releases the screen Wake Lock every time the page hides, but leaves our sentinel
+    // reference truthy (only its .released flips). Re-acquire when there's no LIVE lock — testing
+    // .released as well as null is what makes this fire on the 2nd+ screen-on (a bare !wakeLock
+    // guard saw the stale released sentinel and never re-locked, so the screen auto-locked for the
+    // rest of the hike).
+    if(!wakeLock || wakeLock.released) reqWake();
     if(gpsWasHidden) refreshGpsAfterGap();
   }
   gpsWasHidden=false;
@@ -937,13 +946,18 @@ function updateTrackUI(){
 // GPS accuracy (tighter for good fixes, looser under tree cover) and clamped to a sane range.
 function offTrailGate(acc){ return Math.max(25, Math.min(60, 2.5*(acc||20))); }
 
-// First fix: among vertices within the gate, take the one with the SMALLEST distance-along, so
-// the trailhead/return overlap of an out-and-back can't be mistaken for near-complete progress.
-function acquireIdx(lat,lon,gate){
+// Re-snap to the track from scratch (first fix, or after the windowed search went stale). Among
+// vertices within the gate, take the one whose distance-along is CLOSEST to `near` (the progress
+// already reached). On the first fix near=0, so this picks the smallest-d vertex — the trailhead
+// side, never the geographically-overlapping return leg of an out-and-back (which would read as
+// near-complete). Mid-hike near=walkedDist, so a re-acquire on the RETURN leg snaps to the return
+// vertex (d≈walkedDist) instead of jumping ~km backward onto the overlapping outbound leg (which
+// would make the elevation-profile GPS cursor leap backward on every screen-wake during the descent).
+function acquireIdx(lat,lon,gate,near=0){
   let bi=-1, bd=Infinity, biDist=Infinity;
   for(let i=0;i<trackPts.length;i++){
     const dd=hav(lat,lon,trackPts[i].lat,trackPts[i].lon);
-    if(dd<=gate && trackPts[i].d<bd){ bd=trackPts[i].d; bi=i; biDist=dd; }
+    if(dd<=gate){ const key=Math.abs(trackPts[i].d-near); if(key<bd){ bd=key; bi=i; biDist=dd; } }
   }
   return bi<0 ? nearestIdx(lat,lon) : { idx:bi, dist:biDist };
 }
@@ -952,7 +966,8 @@ function updateProgress(lat,lon,accuracy){
   const gate=offTrailGate(accuracy);
   let r;
   if(progIdx<0 || reacqMiss>=REACQUIRE_AFTER){      // first fix, OR the window went stale (repeated
-    r=acquireIdx(lat,lon,gate);                     // misses): re-acquire whole-track, smallest-d
+    r=acquireIdx(lat,lon,gate,walkedDist);          // misses): re-acquire whole-track, nearest the
+                                                    // progress already reached (keeps the right leg)
   } else {
     const avg=totalDist/(n-1)||1;                   // forward window around the last snap
     const from=Math.max(0, progIdx-Math.ceil(SNAP_BACK_M/avg));
@@ -1181,6 +1196,10 @@ function tileURLsFor(box, src){
 
 async function downloadAll(){
   if(dlState==='busy' || !('indexedDB'in window)) return;
+  // No connection → nothing can be fetched. Bail with a clear message instead of animating to a
+  // false "✓ saved" (every fetch would fail/return the SW's 503, yet the old code still flipped to
+  // done). navigator.onLine===false reliably catches the genuinely-offline trail case.
+  if(!navigator.onLine){ alert(t('dlOffline')); return; }
   dlState='busy'; updateDlBtn(); updateDlProgress(0,1);
   // Gather every tile URL across all trails (each via its own source), then dedupe.
   let urls=[];
@@ -1189,23 +1208,28 @@ async function downloadAll(){
     urls.push(...tileURLsFor(box, trailSource(trail)));
   }
   urls=[...new Set(urls)];
-  const total=urls.length || 1; let done=0; const BATCH=8;
-  // When the service worker controls the page it stores each fetched tile in IndexedDB (its tile
-  // fetch handler), so we just request the misses. Before the SW has claimed the page (rare — a
-  // first-ever load) it won't, so store directly then, keeping the download reliable either way.
-  const swStores = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+  const total=urls.length || 1; let done=0, ok=0, fail=0; const BATCH=8;
+  // The PAGE stores every tile it fetches (committing the bytes to IndexedDB before counting the
+  // tile saved). We don't lean on the SW's own tile-write: that write is deferred via e.waitUntil
+  // and can be cut off when iOS suspends the backgrounded SW, so "done" would mean "fetched", not
+  // "saved". Storing here makes "done"/"✓ saved" mean the bytes are actually committed. On the
+  // SW-controlled path the SW also caches the same key — an idempotent duplicate, not a 2nd fetch.
   for(let i=0;i<urls.length;i+=BATCH){
     await Promise.allSettled(urls.slice(i,i+BATCH).map(async u=>{
       try{
-        if(!(await TileStore.has(u))){
+        if(await TileStore.has(u)){ ok++; }                 // already committed
+        else{
           const r=await fetch(u,{mode:'cors'});
-          if(!swStores && r.ok){ const type=r.headers.get('Content-Type')||'image/png'; await TileStore.put(u,{body:await r.arrayBuffer(), type}); }
+          if(r.ok){ const type=r.headers.get('Content-Type')||'image/png'; await TileStore.put(u,{body:await r.arrayBuffer(), type}); ok++; }
+          else fail++;                                      // 404 / the SW's offline 503 → a real miss
         }
-      }catch(_){}
+      }catch(_){ fail++; }
       done++; updateDlProgress(done,total);
     }));
   }
-  dlState='done'; updateDlBtn();
+  // Only claim success if tiles were actually saved; if everything failed (e.g. connection dropped
+  // mid-run) fall back to idle so the button doesn't lie about offline readiness.
+  dlState = ok>0 ? 'done' : 'idle'; updateDlBtn();
 }
 
 // Reflect the current state + language on the global download button (icon + label).

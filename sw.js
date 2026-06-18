@@ -1,4 +1,4 @@
-const APP_V = 'wa-trails-app-v16';   // bumped: robust hike-resume (hash-independent auto-resume, HUD pause, lifecycle hooks)
+const APP_V = 'wa-trails-app-v17';   // bumped: wake-lock re-acquire, gap-refresh self-heal, durable map-save, out-and-back re-snap, minZoom=cached range
 
 importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 

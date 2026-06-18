@@ -27,7 +27,7 @@
         if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE);  // out-of-line key = tile URL
       };
       req.onsuccess = () => resolve(req.result);
-      req.onerror   = () => reject(req.error);
+      req.onerror   = () => { dbPromise = null; reject(req.error); };   // null the memo so the next call retries — don't cache a rejected open for the whole session
     }));
   }
 

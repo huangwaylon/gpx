@@ -209,10 +209,10 @@ await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
   async function relWake(){ if(wakeLock){ try{ await wakeLock.release(); }catch(_){ } wakeLock=null; } }
 
   // in onWake() (visibilitychange→visible / pageshow):
-  if (gpsWatch !== null && !wakeLock) reqWake();
+  if (gpsWatch !== null && (!wakeLock || wakeLock.released)) reqWake();
   ```
 
-  Re-acquisition on return is mandatory because **Wake Locks are auto-released whenever a page is hidden** — this is true on every platform, not an iOS quirk.
+  Re-acquisition on return is mandatory because **Wake Locks are auto-released whenever a page is hidden** — this is true on every platform, not an iOS quirk. The guard tests `wakeLock.released` as well as `!wakeLock`: iOS auto-release leaves the sentinel **referenced but released**, so a bare `!wakeLock` check would see a truthy stale sentinel and never re-lock (the screen would then auto-lock for the rest of the hike).
 
 - **No fallback is needed.** On the iOS 26+ target the `request()` succeeds, so there is no version where the screen sleeps despite the lock. The old pre-18.4 mitigations — a silent looping `<video>` keep-awake hack and a "raise Auto-Lock to Never" tip — are **not** implemented and are **not** worth adding: the supported iOS floor makes Wake Lock dependable, and the app's core usage pattern doesn't rely on it anyway.
 
