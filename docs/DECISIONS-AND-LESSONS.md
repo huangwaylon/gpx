@@ -110,7 +110,7 @@ https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}
 
 **Consequences.**
 
-- Coverage and styling are fixed to what USGS serves (and limited here to `minZoom:8`–`maxZoom:16`).
+- Coverage and styling are fixed to what USGS serves (and limited in-app to `minZoom:10`–`maxZoom:16`; the z10 floor — `DL_MIN_Z` — matches the offline pre-cache so zooming out offline never hits a blank band).
 - The service worker special-cases this host (`url.includes('nationalmap.gov')`) for cache-first
   tile handling (ADR-7) — and now the GSI host alongside it (ADR-9).
 
@@ -511,6 +511,12 @@ detail-screen attribution line.
 ---
 
 ### ADR-10: One global "download all maps" button (replaces per-trail download + modal + badge)
+
+> **Partially reversed by ADR-15 (per-trail download re-added, 2026-06-18).** The per-trail download
+> button is back — as a per-card `.card-dl` button coexisting with `#dl-all`, both sharing the
+> `saveTiles()` engine and the `trailSaved()` probe. Only the download **modal** and the *standalone*
+> per-card ✓ badge stay removed (each button's own idle/busy/done state is its status). The
+> "single button / no per-trail" framing in this ADR is superseded; see ADR-15.
 
 > **Updated by ADR-12 (tiles → IndexedDB).** The "~3,200 tiles" figure below is now **~5,200**
 > (≈2,830 USGS + ≈2,480 GSI, after the GSI z17–18 levels were added — ADR-9), and `downloadAll()`
@@ -999,7 +1005,7 @@ After (current source, `app.js`):
 const src = trailSource(curTrail);                       // per-trail tile source (ADR-9)
 map = L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center, zoom:13, tap:true });
 const zoom = L.control.zoom({ position:'topright' }).addTo(map);
-L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:8, attribution:src.leaflet, crossOrigin:true }).addTo(map);
+L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:DL_MIN_Z, attribution:src.leaflet, crossOrigin:true }).addTo(map);
 map.on('dragstart', () => { gpsFollow = false; $('#btn-gps').classList.remove('on'); });
 // nudge zoom control below header
 zoom.getContainer().style.marginTop = 'calc(54px + env(safe-area-inset-top,0px))';
@@ -1033,13 +1039,13 @@ satisfied from the cache, so source edits are invisible until the cache is inval
   reload re-fetches from disk).
 - To ship updates to users: **bump the cache version** so the new SW installs a fresh shell and the
   `activate` handler deletes the stale caches. The shell cache version is `APP_V` in `sw.js`
-  (currently **`'wa-trails-app-v15'`** — bumped each shell release; it was v2 when this bug was first
+  (currently **`'wa-trails-app-v19'`** — bumped each shell release; it was v2 when this bug was first
   written up). There is now **only one cache** (the shell): tiles moved out of Cache Storage into
   IndexedDB in **ADR-12**, so the old `TILE_V` (`'wa-trails-tiles-v1'`) tile cache is gone and
   `activate` deletes **every** cache except the current `APP_V`:
 
 ```js
-const APP_V = 'wa-trails-app-v15';   // tiles moved out of Cache Storage into IndexedDB (ADR-12)
+const APP_V = 'wa-trails-app-v19';   // shell cache version — bump on every shell change
 
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
@@ -1050,7 +1056,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v15'`, there is no `TILE_V`, the
+**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v19'`, there is no `TILE_V`, the
 shell is served cache-first (scoped to `APP_V` — ADR-12), and `activate` deletes every cache except
 the current `APP_V`.
 
@@ -1197,7 +1203,9 @@ Several previously-flagged items were addressed and **verified against the curre
 - **Per-trail download button + modal + per-card "✓ available offline" badge removed** (ADR-10).
   Replaced by the single global `#dl-all` button in the list header; `index.html` has **no download
   modal** and **no per-card offline badge**, and `app.js` has **no per-slug `cacheStatus` map** (one
-  `dlState` instead).
+  `dlState` instead). *(Update — ADR-15: the per-trail download button was re-added as a per-card
+  `.card-dl` button, so `app.js` again has a per-slug state map, now `cardDl`. The download **modal**
+  and a *separate* ✓ badge remain gone — each button's own state is its status.)*
 - **Dead download/modal i18n strings removed.** The dynamic download descriptions/progress strings
   are **gone** from `i18n.js`; `fn` now holds just `planParty` after the download strings were
   removed (ADR-8). The current

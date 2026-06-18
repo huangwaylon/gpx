@@ -7,7 +7,7 @@
 
 > **Tile storage (ADR-12):** saved map tiles live in **IndexedDB** (`tiles-db.js` →
 > `window.TileStore`), **not** the Cache API. Cache Storage holds **only** the app shell, in a
-> single cache `APP_V` (`wa-trails-app-v15`). The body below reflects this; for the rationale see
+> single cache `APP_V` (`wa-trails-app-v19`). The body below reflects this; for the rationale see
 > ADR-12 in `docs/DECISIONS-AND-LESSONS.md`. **Cold-relaunch auto-resume (ADR-13):** a relaunch
 > mid-hike lands straight on the trail screen and resumes the live session (see §10a).
 
@@ -115,19 +115,20 @@ map marker labels, the difficulty/route/dog enums, seasons, times, and measureme
 global, `window.I18N` (`i18n.js:6`), holding all UI strings and the Japanese overrides:
 
 - **`ui.{en,ja}`** — static UI strings keyed by name (`appName`, `tagline`, filter labels,
-  section headings, the download-button labels `dlAll`/`dlAllDone`, the attribution credits
-  `attribTrail`/`attribUsgs`/`attribGsi`, marker labels, alerts, …) (`i18n.js:9-83`).
+  section headings, the download-button labels `dlAll`/`dlAllDone`, the per-trail download labels
+  `dlOne`/`dlOneDone` and the `dlOffline` warning, the attribution credits
+  `attribTrail`/`attribUsgs`/`attribGsi`, marker labels, alerts, …) (`i18n.js:9-130`).
 - **`fn.{en,ja}`** — functions producing locale-aware **dynamic** strings, called via `tf()`.
   Currently one entry, `planParty(n)` (EN `"<n> hikers"` / JA `"<n>人"`), used by the YAMAP
-  plan card (`i18n.js:118-120`).
+  plan card (`i18n.js:132-135`).
 - **Enum tables** `diff` / `route` / `dogs` — map the English data tokens (`"Moderate"`,
-  `"Out & back"`, `"Leashed"`, …) to their JA equivalents (`i18n.js:95-106`).
+  `"Out & back"`, `"Leashed"`, …) to their JA equivalents (`i18n.js:138-149`).
 - **`months`** — English month abbreviation → JA (`"Apr"`→`"4月"`) for season strings
-  (`i18n.js:107-110`).
-- **`wpt`** — GPX waypoint name → JA (`"Bridge"`→`"橋"`, …) (`i18n.js:112-119`).
+  (`i18n.js:150-153`).
+- **`wpt`** — GPX waypoint name → JA (`"Bridge"`→`"橋"`, …) (`i18n.js:155-162`).
 - **`trails.<slug>.ja`** — per-trail Japanese content (`name`, `area`, `summary`,
   `description`, `permit`, `tips`) that **overrides** the English base from `trails.js`
-  (`i18n.js:122-279`). All 10 trails (including the 2 Japan trails) have a Japanese block.
+  (`i18n.js:165-295`). All 10 trails (including the 2 Japan trails) have a Japanese block.
 
 `trails.js` remains the **English base**; the Japanese for each trail lives in
 `I18N.trails[slug].ja` and is merged over the base at render time (see `loc()` below).
@@ -194,8 +195,8 @@ artifact and its responsibility. (Source-only material is noted at the bottom.)
 | Path | Type | Responsibility |
 |---|---|---|
 | `index.html` | HTML | **App shell.** Declares the `#list` and `#detail` screens, the `.head-actions` wrapper holding the global download button (`#dl-all`) and language toggle (`#lang-toggle`), PWA `<meta>` tags, manifest/icon links, `data-i18n`/`data-i18n-aria` hooks, and the five `<script>` tags. |
-| `app.js` | JS | **All application logic** — routing, i18n helpers (§1a), list/detail rendering, Leaflet map, GPX parsing & geometry, elevation profile, GPS, bottom-sheet drag, the global tile-download, SW registration. Single `'use strict'` script, no exports. |
-| `app.css` | CSS | **All styles** — design tokens (CSS custom properties), both screens, cards, the language-toggle button, the global download button (`.dl-all-btn`, incl. its `--p` progress gradient), bottom sheet, the GPS-dot pulse animation, Leaflet overrides, and the landscape media query. |
+| `app.js` | JS | **All application logic** — routing, i18n helpers (§1a), list/detail rendering, Leaflet map, GPX parsing & geometry, elevation profile, GPS, bottom-sheet drag, the global + per-trail tile download, SW registration. Single `'use strict'` script, no exports. |
+| `app.css` | CSS | **All styles** — design tokens (CSS custom properties), both screens, cards, the language-toggle button, the global download button (`.dl-all-btn`, incl. its `--p` progress gradient) and the per-trail card button (`.card-dl`, incl. its conic progress ring), bottom sheet, the GPS-dot pulse animation, Leaflet overrides, and the landscape media query. |
 | `trails.js` | JS data | **Data model (English base).** Defines `window.TRAILS`, the array of 10 trail objects — 8 Washington + 2 Japan (see §3). |
 | `i18n.js` | JS data | **i18n tables.** Defines `window.I18N` — UI strings, dynamic-string functions, enum/season/waypoint tables, and per-trail Japanese content (see §1a). Loads before `trails.js`/`app.js`. |
 | `sw.js` | JS (SW) | **Service worker.** Precaches the shell + bundled trail assets on `install` (each fetched with `{cache:'reload'}` so a new version never stores a stale shell file); on `fetch` serves map tiles **IndexedDB-first** (via `tiles-db.js`) and the shell **cache-first, scoped to `APP_V`**; on `activate` deletes **every** cache except `APP_V`. |
@@ -457,8 +458,8 @@ fields. All section headings and labels come from `t(...)`:
   source**: `${t('attribTrail')} ／ ${t(trailSource(trail).creditKey)}` (`app.js:321`), so a US
   trail credits USGS (`attribUsgs`) and a Japan trail credits GSI (`attribGsi`, §7).
 
-There is **no longer a download button in the sheet** — downloading is a single global action
-in the header (§12).
+There is **no download button in the sheet** — downloading happens from the header (global
+`#dl-all`) or each list card's per-trail button (§5, §12), not the sheet.
 
 ---
 
@@ -489,8 +490,9 @@ defines a **`TILE_SOURCES`** table (`app.js:66-75`) with two entries, and a tiny
 **`trailSource(trail) = TILE_SOURCES[trail.tiles] || TILE_SOURCES.usgs`** (`app.js:76`) — so a
 trail's optional `tiles` field (§3) picks the basemap (absent ⇒ `usgs`, `"gsi"` ⇒ GSI).
 `initMap()` then builds the layer from the resolved source's fields:
-`L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:8, attribution:src.leaflet,
-crossOrigin:true })` (`app.js`, in `initMap`). `crossOrigin:true` is what lets the SW read a
+`L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:DL_MIN_Z, attribution:src.leaflet,
+crossOrigin:true })` (`app.js`, in `initMap`). `minZoom:DL_MIN_Z` (=10) matches the offline
+pre-cache floor, so zooming out offline never hits an un-cached z8–9 band. `crossOrigin:true` is what lets the SW read a
 fetched tile's bytes back out to store them in IndexedDB (the body must be CORS-readable), and
 the **attribution is now dynamic per source**.
 
@@ -702,8 +704,8 @@ survive. `touch-action:none` on `#elev-svg` keeps the drag from scrolling the sh
 
 ## 10. GPS subsystem
 
-A single floating action button, `#btn-gps` (`.map-fab`, `index.html:73`), drives live
-location; its click is bound to `toggleGPS` (`app.js:242`).
+A single floating action button, `#btn-gps` (`.map-fab recenter`, `index.html:78`), drives live
+location; its click is bound to `toggleGPS` (`app.js`, in `bindGlobal`).
 
 ### Toggle / start / stop
 
@@ -760,8 +762,10 @@ view back; tapping the FAB again re-engages follow (the second branch of `toggle
 - **`relWake()`** (`app.js`) releases it and nulls `wakeLock`.
 - **Re-acquire on visibility.** Wake locks are dropped when a tab is backgrounded, so the
   **`onWake()`** handler (`app.js`, wired to **both `pageshow` and `visibilitychange → visible`**)
-  re-requests the lock when the page becomes visible again **and** GPS is still active **and** no
-  lock is currently held. `onWake()` also **repaints the elapsed clock immediately**
+  re-requests the lock when the page becomes visible again **and** GPS is still active **and** there
+  is no *live* lock — the guard is `if(!wakeLock || wakeLock.released)`, testing `.released` as well
+  as null because iOS leaves the sentinel **truthy** after auto-releasing it on hide, so a bare
+  `!wakeLock` check would never re-lock on the 2nd+ screen-on. `onWake()` also **repaints the elapsed clock immediately**
   (`if (tracking) updateHUD();`): iOS suspends the 1 s `setInterval` while backgrounded, which would
   otherwise leave the displayed time stale by up to ~1 s until the next tick (the elapsed value
   itself is derived from the absolute `trackStartTs`, so it is always correct — only the on-screen
@@ -813,9 +817,12 @@ track vertex and advances the walked distance:
 - **Off-trail gate.** `offTrailGate(acc)` (`app.js`) = `max(25, min(60, 2.5*acc))` m — fixes
   whose nearest vertex is farther than the gate are rejected (progress holds), scaled to GPS
   accuracy (looser under tree cover).
-- **First fix** uses `acquireIdx()` (`app.js`): among in-gate vertices it takes the one with
-  the **smallest distance-along**, so an out-and-back's trailhead/return overlap can't be mistaken
-  for near-complete progress.
+- **First fix / re-acquire** uses `acquireIdx(lat, lon, gate, near)` (`app.js`): among in-gate
+  vertices it takes the one whose distance-along is **closest to `near`** — the progress already
+  reached (`walkedDist`). On the **first** fix `near` is 0, so it picks the smallest-distance-along
+  vertex, and an out-and-back's trailhead/return overlap can't be mistaken for near-complete
+  progress; **mid-hike** `near = walkedDist`, so a re-acquire on the return leg snaps to the return
+  vertex (≈`walkedDist`) instead of jumping backward onto the overlapping outbound leg.
 - **Subsequent fixes** use `nearestIdx()` over a **forward window** only —
   `[progIdx - SNAP_BACK_M, progIdx + SNAP_FWD_M]` (constants `SNAP_BACK_M=80`, `SNAP_FWD_M=250` m,
   `app.js:57-58`) — so the return leg of an out-and-back (which overlaps the outbound) can't match
@@ -825,12 +832,13 @@ track vertex and advances the walked distance:
   rejected, stranding progress near the last snap. After **`REACQUIRE_AFTER` = 3** (`app.js:63`)
   consecutive out-of-window rejections (counted in `reacqMiss`), `updateProgress` falls back to
   `acquireIdx()` for that fix, re-snapping from scratch so progress jumps to where you actually are.
-  Since `walkedDist` is monotonic and `acquireIdx` is smallest-distance-along, this only ever fills
-  *forward* on a curated route — it never un-colors.
+  Since `walkedDist` is monotonic and `acquireIdx(…, walkedDist)` snaps to the vertex nearest the
+  progress already reached, this only ever fills *forward* on a curated route — it never un-colors.
 - **Monotonic advance.** `walkedDist` only ever grows; it recolors via `recolorProgress()`
-  (`app.js`) — a green polyline (`C.green`) over the red base, built from `renderPts` with
-  `.d ≤ walkedDist` plus an exact split vertex from `pointAtDistance(D)` — only when the
-  high-water mark actually advances.
+  (`app.js`) — an `L.layerGroup` of a white halo (`walkedHalo`, weight 7.5) under a green line
+  (`walkedLine`, `C.green`, weight 4), mirroring the red base track so the walked overlay fully
+  hides it, built from `renderPts` with `.d ≤ walkedDist` plus an exact split vertex from
+  `pointAtDistance(D)` — only when the high-water mark actually advances.
 
 ### The HUD — `updateHUD()`
 
@@ -904,7 +912,10 @@ URL-restore ones — the original "sometimes it resumes, sometimes it doesn't" b
 all: iOS keeps the page **resident** and foregrounds it with **no `load` event**, so `bootRoute`
 never runs. The lifecycle layer handles this. iOS fires wake events inconsistently, so we hook
 **both `pageshow` and `visibilitychange → visible`** through one idempotent **`onWake()`** (and
-**both `pagehide` and `visibilitychange → hidden`** through `onHide()`, which persists). `onWake()`:
+**both `pagehide` and `visibilitychange → hidden`** through `onHide()`, which persists the session
+and clears `gpsWakePending` (a self-heal: iOS can abandon a wake-time `getCurrentPosition`
+mid-flight when the phone is re-pocketed, firing neither callback, which would otherwise leave the
+flag stuck and make every later `refreshGpsAfterGap()` bail). `onWake()`:
 **(1)** refreshes the list `#list-resume` banner so a resident wake onto the list still surfaces the
 hike; **(2)** on a trail screen with a resumable session but no prompt yet, re-surfaces the offer;
 **(3)** if tracking, repaints the clock at once (the 1 s interval is suspended while hidden); and
@@ -982,13 +993,15 @@ debounced handler also re-runs `setSheet(sheetState)` so the FABs and sheet heig
 
 ## 12. Offline tile download subsystem
 
-A single global button **pre-caches the map tiles for *all* trails** (across both tile
-sources) so every map works with no connectivity. **Saved tiles go into IndexedDB**
-(`tiles-db.js` → `TileStore`), not the Cache API. The download is driven from one button in the
-list header — **`#dl-all`** (`.dl-all-btn`, `index.html:38`) — bound to `downloadAll` in
-`bindGlobal()` (`app.js`). There is **no per-trail download button and no download modal**
-anymore; iOS has no background fetch, so this is a single foreground, user-initiated action
-with inline progress on the button itself.
+Two coexisting buttons pre-cache map tiles (across both tile sources) so maps work with no
+connectivity. **Saved tiles go into IndexedDB** (`tiles-db.js` → `TileStore`), not the Cache API.
+The **global** `#dl-all` button (`.dl-all-btn`, `index.html:38`, bound to `downloadAll` in
+`bindGlobal()`) saves **all** trails in one tap; a **per-trail** `.card-dl` button on each list
+card (rendered by `renderList`, wired via one delegated `#trail-list` listener to `downloadOne`)
+saves just that trail. Both share the same engine — `saveTiles(urls, onProgress)` plus
+`trailTileURLs(trail)` — and the same `trailSaved(trail)` probe. The old download **modal** is
+gone (each button's own idle/percent/done state is its status); iOS has no background fetch, so
+every download is a foreground, user-initiated action with inline progress on the button itself.
 
 ### Button state — `dlState` / `updateDlBtn()` / `updateDlProgress()`
 
@@ -1192,7 +1205,7 @@ ADR-12 — see the rationale below and in `docs/DECISIONS-AND-LESSONS.md`.)
 
 | Store | Name / constant | Contents | Written by |
 |---|---|---|---|
-| Cache Storage | `wa-trails-app-v15` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
+| Cache Storage | `wa-trails-app-v19` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
 | IndexedDB | `wa-trails-tiles` / store `tiles` (`tiles-db.js`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL → `{body, type}`. | The page's `downloadAll()` (directly when the SW hasn't claimed the page) and the SW's tile `fetch` handler (on every network fill, the normal case). |
 
 > The store **names** retain the historic `wa-trails-` prefix (an internal identifier — not

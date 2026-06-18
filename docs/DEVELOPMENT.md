@@ -124,7 +124,7 @@ Paste this into the DevTools **Console** on the running app, then let it reload:
 ```
 
 This unregisters every service worker for the origin, deletes **all** caches
-(the single app-shell cache, `wa-trails-app-v15`), and deletes the IndexedDB
+(the single app-shell cache, `wa-trails-app-v19`), and deletes the IndexedDB
 database that holds the downloaded map tiles (`wa-trails-tiles`), then reloads.
 Dropping the tile DB is only needed when you want a clean offline reset; for an
 ordinary "just show my edited code" cycle, clearing the SW + shell cache is
@@ -150,7 +150,7 @@ For **returning users**, the correct way to force everyone onto a new version on
 deploy is to bump the cache version constant at the top of `sw.js`:
 
 ```js
-const APP_V = 'wa-trails-app-v15';  // ← bump this (…-v16, …-v17) when you ship shell changes
+const APP_V = 'wa-trails-app-v19';  // ← bump this (…-v20, …-v21) when you ship shell changes
 ```
 
 There is a **single** cache now — the app shell. (ADR-12: saved map **tiles
@@ -175,7 +175,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-So changing `APP_V` from `wa-trails-app-v15` to `wa-trails-app-v16` invalidates
+So changing `APP_V` from `wa-trails-app-v19` to `wa-trails-app-v20` invalidates
 the old app-shell cache for all users and re-precaches the new shell on next
 load. **Bump `APP_V` whenever you change shell files** (`index.html`, `app.css`,
 `app.js`, `trails.js`, `i18n.js`, `tiles-db.js`, or the bundled asset lists).
@@ -441,11 +441,11 @@ offline.
 
 Editing `trails.js`, `i18n.js`, and the precache list is a shell change. To make
 returning users pick it up on deploy, bump `APP_V` in `sw.js` (currently
-`wa-trails-app-v15`, so bump to the next version — see
+`wa-trails-app-v19`, so bump to the next version — see
 [the SW section](#3-the-service-worker-gotcha-read-this)):
 
 ```js
-const APP_V = 'wa-trails-app-v16';
+const APP_V = 'wa-trails-app-v20';
 ```
 
 (This re-precaches the new shell + asset list; it does **not** disturb users'
@@ -503,12 +503,15 @@ reload — it should come up in Japanese.
 - [ ] **↕ Distance** and **↕ Elevation** sorts reorder the cards; tapping an
       active sort chip again clears the sort.
 - [ ] Cards show distance, gain, route, and **time** (star ratings were removed; the time
-      occupies the slot where the star used to be). (There is **no** per-card
-      offline ✓ badge anymore — offline maps are handled by one global button,
-      below.)
+      occupies the slot where the star used to be). (There is **no** separate per-card
+      offline ✓ badge — each card's own download button doubles as its status, see below.)
 - [ ] The header's global **⬇ Save maps** button (`#dl-all`, next to the
       language toggle) downloads tiles for **all 10 trails across both sources**:
       it goes idle → a live `NN%` → **✓ Maps saved**.
+- [ ] Each card's **per-trail download button** (`.card-dl`, top-right of the
+      hero image, aligned with the difficulty badge) goes idle (⬇) → a conic
+      progress ring → ✓; tapping it downloads **only that trail** and does **not**
+      navigate into the trail. After a global "Save maps", every card reads ✓.
 
 **Detail screen**
 
@@ -558,7 +561,7 @@ reload — it should come up in Japanese.
 
 If the app fails to load with the server stopped, the service worker isn't
 caching the shell correctly — check `SHELL` / `TRAIL_ASSETS` in `sw.js` and the
-DevTools **Application → Cache Storage** entry (the single `wa-trails-app-v15`
+DevTools **Application → Cache Storage** entry (the single `wa-trails-app-v19`
 cache). If the shell loads but **tiles** don't render offline, check
 **Application → IndexedDB → `wa-trails-tiles` → `tiles`** for saved entries (and
 re-run **Save maps** if it's empty).

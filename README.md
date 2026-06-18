@@ -15,7 +15,8 @@ The interface is **bilingual: Japanese by default, with a one-tap toggle to Engl
 - **Live GPS** — your location plotted on the map and the elevation profile
 - **Elevation profiles** drawn from the GPX track
 - **Offline first** — app shell, trail data, GPX, and hero images are cached on install;
-  tap *Save maps* once to cache every trail's map tiles for no-signal use
+  tap *Save maps* to cache every trail's map tiles at once, or save a single trail from its
+  card, for no-signal use
 - **Responsive** — works in portrait and landscape on iPhone
 
 ## Install on iPhone
@@ -25,8 +26,8 @@ The interface is **bilingual: Japanese by default, with a one-tap toggle to Engl
 3. Launch from the home screen for full-screen, offline use
 
 Before heading out: tap **Save maps** (in the list header) while on Wi-Fi to cache every
-trail's tiles. The app keeps the screen awake while a hike is active, so the map stays
-visible as you navigate.
+trail's tiles — or tap the download button on a single trail's card to save just that one.
+The app keeps the screen awake while a hike is active, so the map stays visible as you navigate.
 
 ## Tech
 
@@ -34,7 +35,7 @@ Static site — no build step, no server. Plain HTML/CSS/JS + [Leaflet](https://
 Deployable to GitHub Pages as-is.
 
 - `index.html` — app shell (list + detail screens)
-- `app.js` — i18n, routing, map (per-trail tile source), GPX parsing, GPS, elevation, global tile download
+- `app.js` — i18n, routing, map (per-trail tile source), GPX parsing, GPS, elevation, global + per-trail tile download
 - `i18n.js` — UI strings, unit formatting, and per-trail Japanese translations
 - `app.css` — light "paper", mobile-first, responsive styles
 - `trails.js` — trail metadata (English base content)
