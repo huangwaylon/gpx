@@ -115,6 +115,7 @@ let locatingTimer = null;           // safety auto-hide for the "locating…" in
 // Reopening the trail offers to restore it. Only the HUD ✕ (endTracking) forgets it.
 const SESSION_KEY = 'trackSession';
 const SESSION_MAX_AGE_MS = 18 * 3600 * 1000;   // discard a saved session older than this (stale)
+const RESUME_MIN_MS = 20000;                   // ignore trivially-short sessions (accidental starts) when offering/auto-resuming
 
 const $  = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
@@ -184,7 +185,7 @@ window.addEventListener('load', () => {
   applyStaticI18n();              // also calls updateDlBtn() → button shows its idle label at once
   renderList();
   bindGlobal();
-  routeFromHash();                // paint the first screen immediately — nothing above waits on storage
+  bootRoute();                    // resume an active hike's trail screen on a cold relaunch, else normal routing
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
   // Detect saved-maps state OFF the critical path. It opens IndexedDB and probes tiles; awaiting it
   // before the first paint is what used to stall launch once many tiles were saved.
@@ -203,6 +204,21 @@ function routeFromHash() {
     if (trail) { openDetail(trail); return; }
   }
   showList();
+}
+
+// Boot-only routing: if a hike is mid-session, land straight back on its trail screen (the elapsed
+// clock keeps counting) instead of the list — that's what a hiker reopening the app wants. A real
+// deep link (hash already set) or no fresh session falls through to normal routing. Uses
+// replaceState so the route is set without firing a second hashchange, and so the Back button
+// (hash → '') still returns to the list. The list "resume hike" banner remains the fallback.
+function bootRoute() {
+  const s = readSession();
+  if (!location.hash && s && TRAILS.some(x => x.slug === s.slug)
+      && (Date.now() - (s.savedAt || 0) <= SESSION_MAX_AGE_MS) && savedElapsedMs(s) >= RESUME_MIN_MS) {
+    resumeOnOpen = true;
+    history.replaceState(null, '', '#/trail/' + s.slug);
+  }
+  routeFromHash();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -305,7 +321,7 @@ async function openDetail(trail) {
   if(resumeOnOpen){           // arrived via the list "resume hike" banner → resume straight away
     resumeOnOpen=false;
     const s=readSession();
-    if(s && s.slug===trail.slug && (Date.now()-(s.savedAt||0)<=SESSION_MAX_AGE_MS) && savedElapsedMs(s)>=60000) resumeSession(s);
+    if(s && s.slug===trail.slug && (Date.now()-(s.savedAt||0)<=SESSION_MAX_AGE_MS) && savedElapsedMs(s)>=RESUME_MIN_MS) resumeSession(s);
     else maybeOfferResume(trail);
   } else {
     maybeOfferResume(trail);  // a saved session for this trail (survived a reload) can be resumed
@@ -778,6 +794,7 @@ async function reqWake(){ if('wakeLock'in navigator){try{wakeLock=await navigato
 async function relWake(){ if(wakeLock){try{await wakeLock.release();}catch(_){}wakeLock=null;} }
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){ persistSession(); gpsWasHidden = gpsWatch!==null; return; }  // snapshot before iOS suspends us
+  if(tracking) updateHUD();          // back on screen → repaint the clock now (the 1s interval was suspended while hidden)
   if(gpsWatch!==null){
     if(!wakeLock) reqWake();
     if(gpsWasHidden){
@@ -937,7 +954,7 @@ function maybeOfferResume(trail){
   const s=readSession();
   if(!s || s.slug!==trail.slug) return;                              // none, or it's another trail's
   if(Date.now()-(s.savedAt||0) > SESSION_MAX_AGE_MS){ clearSession(); return; }   // too old
-  if(savedElapsedMs(s) < 60000) return;                             // trivially short — skip the offer
+  if(savedElapsedMs(s) < RESUME_MIN_MS) return;                     // trivially short — skip the offer
   pendingResume=s;
   renderResumePrompt();
   $('#track-resume').hidden=false;
@@ -972,7 +989,7 @@ function resumeSession(s){
 function updateListResume(){
   const el=$('#list-resume'); if(!el) return;
   const s=readSession();
-  const ok = s && (Date.now()-(s.savedAt||0) <= SESSION_MAX_AGE_MS) && savedElapsedMs(s) >= 60000;
+  const ok = s && (Date.now()-(s.savedAt||0) <= SESSION_MAX_AGE_MS) && savedElapsedMs(s) >= RESUME_MIN_MS;
   const trail = ok ? TRAILS.find(x=>x.slug===s.slug) : null;
   if(!trail){ el.hidden=true; delete el.dataset.slug; return; }
   el.querySelector('.lr-ic').innerHTML = ICON_PLAY;
