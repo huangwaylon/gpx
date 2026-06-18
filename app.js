@@ -101,14 +101,16 @@ let scrubbing = false, scrubMk = null, scrubRAF = 0, scrubX = 0, scrubRect = nul
 
 // Live trail-progress state.
 let tracking = false, paused = false;
-let trackStartTs = 0, trackElapsedMs = 0, hudTimer = null;
+let trackStartTs = 0, trackElapsedMs = 0, hudTimer = null, hudTicks = 0;
 let walkedDist = 0, progIdx = -1;   // monotonic distance-along reached (m); last snapped vertex
 let walkedLayer = null;             // green polyline drawn over the red base track
 let reacqMiss = 0;                  // consecutive off-window fixes (triggers a full re-acquire)
 let pendingResume = null;           // a saved session offered for resume on the current trail
 let resumeOnOpen = false;           // bootRoute (cold relaunch) or the list "resume hike" banner → auto-resume on open
 let gpsWasHidden = false;           // GPS was live when last backgrounded (→ refresh fix on return)
+let gpsWakePending = false;         // a wake-time getCurrentPosition is in flight (dedupes rapid visibility flips)
 let locatingTimer = null;           // safety auto-hide for the "locating…" indicator
+let booting = true;                 // true until just after first load — bootRoute owns the initial resume; onWake stands down
 
 // A tracking session is mirrored to localStorage so it survives a page reload / iOS tab eviction
 // (progress + an absolute start timestamp, so the elapsed clock keeps counting across the gap).
@@ -171,7 +173,7 @@ function setLang(next) {
     renderPeek(curTrail);
     renderSheetBody(curTrail);
     redrawTrailLabels();
-    updateTrackBtn(); updateHUD();   // re-localize the tracking button + HUD message
+    updateTrackUI(); updateHUD();   // re-localize the tracking controls + HUD message
     if(pendingResume) renderResumePrompt();
     syncGpsCursor();
   }
@@ -190,6 +192,7 @@ window.addEventListener('load', () => {
   // Detect saved-maps state OFF the critical path. It opens IndexedDB and probes tiles; awaiting it
   // before the first paint is what used to stall launch once many tiles were saved.
   refreshCacheStatus().then(updateDlBtn);
+  setTimeout(()=>{ booting=false; }, 0);   // boot's resume is done; let onWake handle resident-process wakes
   if (localStorage.perf === '1') requestAnimationFrame(() => {
     const n = performance.getEntriesByType('navigation')[0];
     if (n) console.info(`[perf] sw-served shell ~${n.responseStart|0}ms · DOMContentLoaded ${n.domContentLoadedEventEnd|0}ms · load ${n.loadEventStart|0}ms · boot+route ${(performance.now()-t0)|0}ms`);
@@ -207,16 +210,19 @@ function routeFromHash() {
 }
 
 // Boot-only routing: if a hike is mid-session, land straight back on its trail screen (the elapsed
-// clock keeps counting) instead of the list — that's what a hiker reopening the app wants. A real
-// deep link (hash already set) or no fresh session falls through to normal routing. Uses
-// replaceState so the route is set without firing a second hashchange, and so the Back button
-// (hash → '') still returns to the list. The list "resume hike" banner remains the fallback.
+// clock keeps counting) instead of the list — that's what a hiker reopening the app wants. We do this
+// REGARDLESS of location.hash: an installed iOS PWA may relaunch at the bare start_url (no hash) OR
+// restore the last URL (hash present) — both happen, unpredictably — so keying auto-resume off "no
+// hash" made it fire only some of the time (the rest landing on a passive prompt that looks like no
+// active hike). Routing to the active session's trail and setting resumeOnOpen makes cold-relaunch
+// resume deterministic either way. A real deep link still wins when there's no fresh session. Uses
+// replaceState so no second hashchange fires and Back (hash → '') still returns to the list.
 function bootRoute() {
   const s = readSession();
-  if (!location.hash && s && TRAILS.some(x => x.slug === s.slug)
-      && (Date.now() - (s.savedAt || 0) <= SESSION_MAX_AGE_MS) && savedElapsedMs(s) >= RESUME_MIN_MS) {
+  if (freshResumable(s)) {
     resumeOnOpen = true;
-    history.replaceState(null, '', '#/trail/' + s.slug);
+    const want = '#/trail/' + s.slug;
+    if (location.hash !== want) history.replaceState(null, '', want);
   }
   routeFromHash();
 }
@@ -279,7 +285,8 @@ function bindGlobal() {
   $('#lang-toggle').addEventListener('click', () => setLang(lang === 'ja' ? 'en' : 'ja'));
   $('#btn-back').addEventListener('click', () => { location.hash = ''; });
   $('#btn-gps').addEventListener('click', toggleGPS);
-  $('#btn-track').addEventListener('click', toggleTrack);
+  $('#btn-track').addEventListener('click', onTrackFab);
+  $('#th-pause').addEventListener('click', togglePause);
   $('#th-close').addEventListener('click', endTracking);
   $('#tr-resume').addEventListener('click', () => { const s=pendingResume; hideResumePrompt(); if(s) resumeSession(s); });
   $('#tr-dismiss').addEventListener('click', () => { clearSession(); hideResumePrompt(); });
@@ -307,6 +314,10 @@ function showList() {
 //  Detail screen
 // ════════════════════════════════════════════════════════════
 async function openDetail(trail) {
+  // Capture + consume resumeOnOpen synchronously: it's a module global read after an await below,
+  // and a second navigation (hashchange / iOS restoring a hash a tick later) could otherwise consume
+  // or clear it out from under us. See the post-await curTrail guard.
+  const resumeThis = resumeOnOpen; resumeOnOpen = false;
   curTrail = trail;
   stopTracking(); hideResumePrompt(); scrubbing = false;   // fresh per-trail tracking/scrub state
   $('#list').hidden = true;
@@ -318,10 +329,10 @@ async function openDetail(trail) {
   setSheet('peek');
   initMap();
   await loadTrail(trail);
-  if(resumeOnOpen){           // arrived via cold-relaunch auto-route (bootRoute) or the list banner → resume straight away
-    resumeOnOpen=false;
+  if (curTrail !== trail) return;   // a newer navigation superseded this one mid-load — don't touch its map/session
+  if(resumeThis){             // arrived via cold-relaunch auto-route (bootRoute), wake-resume, or the list banner → resume straight away
     const s=readSession();
-    if(s && s.slug===trail.slug && (Date.now()-(s.savedAt||0)<=SESSION_MAX_AGE_MS) && savedElapsedMs(s)>=RESUME_MIN_MS) resumeSession(s);
+    if(freshResumable(s) && s.slug===trail.slug) resumeSession(s);
     else maybeOfferResume(trail);
   } else {
     maybeOfferResume(trail);  // a saved session for this trail (survived a reload) can be resumed
@@ -792,23 +803,62 @@ function setLocating(on){
 
 async function reqWake(){ if('wakeLock'in navigator){try{wakeLock=await navigator.wakeLock.request('screen');}catch(_){}}}
 async function relWake(){ if(wakeLock){try{await wakeLock.release();}catch(_){}wakeLock=null;} }
-document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){ persistSession(); gpsWasHidden = gpsWatch!==null; return; }  // snapshot before iOS suspends us
-  if(tracking) updateHUD();          // back on screen → repaint the clock now (the 1s interval was suspended while hidden)
+
+// Re-issue the position watch. After a screen-off gap iOS can leave watchPosition silently DEAD
+// (no fixes, no error), so a one-shot getCurrentPosition alone paints one fix and then nothing more.
+// Clearing + reopening the watch restores continuous fixes; re-issuing inside an already-granted
+// session does NOT re-prompt for permission on iOS.
+function restartWatch(){
+  if(!navigator.geolocation) return;
+  if(gpsWatch!==null) navigator.geolocation.clearWatch(gpsWatch);
+  gpsWatch = navigator.geolocation.watchPosition(onPos,onPosErr,{enableHighAccuracy:true,maximumAge:4000,timeout:30000});
+}
+
+// Back from a screen-off gap: the snap window is stale and the watch may be dead. Revive the watch,
+// arm an immediate re-acquire, and kick one fresh high-accuracy fix so the dot/progress/clock refresh
+// within ~a second of looking — not after several windowed misses. Deduped by gpsWakePending so a
+// rapid lock/unlock (or a pageshow+visibilitychange double-fire) can't stack overlapping requests.
+function refreshGpsAfterGap(){
+  if(gpsWakePending) return;
+  gpsWakePending=true;
+  reacqMiss = REACQUIRE_AFTER;
+  setLocating(true);
+  restartWatch();
+  navigator.geolocation.getCurrentPosition(
+    p =>{ gpsWakePending=false; onPos(p); },
+    () =>{ gpsWakePending=false; setLocating(false); },
+    {enableHighAccuracy:true, maximumAge:0, timeout:30000});
+}
+
+// ── App lifecycle (iOS) ──
+// iOS suspends a resident PWA (lock / app-switch → page survives, no reload) or terminates it
+// (memory eviction → fresh load + bootRoute). It fires lifecycle events inconsistently, so we hook
+// several and keep each handler idempotent. PERSIST on both visibilitychange→hidden AND pagehide
+// (whichever fires before suspension); WAKE on both visibilitychange→visible AND pageshow (bfcache
+// restore). Persisting on every accepted fix (updateProgress) is the durability backstop for a hard
+// kill that fires no event at all.
+function onHide(){ persistSession(); gpsWasHidden = gpsWatch!==null; }
+
+function onWake(){
+  updateListResume();                  // keep the list's "resume hike" banner current after a resident wake
+  // On a trail screen but not tracking, with a resumable session for THIS trail and no prompt up yet,
+  // re-surface the resume offer (covers a resident wake where the offer was never shown). bootRoute
+  // owns the initial-load resume, so skip while still booting to avoid a flash.
+  if(!booting && !tracking && curTrail && !pendingResume){
+    const s=readSession();
+    if(freshResumable(s) && s.slug===curTrail.slug) maybeOfferResume(curTrail);
+  }
+  if(tracking) updateHUD();             // repaint the clock now (the 1s interval was suspended while hidden)
   if(gpsWatch!==null){
     if(!wakeLock) reqWake();
-    if(gpsWasHidden){
-      // Back from a screen-off gap: the watch can be slow to redeliver (or not resume at all), and
-      // the snap window is stale. Kick a fresh fix and arm an immediate re-acquire so the dot +
-      // progress refresh within ~a second of looking, not after several windowed misses.
-      reacqMiss = REACQUIRE_AFTER;
-      setLocating(true);
-      navigator.geolocation.getCurrentPosition(onPos, ()=>setLocating(false),
-        {enableHighAccuracy:true, maximumAge:0, timeout:30000});
-    }
+    if(gpsWasHidden) refreshGpsAfterGap();
   }
-  gpsWasHidden = false;
-});
+  gpsWasHidden=false;
+}
+
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) onHide(); else onWake(); });
+window.addEventListener('pagehide', onHide);
+window.addEventListener('pageshow', onWake);
 
 // ════════════════════════════════════════════════════════════
 //  Live trail progress
@@ -817,14 +867,29 @@ document.addEventListener('visibilitychange',()=>{
 //  so the return leg never un-colors the trail.
 // ════════════════════════════════════════════════════════════
 
-// FAB tap: start, or toggle pause/resume while a session is running.
-function toggleTrack(){
-  if(!tracking){ startTracking(); return; }
+// The track FAB only ever STARTS (or continues a pending resume). Pause/resume and end live in the
+// HUD, so a stray tap on the map — common when "just checking" the screen mid-hike — can never pause
+// or reset an active session. While a session is live (or paused, or a resume is being offered) the
+// FAB is hidden and the HUD/prompt own the controls.
+function onTrackFab(){
+  if(tracking) return;                       // hidden while tracking; ignore any stray tap
+  if(pendingResume){ const s=pendingResume; hideResumePrompt(); resumeSession(s); return; }  // continue, don't start over
+  startTracking();
+}
+// HUD pause/resume button — the ONLY way to pause, so pausing is always deliberate.
+function togglePause(){
+  if(!tracking) return;
   paused=!paused;
   if(paused) trackElapsedMs+=Date.now()-trackStartTs;   // bank elapsed, freeze the clock
   else { trackStartTs=Date.now(); if(gpsWatch===null) startGPS(); }   // resume from now; ensure fixes
-  updateTrackBtn(); updateHUD();
+  updateTrackUI(); updateHUD();
   persistSession();
+}
+// 1 s HUD clock; also re-persists every ~30 s so `savedAt` stays fresh near the 18 h window even
+// during a long GPS-quiet stretch (localStorage writes are synchronous, so this is cheap).
+function startHudTimer(){
+  clearInterval(hudTimer); hudTicks=0;
+  hudTimer=setInterval(()=>{ updateHUD(); if(tracking && !paused && (++hudTicks%30===0)) persistSession(); }, 1000);
 }
 function startTracking(){
   if(!navigator.geolocation){ alert(t('alertNoGeo')); return; }
@@ -835,8 +900,8 @@ function startTracking(){
   if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; }
   $('#track-hud').hidden=false;
   if(gpsWatch===null) startGPS();          // tracking needs live fixes
-  clearInterval(hudTimer); hudTimer=setInterval(updateHUD,1000);
-  updateTrackBtn(); updateHUD();
+  startHudTimer();
+  updateTrackUI(); updateHUD();
   persistSession();
 }
 // Reset the in-memory session (used on navigation / trail-switch). Leaves the saved session in
@@ -847,16 +912,25 @@ function stopTracking(){
   const hud=$('#track-hud'); if(hud) hud.hidden=true;
   if(walkedLayer){ walkedLayer.remove(); walkedLayer=null; }
   walkedDist=0; progIdx=-1; trackElapsedMs=0;
-  updateTrackBtn();
+  updateTrackUI();
 }
 // Explicit end (HUD ✕): forget the saved session, then stop.
 function endTracking(){ clearSession(); stopTracking(); }
-function updateTrackBtn(){
-  const b=$('#btn-track'); if(!b) return;
-  const live = tracking && !paused;
-  b.classList.toggle('tracking', live);
-  b.innerHTML = live ? ICON_PAUSE : ICON_PLAY;
-  b.setAttribute('aria-label', t(live ? 'trackPauseAria' : 'trackStartAria'));
+// Reflect tracking state across both controls: the start-only FAB is hidden whenever a session is
+// live/paused or a resume is being offered; the HUD pause button shows pause (live) vs resume (paused).
+function updateTrackUI(){
+  const fab=$('#btn-track');
+  if(fab){
+    fab.hidden = tracking || !!pendingResume;
+    fab.innerHTML = ICON_PLAY;
+    fab.setAttribute('aria-label', t('trackStartAria'));
+  }
+  const pb=$('#th-pause');
+  if(pb){
+    pb.innerHTML = paused ? ICON_PLAY : ICON_PAUSE;
+    pb.classList.toggle('paused', paused);
+    pb.setAttribute('aria-label', t(paused ? 'trackResumeAria' : 'trackPauseAria'));
+  }
 }
 
 // Off-trail gate: reject fixes whose nearest vertex is implausibly far, scaled to the reported
@@ -924,8 +998,11 @@ function updateHUD(){
   $('.th-fill').style.width = pct+'%';
   $('.th-pct').textContent = pct+'%';
   $('.th-num').textContent = fmtElapsed(elapsedMs());
-  const msg=$('.th-msg'), m = pct>=100 ? t(isOutAndBack ? 'trackTurnaround' : 'trackComplete') : '';
-  msg.textContent=m; msg.hidden=!m;
+  // Paused takes precedence so the frozen clock is explained; else the turnaround/complete cue.
+  const m = paused ? t('trackPaused')
+          : pct>=100 ? t(isOutAndBack ? 'trackTurnaround' : 'trackComplete') : '';
+  const msg=$('.th-msg'); msg.textContent=m; msg.hidden=!m;
+  hud.classList.toggle('paused', paused);
 }
 
 // ── Session persistence + resume ──
@@ -949,15 +1026,26 @@ function clearSession(){ try{ localStorage.removeItem(SESSION_KEY); }catch(_){} 
 // absolute start; paused → frozen at its banked total) — same rule as elapsedMs().
 function savedElapsedMs(s){ return s.trackElapsedMs + (s.paused ? 0 : Date.now()-s.trackStartTs); }
 
+// Is a saved session worth auto-resuming/offering? The single shared predicate for every resume
+// path (boot, wake, open-trail, list banner). Fresh = its trail exists and savedAt is within the
+// staleness window. A RUNNING session must also clear the short-session floor (filters accidental
+// starts); a PAUSED session is exempt — pausing is deliberate, so honor it however short.
+function freshResumable(s){
+  return !!s && TRAILS.some(x => x.slug === s.slug)
+    && (Date.now() - (s.savedAt || 0) <= SESSION_MAX_AGE_MS)
+    && (s.paused || savedElapsedMs(s) >= RESUME_MIN_MS);
+}
+
 // On opening a trail, offer to resume a saved session for it (unless it's gone stale/trivial).
 function maybeOfferResume(trail){
   const s=readSession();
   if(!s || s.slug!==trail.slug) return;                              // none, or it's another trail's
   if(Date.now()-(s.savedAt||0) > SESSION_MAX_AGE_MS){ clearSession(); return; }   // too old
-  if(savedElapsedMs(s) < RESUME_MIN_MS) return;                     // trivially short — skip the offer
+  if(!s.paused && savedElapsedMs(s) < RESUME_MIN_MS) return;         // running & trivially short — skip (paused is always offered)
   pendingResume=s;
   renderResumePrompt();
   $('#track-resume').hidden=false;
+  updateTrackUI();                                                   // hide the start FAB while the prompt owns the choice
 }
 function renderResumePrompt(){
   const s=pendingResume; if(!s) return;
@@ -967,31 +1055,31 @@ function renderResumePrompt(){
   $('#tr-resume').textContent = t('trackResume');
   $('#tr-dismiss').textContent = t('trackDismiss');
 }
-function hideResumePrompt(){ pendingResume=null; const el=$('#track-resume'); if(el) el.hidden=true; }
+function hideResumePrompt(){ pendingResume=null; const el=$('#track-resume'); if(el) el.hidden=true; updateTrackUI(); }
 
 // Restore a saved session: progress + the green overlay + the elapsed clock (which, thanks to the
 // absolute start timestamp, now includes the time the app was gone), then go live again. The next
 // few fixes re-acquire your real position via the windowed-snap miss counter.
 function resumeSession(s){
+  hideResumePrompt();
   tracking=true; paused=!!s.paused;
   trackStartTs=s.trackStartTs; trackElapsedMs=s.trackElapsedMs||0;
   walkedDist=s.walkedDist||0; progIdx=(s.progIdx>=0)?s.progIdx:-1; reacqMiss=0;
   $('#track-hud').hidden=false;
   recolorProgress();
   if(gpsWatch===null && !paused) startGPS();        // resume live fixes
-  clearInterval(hudTimer); hudTimer=setInterval(updateHUD,1000);
-  updateTrackBtn(); updateHUD();
+  startHudTimer();
+  updateTrackUI(); updateHUD();
   persistSession();                                 // re-stamp savedAt now that we're live again
 }
 
 // List-screen "resume hike" banner — the fallback way back into a saved session. On a cold relaunch
 // bootRoute() already auto-routes a fresh active hike straight to its trail; this banner surfaces a
-// saved session on the list for the sub-threshold case and after the user has navigated back here.
+// saved session on the list after the user has navigated back here.
 function updateListResume(){
   const el=$('#list-resume'); if(!el) return;
   const s=readSession();
-  const ok = s && (Date.now()-(s.savedAt||0) <= SESSION_MAX_AGE_MS) && savedElapsedMs(s) >= RESUME_MIN_MS;
-  const trail = ok ? TRAILS.find(x=>x.slug===s.slug) : null;
+  const trail = freshResumable(s) ? TRAILS.find(x=>x.slug===s.slug) : null;
   if(!trail){ el.hidden=true; delete el.dataset.slug; return; }
   el.querySelector('.lr-ic').innerHTML = ICON_PLAY;
   el.querySelector('.lr-label').textContent = t('resumeHike');

@@ -82,15 +82,24 @@ fetches+parses the GPX (`loadTrail` → `drawTrack`/`drawProfile`), and shows a 
 sheet. GPS uses `watchPosition`. Two interactive layers sit on top: **scrubbing** the elevation
 profile (`initProfileScrub`/`drawProfileCursor` → `pointAtDistance`) drags a synced marker along
 the trail with an elevation/distance readout; **live tracking** (`startTracking`/`updateProgress`
-→ `recolorProgress`, toggled by the `#btn-track` FAB) snaps each GPS fix to the trail with a
+→ `recolorProgress`, **started** by the `#btn-track` FAB; **paused/ended from the HUD**, never the
+FAB) snaps each GPS fix to the trail with a
 windowed-forward search, fills the walked portion green over the red base, and shows percent +
 elapsed in the `#track-hud` banner (out-and-back progress locks at the far end so the return leg
 doesn't un-color). The tracking session is **mirrored to `localStorage`** (with an absolute start
 time) so it survives an iOS reload/eviction mid-hike: a cold relaunch lands **straight back on the
-trail and auto-resumes** the live session (the elapsed clock counted through the gap; the list
-"resume hike" banner is the fallback), and after a few rejected fixes a **stale-window re-acquire**
-re-snaps your position — built for the pocket-the-phone-then-check-at-the-summit pattern. Offline is
+trail and auto-resumes** the live session **regardless of how iOS restored the URL** (`bootRoute()`
+decides on the saved session, not on `location.hash` — the old `!location.hash` guard was why
+resume was flaky); the elapsed clock counted through the gap, and a resident-process wake (no
+reload) is handled by `onWake()` (`pageshow`/`visibilitychange`). After a few rejected fixes a
+**stale-window re-acquire** re-snaps your position (and a wake `restartWatch()`s a possibly-dead
+iOS `watchPosition`) — built for the pocket-the-phone-then-check-at-the-summit pattern. Offline is
 three tiers: SW precache (shell+i18n+GPX+images, in Cache Storage) →
+tiles served from **IndexedDB** (IndexedDB-first, both hosts; see `tiles-db.js`) → a **single global
+"download all maps" button** (`downloadAll`) in the list header that fills that tile store for every
+trail across both sources. Saved tiles live in IndexedDB rather than Cache Storage so the app shell
+launches fast even with ~5k tiles saved (WebKit is slow to open a Cache holding thousands of
+entries — see ADR-12). Full detail in `docs/ARCHITECTURE.md`.
 tiles served from **IndexedDB** (IndexedDB-first, both hosts; see `tiles-db.js`) → a **single global
 "download all maps" button** (`downloadAll`) in the list header that fills that tile store for every
 trail across both sources. Saved tiles live in IndexedDB rather than Cache Storage so the app shell

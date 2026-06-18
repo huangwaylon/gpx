@@ -1,4 +1,4 @@
-const APP_V = 'wa-trails-app-v15';   // bumped: tiles moved out of Cache Storage into IndexedDB
+const APP_V = 'wa-trails-app-v16';   // bumped: robust hike-resume (hash-independent auto-resume, HUD pause, lifecycle hooks)
 
 importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 

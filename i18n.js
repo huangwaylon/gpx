@@ -51,9 +51,11 @@ window.I18N = {
       // Live trail-progress tracking + elevation scrubbing
       trackStartAria: "Start tracking your progress",
       trackPauseAria: "Pause tracking",
+      trackResumeAria: "Resume tracking",
       trackEndAria: "End and reset tracking",
       trackTurnaround: "Turnaround reached — head back",
       trackComplete: "Trail complete!",
+      trackPaused: "Paused",
       scrubAria: "Drag to inspect elevation along the trail",
       trackResumeMsg: "Resume tracking?",
       trackResume: "Resume",
@@ -105,9 +107,11 @@ window.I18N = {
       // Live trail-progress tracking + elevation scrubbing
       trackStartAria: "歩行の記録を開始",
       trackPauseAria: "記録を一時停止",
+      trackResumeAria: "記録を再開",
       trackEndAria: "記録を終了してリセット",
       trackTurnaround: "折り返し地点に到達 — ここから下山",
       trackComplete: "踏破！",
+      trackPaused: "一時停止中",
       scrubAria: "ドラッグでコース上の標高を確認",
       trackResumeMsg: "記録を再開しますか？",
       trackResume: "再開",

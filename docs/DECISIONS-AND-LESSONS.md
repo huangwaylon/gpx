@@ -675,6 +675,13 @@ elevation render from the precached GPX.
 
 ### ADR-13: Auto-resume the active hike's trail screen on cold relaunch
 
+> **Updated by ADR-14 (robust resume).** The `bootRoute()` snippet below keyed auto-resume off
+> **`!location.hash`** — which turned out to fire only on *some* iOS relaunches (those that load the
+> bare `start_url`); when iOS restored the last URL *with* the fragment, auto-resume silently fell
+> through to a passive prompt. ADR-14 makes the decision **hash-independent**, moves pause/resume off
+> the FAB, and adds resident-process wake handling. Read this ADR for the *intent*; ADR-14 for the
+> current code.
+
 **Context.**
 iOS routinely kills the installed PWA mid-hike — the screen locks, the user switches apps, the
 process is reaped to reclaim memory. The manifest `start_url` is `"./"`, so a cold relaunch routed
@@ -762,7 +769,97 @@ progress fill resume; no console errors.
 
 ---
 
-## Part 2 — Bugs found during build & testing
+### ADR-14: Make hike-resume robust — hash-independent auto-resume, HUD-owned pause, resilient lifecycle
+
+**Context.**
+Field reports: resuming an in-progress hike after the app was closed/backgrounded was **inconsistent**.
+Sometimes a relaunch landed back on the live hike; sometimes it showed "no ongoing hike"; sometimes
+the hike came back **paused even though the user never paused it**. Reproduced in Chrome, three
+independent root causes surfaced:
+
+1. **iOS hash restoration defeats ADR-13's `!location.hash` guard.** An installed iOS standalone PWA
+   relaunches *inconsistently*: sometimes at the manifest `start_url` (`"./"`, no hash), sometimes
+   **restoring the last URL including the fragment** (`#/trail/<slug>`). OS memory-eviction — the
+   exact pocket-the-phone case — skews toward the URL-restore path. ADR-13 only set `resumeOnOpen`
+   when `!location.hash`, so on a restored-hash relaunch auto-resume **never ran**; `openDetail` fell
+   through to the passive `#track-resume` prompt, which shows no live HUD or green progress until
+   tapped — i.e. it *looks* like "no ongoing hike." Whether you got auto-resume or the dead-looking
+   prompt was pure luck of how iOS relaunched → the reported nondeterminism.
+2. **The single `#btn-track` FAB conflated start / pause / resume.** `toggleTrack()` started when
+   idle and **toggled pause** when live. After an auto-resume the FAB showed PAUSE, so one stray tap
+   — trivially easy when a hiker pulls the phone out to "check" — **paused the hike**, and the paused
+   state persisted across relaunches. (Tapping the FAB while the resume prompt was up was worse: it
+   `startTracking()`d a fresh session and **wiped the saved progress**.)
+3. **Fragile lifecycle capture.** Only `visibilitychange` was hooked, and only for a *fresh load*.
+   The most common "just checking" case keeps the page **resident** and fires **no `load` event**, so
+   `bootRoute` never ran; and after a screen-off gap iOS can leave `watchPosition` **silently dead**
+   (no fixes, no error), so a one-shot fix painted once and then nothing.
+
+**Decision.**
+
+- **Hash-independent auto-resume.** `bootRoute()` now decides on the **saved session**, not the hash:
+  if `freshResumable(readSession())`, set `resumeOnOpen = true` and `replaceState('#/trail/'+slug)` —
+  overriding an empty **or** restored/foreign hash, so the **active hike always wins** and resume is
+  deterministic however iOS relaunched. (`replaceState` still keeps Back → list; `bootRoute` still
+  runs only at boot, so ADR-13's anti-trap reasoning holds.)
+- **One shared predicate, `freshResumable(s)`:** slug ∈ `TRAILS` **and** `savedAt` within
+  `SESSION_MAX_AGE_MS` (18 h) **and** (`paused` **or** `savedElapsedMs ≥ RESUME_MIN_MS`). Used by
+  `bootRoute`, `openDetail`, `maybeOfferResume`, `updateListResume`, and `onWake` so every path agrees.
+  A **paused** session is exempt from the 20 s floor — pausing is deliberate, so it's always resumable.
+- **Pause/resume + end move to the `#track-hud`; the FAB is start-only and hidden while tracking.**
+  `onTrackFab()` only starts (or continues a pending resume) and no-ops while live; `togglePause()`
+  (HUD `#th-pause`) is the *only* pauser. `updateTrackUI()` hides the FAB whenever
+  `tracking || pendingResume`, and the HUD shows a localized **"Paused"** state. A stray map tap can
+  no longer pause or reset a hike.
+- **Resilient lifecycle.** `onHide()` (persist) is hooked to **`visibilitychange → hidden` and
+  `pagehide`**; `onWake()` (idempotent) to **`pageshow` and `visibilitychange → visible`**. `onWake()`
+  refreshes the `#list-resume` banner (so a resident wake onto the list still surfaces the hike),
+  re-surfaces the trail's resume offer, repaints the clock, and — if GPS was live — runs
+  `refreshGpsAfterGap()`, which arms a re-acquire, kicks `getCurrentPosition({maximumAge:0})`, and
+  **`restartWatch()`s** the watch (reviving a dead one; no permission re-prompt within a granted
+  session), deduped by `gpsWakePending`. Persisting also gained a ~30 s heartbeat; `localStorage`
+  (synchronous writes) is kept over IndexedDB precisely because it survives a freeze better.
+- **Race hardening.** `openDetail()` captures + clears `resumeOnOpen` **synchronously** before its
+  `await loadTrail`, and bails after the await if `curTrail !== trail`, so a fast second navigation
+  can't misroute the resume or write stale state onto a torn-down map.
+
+**Rationale.**
+- The dominant breaking case was a *restored hash that already matched the session trail* — auto-resume
+  simply hadn't been allowed to fire. Deciding on the session removes the iOS-relaunch lottery entirely.
+- Separating "start" (FAB) from "pause/end" (HUD) matches the mental model and makes destructive
+  actions deliberate; it kills both the spurious-pause and the wiped-progress footguns at once.
+- iOS fires lifecycle events unpredictably, so hooking *both* members of each pair and keeping handlers
+  idempotent is more robust than depending on any single event; persisting eagerly on every accepted
+  fix is the backstop for a hard kill that fires nothing.
+
+**Alternatives considered and rejected.**
+- **Narrow fix: only auto-resume when the restored hash equals the session trail; otherwise show the
+  prompt.** Safer against hijacking a genuine deep link, but this is an offline *personal* hiking PWA
+  with no link-sharing — the "deep link" is always iOS restoring a URL — and stranding the user on a
+  foreign trail with no hike indication is the worse failure. The active hike wins.
+- **Auto-navigate away from the list on a resident wake.** Rejected as too surprising (it would yank a
+  user who deliberately went to the list); refreshing the `#list-resume` banner surfaces the hike
+  without moving them.
+- **Migrate the session to IndexedDB.** Rejected — IndexedDB's async transactions are *less* durable
+  under an iOS freeze than synchronous `localStorage` for this tiny record.
+
+**Consequences.**
+- `bootRoute` may override a restored hash that pointed at a *different* trail than the active session
+  (the hike wins). Acceptable and intended for this app; documented here so it isn't "rediscovered."
+- The `.map-fab.track.tracking` CSS rule is now dead (the FAB is hidden while tracking) and was removed.
+- New i18n keys `trackPaused` / `trackResumeAria` (en + ja); `APP_V` bumped to `wa-trails-app-v16`.
+
+**Verification.** Chrome, mobile emulation + deterministic GPS shim, service worker both off (fast
+iteration) and on (production path). Confirmed: empty-hash **and** restored-hash **and** foreign-hash
+relaunches all auto-resume the live session with the clock counted through the gap; a paused session
+restores paused (clock frozen, GPS not force-started) and resumes from the HUD; a stray FAB tap while
+tracking/paused does nothing; resident wake surfaces the banner and re-acquires GPS by restarting the
+watch (watch id changes); rapid triple-wake doesn't stack one-shots; `freshResumable` honors the
+paused exemption and rejects stale/short/unknown sessions; bilingual strings render; no console errors.
+
+---
+
+
 
 All four bugs below are **fixed in the current source**; each entry notes the verification.
 

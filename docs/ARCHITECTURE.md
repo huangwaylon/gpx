@@ -179,7 +179,7 @@ defaults to **`'ja'`** (`app.js:110-111`). The helpers:
   re-runs `applyStaticI18n()`, **live-re-renders the list** (`renderList()`), and if a detail
   view is open re-renders it (`#detail-title`, `renderPeek()`, `renderSheetBody()`), calls
   **`redrawTrailLabels()`** to re-bind the Leaflet marker popups **without rebuilding the
-  map**, and re-localizes the tracking FAB/HUD (`updateTrackBtn()`/`updateHUD()`) and re-draws
+  map**, and re-localizes the tracking FAB/HUD (`updateTrackUI()`/`updateHUD()`) and re-draws
   the GPS profile cursor (`syncGpsCursor()`). It is wired to `#lang-toggle` in `bindGlobal()`
   (`app.js:240`).
 
@@ -751,42 +751,52 @@ view back; tapping the FAB again re-engages follow (the second branch of `toggle
 - **`reqWake()`** (`app.js`) requests `navigator.wakeLock.request('screen')` (guarded by a
   feature check, errors swallowed) so the screen stays on while navigating.
 - **`relWake()`** (`app.js`) releases it and nulls `wakeLock`.
-- **Re-acquire on visibility.** Wake locks are dropped when a tab is backgrounded, so a
-  `visibilitychange` listener (`app.js`) re-requests the lock when the page becomes visible
-  again **and** GPS is still active **and** no lock is currently held. The same listener also
-  **repaints the elapsed clock immediately** (`if (tracking) updateHUD();`) the instant the page
-  becomes visible: iOS suspends the 1 s `setInterval` while backgrounded, which would otherwise
-  leave the displayed time stale by up to ~1 s until the next tick (the elapsed value itself is
-  derived from the absolute `trackStartTs`, so it is always correct — only the on-screen repaint
-  needed the nudge). See §10a for the rest of the wake-from-background behavior.
+- **Re-acquire on visibility.** Wake locks are dropped when a tab is backgrounded, so the
+  **`onWake()`** handler (`app.js`, wired to **both `pageshow` and `visibilitychange → visible`**)
+  re-requests the lock when the page becomes visible again **and** GPS is still active **and** no
+  lock is currently held. `onWake()` also **repaints the elapsed clock immediately**
+  (`if (tracking) updateHUD();`): iOS suspends the 1 s `setInterval` while backgrounded, which would
+  otherwise leave the displayed time stale by up to ~1 s until the next tick (the elapsed value
+  itself is derived from the absolute `trackStartTs`, so it is always correct — only the on-screen
+  repaint needed the nudge). See §10a for the rest of the wake-from-background behavior.
 
 ---
 
 ## 10a. Live trail-progress tracking
 
-A second floating action button, `#btn-track` (`.map-fab.track`, `index.html:76`), starts a
+A floating action button, `#btn-track` (`.map-fab.track`, `index.html`), **starts** a
 **live trail-progress** session: each GPS fix is snapped to the trail, the walked portion fills
-green over the red base, and a `#track-hud` banner (`index.html:79`) shows percent + elapsed time.
-Its click is bound to `toggleTrack` in `bindGlobal()`; the HUD's ✕ button (`#th-close`) is bound
-to `endTracking`, which forgets any saved session (below) before stopping.
+green over the red base, and a `#track-hud` banner (`index.html`) shows percent + elapsed time.
+The FAB is **start-only** — its click is bound to `onTrackFab` in `bindGlobal()`. Once a session is
+live the FAB is **hidden** and the HUD owns the controls: a **pause/resume** button (`#th-pause` →
+`togglePause`) and an **end** ✕ (`#th-close` → `endTracking`, which forgets any saved session). This
+split is deliberate — see the design note at the end of this section.
 
 ### Start / pause / stop
 
-- **`toggleTrack()`** (`app.js`): if not tracking, `startTracking()`; otherwise it toggles
-  **pause/resume**, banking elapsed time on pause (`trackElapsedMs += now - trackStartTs`) and
-  resuming the clock from now (reopening GPS if it had been closed). Persists the session either way.
+- **`onTrackFab()`** (`app.js`): the FAB handler. If a session is live it does **nothing** (the FAB
+  is hidden then anyway — a defensive guard against a stray map tap). If a resume is being offered
+  it **continues** that session; otherwise it `startTracking()`. It can **never** pause or reset an
+  active hike — that was the old `toggleTrack` footgun (a single stray tap mid-hike paused or, while
+  a resume was offered, started over and wiped progress).
+- **`togglePause()`** (`app.js`): the HUD pause/resume button — the **only** way to pause, so
+  pausing is always deliberate. Banks elapsed time on pause (`trackElapsedMs += now - trackStartTs`)
+  and resumes the clock from now (reopening GPS if it had been closed). Persists either way.
 - **`startTracking()`** (`app.js`): resets progress (`walkedDist=0`, `progIdx=-1`,
   `reacqMiss=0`), removes any old `walkedLayer`, shows the HUD, starts GPS if it isn't already
-  running (tracking needs live fixes), starts a 1 s `hudTimer` so the elapsed clock ticks even
-  without new fixes, and writes the first `persistSession()` snapshot.
+  running (tracking needs live fixes), starts the HUD timer (`startHudTimer()` — a 1 s clock that
+  also re-persists every ~30 s so `savedAt` stays fresh), and writes the first `persistSession()`.
 - **`stopTracking()`** (`app.js`): resets the **in-memory** session — hides the HUD, removes
   the green overlay, zeroes progress/elapsed — but **leaves GPS as-is** (the location dot can stay
   on) **and leaves the saved session in `localStorage` intact**, so reopening the trail can still
   offer a resume. It's called by `showList()`/`openDetail()` to reset per-trail.
 - **`endTracking()`** (`app.js`) = `clearSession()` + `stopTracking()`: the **explicit** end
   (HUD ✕), which also forgets the saved session.
-- **`updateTrackBtn()`** (`app.js`) toggles the `.tracking` class and swaps the PLAY/PAUSE
-  icon + aria-label.
+- **`updateTrackUI()`** (`app.js`) reflects state across both controls: it **hides the start FAB**
+  whenever a session is live/paused **or** a resume is being offered (`tracking || pendingResume`),
+  and swaps the HUD pause button between pause (live) and resume (paused) glyph + aria-label. The
+  HUD also gets a `.paused` class (dims the bar) and a localized **"Paused"** message (`trackPaused`)
+  so a frozen clock always reads as intentional.
 
 ### Snapping a fix to the trail — `updateProgress()`
 
@@ -832,57 +842,74 @@ therefore mirrored to `localStorage` under **`SESSION_KEY`** (`app.js`):
 
 - **`persistSession()`** (`app.js`) writes `{slug, walkedDist, progIdx, trackStartTs,
   trackElapsedMs, paused, savedAt}` on **every accepted fix** (end of `updateProgress`), on
-  pause/resume, on `startTracking`, and on **`visibilitychange → hidden`** (the last capturing
-  state just before iOS suspends us). `trackStartTs` is an **absolute** `Date.now()`, so a restored
-  running clock keeps counting *through* the gap; `savedAt` records last activity (used for the
-  freshness window).
+  pause/resume, on `startTracking`, on a ~30 s heartbeat in the HUD timer, and on **`visibilitychange
+  → hidden` AND `pagehide`** (both, idempotent — whichever fires before iOS suspends us). Persisting
+  on every accepted fix while *visible* is the real durability backstop: a hard background-kill on
+  iOS may fire **no** lifecycle event, so the last on-disk snapshot must already be current.
+  `localStorage` is chosen deliberately — its writes are **synchronous**, so they survive a freeze
+  better than IndexedDB (whose transactions complete on a later turn the frozen app may never reach).
+  `trackStartTs` is an **absolute** `Date.now()`, so a restored running clock keeps counting *through*
+  the gap; `savedAt` records last activity (used for the freshness window).
+- **`freshResumable(s)`** (`app.js`) is the **single shared predicate** for every resume path
+  (boot, wake, open-trail, list banner): the session's `slug` is a real trail **and** `savedAt` is
+  within `SESSION_MAX_AGE_MS` (18 h) **and** it is either **paused** (a deliberate pause is honored
+  however short) **or** clears the short-session floor (`savedElapsedMs ≥ RESUME_MIN_MS`, 20 s — which
+  filters accidental tap-and-leave starts).
 - **`maybeOfferResume(trail)`** (`app.js`), called at the end of `openDetail()` after the track
-  loads, reads the saved record and — if it's **this** trail's, **fresh** (`savedAt` within
-  `SESSION_MAX_AGE_MS` = 18 h, `app.js`), and **non-trivial** (`savedElapsedMs ≥ RESUME_MIN_MS`,
-  i.e. 20 s) — shows the **`#track-resume`** prompt (a sibling banner of the HUD in `index.html`),
-  rendered by `renderResumePrompt()` (`app.js`) with the saved percent + elapsed and re-localized
-  live by `setLang()`.
+  loads (when **not** auto-resuming), offers the **`#track-resume`** prompt for this trail's saved
+  session and **hides the start FAB** while the prompt owns the choice. Rendered by
+  `renderResumePrompt()` with the saved percent + elapsed, re-localized live by `setLang()`.
 - **`resumeSession(s)`** (`app.js`) restores `walkedDist`/`progIdx`/`paused`, redraws the green
-  overlay, reopens GPS, restarts the HUD timer, and re-stamps the session. Bound to the prompt's
-  **Resume**; **Dismiss** calls `clearSession()`. Because the windowed snap resumes from the
-  restored `progIdx`, the **stale-window re-acquire** (above) snaps you to your real position within
-  a few fixes.
+  overlay, reopens GPS (only if not paused), restarts the HUD timer, and re-stamps the session.
+  Bound to the prompt's **Resume**; **Dismiss** calls `clearSession()` (and the start FAB returns).
+  Because the windowed snap resumes from the restored `progIdx`, the **stale-window re-acquire**
+  (above) snaps you to your real position within a few fixes.
 
-`RESUME_MIN_MS` (20 s, `app.js`) is the single short-session floor shared by every resume path —
-`bootRoute`, `maybeOfferResume`, `openDetail`'s `resumeOnOpen` branch, and `updateListResume` — so
-an accidental tap-and-leave never offers (or auto-triggers) a resume. It replaced an earlier
-hardcoded 60 s threshold.
+`RESUME_MIN_MS` (20 s, `app.js`) is the short-session floor inside `freshResumable`, shared by every
+resume path. A **paused** session bypasses it (pausing is intentional, so it's always resumable).
 
 ### Auto-resume on cold relaunch — `bootRoute()`
 
-When iOS evicts the PWA mid-hike, a relaunch starts at `start_url: "./"` with **no hash**, so plain
-`routeFromHash()` would drop the hiker on the **list**. **`bootRoute()`** (`app.js`) — called once
-from the `load` handler **instead of** `routeFromHash()` — fixes that: if there is **no
-`location.hash`** *and* a fresh resumable session exists (its `slug` is a real trail,
-`Date.now() - savedAt ≤ SESSION_MAX_AGE_MS`, and `savedElapsedMs ≥ RESUME_MIN_MS`), it sets
-`resumeOnOpen = true` and **`history.replaceState(null, '', '#/trail/' + slug)`**, then calls
-`routeFromHash()`. Net effect: a cold relaunch mid-hike lands **straight on the trail screen and
-auto-resumes** (the elapsed clock kept counting through the gap) rather than on the list.
+When iOS evicts the PWA mid-hike, a relaunch loads a fresh document → the `load` handler. An
+installed iOS standalone PWA relaunches **inconsistently**: sometimes at the manifest `start_url`
+(`"./"`, no hash), sometimes **restoring the last URL including the fragment** (`#/trail/<slug>`) —
+and OS memory-eviction (the pocket-the-phone case) skews toward the URL-restore path. **`bootRoute()`**
+(`app.js`) — called once from `load` **instead of** `routeFromHash()` — therefore decides
+**independently of the hash**: if `freshResumable(readSession())`, it sets `resumeOnOpen = true` and
+`history.replaceState(null, '', '#/trail/' + slug)` (overriding an empty **or** restored/foreign
+hash so the active hike always wins), then calls `routeFromHash()`. Net effect: a cold relaunch
+mid-hike lands **straight on the trail screen and auto-resumes** — *deterministically*, no matter
+which way iOS restored the URL. (Keying this off `!location.hash`, as it once did, made auto-resume
+fire only on the bare-`start_url` relaunches and silently fall through to a passive prompt on the
+URL-restore ones — the original "sometimes it resumes, sometimes it doesn't" bug.)
 
 - **`replaceState`** (not assigning `location.hash`) sets the route without firing a second
   `hashchange`, and — because it *replaces* rather than pushes — the **Back button** (hash → `''`)
   still returns to the list, so navigation is never trapped.
-- **`resumeOnOpen`** is consumed by `openDetail()`: after the track loads it reads the saved
-  session and resumes it directly (rather than re-showing the `#track-resume` prompt).
-- `bootRoute` runs **only at boot**. A genuine deep link (hash already set) or no fresh session
-  falls straight through to normal `routeFromHash()` routing.
-- The list **"resume hike" banner** (`#list-resume` / `updateListResume()`) is now the
-  **fallback** — surfaced on the list screen for the cases auto-resume doesn't cover — rather than
-  the primary path back in.
+- **`resumeOnOpen`** is captured + consumed **synchronously at the top of `openDetail()`** (before
+  its `await loadTrail`), and the post-await `if (curTrail !== trail) return` guard drops a resume
+  whose navigation was superseded mid-load — so a fast second navigation can't misroute the resume
+  or write stale state onto a torn-down map.
+- The list **"resume hike" banner** (`#list-resume` / `updateListResume()`) is the **fallback**,
+  surfaced on the list for cases auto-resume doesn't cover.
 
-**Faster checks (screen-on refresh).** The common case for a "check the screen" hiker is a *short*
-lock where the page survives (no reload → no resume needed). For that, the `visibilitychange`
-handler does more than re-acquire the wake lock: it **repaints the clock at once**
-(`if (tracking) updateHUD()`, §10), and when the page returns to visible **and** GPS was live it
-**arms an immediate re-acquire** (`reacqMiss = REACQUIRE_AFTER`) and **kicks a fresh fix** via
-`getCurrentPosition({maximumAge:0})`, so the dot and progress refresh within ~a second of looking
-rather than after several windowed misses — and regardless of whether iOS resumed the frozen watch.
-A `#gps-locating` "Locating…" pill (`setLocating()`) covers the brief GPS cold-start.
+**Resident-process wake — `onWake()`.** The *most common* "just checking" case isn't a relaunch at
+all: iOS keeps the page **resident** and foregrounds it with **no `load` event**, so `bootRoute`
+never runs. The lifecycle layer handles this. iOS fires wake events inconsistently, so we hook
+**both `pageshow` and `visibilitychange → visible`** through one idempotent **`onWake()`** (and
+**both `pagehide` and `visibilitychange → hidden`** through `onHide()`, which persists). `onWake()`:
+**(1)** refreshes the list `#list-resume` banner so a resident wake onto the list still surfaces the
+hike; **(2)** on a trail screen with a resumable session but no prompt yet, re-surfaces the offer;
+**(3)** if tracking, repaints the clock at once (the 1 s interval is suspended while hidden); and
+**(4)** if GPS was live, runs `refreshGpsAfterGap()` — which **arms an immediate re-acquire**
+(`reacqMiss = REACQUIRE_AFTER`), **kicks one fresh fix** (`getCurrentPosition({maximumAge:0})`), and
+**`restartWatch()`s** the position watch. The watch restart matters: iOS can leave `watchPosition`
+**silently dead** after a screen-off gap (no fixes, no error), so a one-shot alone would paint one
+fix and then nothing — re-issuing the watch (no permission re-prompt within a granted session)
+restores continuity. `refreshGpsAfterGap()` is deduped by **`gpsWakePending`** so a rapid lock/unlock
+or a `pageshow`+`visibilitychange` double-fire can't stack overlapping requests. A `#gps-locating`
+"Locating…" pill (`setLocating()`) covers the brief GPS cold-start. (`booting` suppresses the wake
+resume-surfacing during the very first load, where `bootRoute` already owns the resume.)
 
 This does **not** add background tracking (impossible on iOS web — see `IOS-PWA-GUIDE.md`): no GPS
 fixes are captured while the screen is off, and no breadcrumb path is recorded. It makes the
@@ -1081,7 +1108,7 @@ these directly and re-render by rewriting `innerHTML`.
 | `renderPts` | `app.js:94` | Downsampled track points (with cumulative `.d`) for the polyline, reused by the green walked overlay (§10a). |
 | `turnDist` / `isOutAndBack` | `app.js:97` | Far-end (turnaround) distance and out-and-back flag, used by live-tracking progress (§8, §10a). |
 | scrub state | `app.js:100` | `scrubbing`, `scrubMk`, `scrubRAF`, `scrubX`, `scrubRect`, `scrubCardRect` — elevation-scrub gesture state (§9). |
-| tracking state | `app.js:103-118` | `tracking`/`paused`, `trackStartTs`/`trackElapsedMs`/`hudTimer`, `walkedDist`/`progIdx`, `walkedLayer`, `reacqMiss` (consecutive off-window fixes → re-acquire), `pendingResume` (saved session offered for resume), `resumeOnOpen` (a list-banner / cold-relaunch resume that auto-resumes on open), `gpsWasHidden` (GPS was live when last backgrounded → kick a fresh fix on return), `locatingTimer` (safety auto-hide for the "Locating…" pill), plus `SESSION_KEY`/`SESSION_MAX_AGE_MS` (18 h)/`RESUME_MIN_MS` (20 s) — the live trail-progress session, mirrored to `localStorage` so it survives a reload (§10a). |
+| tracking state | `app.js` | `tracking`/`paused`, `trackStartTs`/`trackElapsedMs`/`hudTimer`/`hudTicks` (heartbeat-persist counter), `walkedDist`/`progIdx`, `walkedLayer`, `reacqMiss` (consecutive off-window fixes → re-acquire), `pendingResume` (saved session offered for resume), `resumeOnOpen` (a list-banner / cold-relaunch resume that auto-resumes on open), `gpsWasHidden` (GPS was live when last backgrounded → refresh on return), `gpsWakePending` (a wake-time one-shot fix is in flight → dedupes rapid visibility flips), `booting` (true until just after first load → `onWake` defers the resume to `bootRoute`), `locatingTimer` (safety auto-hide for the "Locating…" pill), plus `SESSION_KEY`/`SESSION_MAX_AGE_MS` (18 h)/`RESUME_MIN_MS` (20 s) — the live trail-progress session, mirrored to `localStorage` so it survives a reload (§10a). |
 | `lang` | `app.js:126` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
 | `listFilter` | `app.js:227` | Active difficulty filter (`'all'` or a `diffKey`). |
 | `listSort` | `app.js:227` | Active sort (`'dist'`, `'gain'`, or `null`). |
@@ -1230,7 +1257,7 @@ touches only Cache Storage, so IndexedDB tiles persist across app updates (subje
 boot
    └─► load ─► applyStaticI18n() (fill [data-i18n], <title>, <html lang>; updateDlBtn())
             ─► renderList() ─► bindGlobal()
-            ─► bootRoute()  (no hash + fresh session? replaceState '#/trail/<slug>'
+            ─► bootRoute()  (fresh session, hash-independent? replaceState '#/trail/<slug>'
             │                + resumeOnOpen=true) ─► routeFromHash()
             ─► register sw.js
             ─► refreshCacheStatus().then(updateDlBtn)   (#dl-all idle|done; OFF the
@@ -1286,9 +1313,14 @@ user taps "⬇ Save maps" (#dl-all, downloads ALL trails)
              ─► updateDlProgress(done,total) (NN% + --p fill)
              ─► dlState='done' ─► updateDlBtn() (green "✓ Maps saved")
 
-user reopens app mid-hike (iOS evicted the PWA, no hash)
-   └─► load ─► bootRoute(): fresh session? ─► replaceState '#/trail/<slug>'
+user reopens app mid-hike (iOS evicted the PWA; bare start_url OR a restored #/trail/<slug>)
+   └─► load ─► bootRoute(): fresh session? ─► replaceState '#/trail/<slug>' (hash-independent)
                             + resumeOnOpen=true ─► routeFromHash() ─► openDetail(t)
          └─► after loadTrail: resumeSession(s)  (restore progress + green overlay;
                               elapsed clock counted through the gap; Back ─► list)
+
+user "just checks" mid-hike (iOS kept the PWA resident — NO load event)
+   └─► pageshow / visibilitychange→visible ─► onWake(): refresh #list-resume banner;
+                re-surface resume offer on the trail; updateHUD(); refreshGpsAfterGap()
+                (arm re-acquire + getCurrentPosition + restartWatch — revive a dead watch)
 ```

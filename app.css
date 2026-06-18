@@ -210,10 +210,10 @@ img { display:block; }
   display:flex; align-items:center; justify-content:center; transition:transform .1s, background .15s, color .15s, border-color .15s;
 }
 .map-fab .ic { width:23px; height:23px; }
+.map-fab[hidden] { display:none; }   /* author display:flex above would otherwise defeat the hidden attribute */
 .map-fab:active { transform:scale(0.92); }
 .map-fab.recenter.on { background:var(--gps); border-color:var(--gps); color:#fff; }
 .map-fab.track .ic { width:21px; height:21px; }
-.map-fab.track.tracking { background:var(--progress); border-color:var(--progress); color:#fff; }
 
 /* Live trail-progress HUD — slim banner below the detail header */
 #track-hud {
@@ -232,13 +232,22 @@ img { display:block; }
 .th-pct { color:var(--pine-d); font-weight:800; font-variant-numeric:tabular-nums; }
 .th-time { display:inline-flex; align-items:center; gap:5px; color:var(--ink); font-weight:700; font-variant-numeric:tabular-nums; }
 .th-time .ic { width:15px; height:15px; color:var(--muted); }
-.th-close { margin-left:auto; flex-shrink:0; width:33px; height:33px; border:none; border-radius:50%;
+.th-pause { margin-left:auto; flex-shrink:0; width:33px; height:33px; border:none; border-radius:50%;
+  background:var(--progress); color:#fff; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; transition:background .15s, color .15s, transform .1s; }
+.th-pause .ic { width:15px; height:15px; }
+.th-pause:active { transform:scale(0.9); }
+.th-pause.paused { background:var(--pine); }   /* resume affordance — pine/green while paused */
+.th-close { flex-shrink:0; width:33px; height:33px; border:none; border-radius:50%;
   background:var(--surface-2); color:var(--muted); cursor:pointer;
   display:flex; align-items:center; justify-content:center; transition:background .15s, color .15s; }
 .th-close .ic { width:16px; height:16px; }
 .th-close:active { background:var(--paper-2); color:var(--ink); }
 .th-msg { margin-top:8px; font-size:12.5px; font-weight:700; color:var(--blaze-d); text-align:center; }
 .th-msg[hidden] { display:none; }
+/* Paused: dim the progress bar and tint the elapsed message so the frozen clock reads as intentional. */
+#track-hud.paused .th-fill { opacity:0.5; }
+#track-hud.paused .th-msg { color:var(--muted); }
 
 /* Resume prompt — same slim banner slot as the HUD, with a message + dismiss/resume actions */
 #track-resume {

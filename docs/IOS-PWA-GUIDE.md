@@ -18,7 +18,7 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** via a single global **"Save maps"** button — never background prefetch. |
 | **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
 | **Cache API** | Fully supported since iOS 11.1. | App **shell** only (`wa-trails-app-v15`). **Map tiles moved to IndexedDB** (`tiles-db.js`) — opening a Cache holding thousands of tile records is slow on WebKit and stalled launch (ADR-12). |
-| **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded. | GPS only works screen-on, foreground. App re-acquires Wake Lock on `visibilitychange`. **Document: keep screen on.** |
+| **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded, and the watch can come back **silently dead** (no fixes, no error). | GPS only works screen-on, foreground. On wake (`pageshow`/`visibilitychange`) the app **`restartWatch()`s** the watch + kicks a one-shot fix, and re-acquires Wake Lock. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
 | **`navigator.wakeLock` (standalone)** | Broken in standalone on iOS 16.4–18.3; works in standalone only from **18.4+**. | Calls `wakeLock.request('screen')`, re-acquires on visibility change. **GAP: no video-loop fallback.** Advise raising Auto-Lock. |
 | **`beforeinstallprompt`** | **Never fires** on iOS. | Installation is left to the user (Safari **Share → Add to Home Screen**); the app shows **no in-app install banner or prompt** and performs **no standalone detection**. |
@@ -148,21 +148,31 @@ await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
 
 - **Live trail-progress survives a reload — and a cold relaunch auto-resumes.** Even though fixes
   stop with the screen off, the tracking *session* (the progress high-water mark + the elapsed clock)
-  is mirrored to `localStorage` on every accepted fix and on `visibilitychange → hidden`, with an
-  **absolute** start timestamp. If iOS reloads or evicts the PWA mid-hike, a **cold relaunch lands
-  straight back on the trail screen and auto-resumes** the live session: at boot, `bootRoute()` (called
-  instead of `routeFromHash()`) sees no hash, finds a **fresh, resumable** saved session — slug ∈
-  `TRAILS`, `Date.now() - savedAt ≤ SESSION_MAX_AGE_MS` (18 h), and `savedElapsedMs ≥ RESUME_MIN_MS`
-  (20 s, to skip accidental starts) — sets `resumeOnOpen=true`, and `history.replaceState(…, '#/trail/'+slug)`
-  before routing. The **timer keeps counting** (it counted through the gap, thanks to the absolute
-  start), and after a few fixes a **stale-window re-acquire** re-snaps your position and fills progress
-  to where you stand — measured against the known GPX, not a recorded track. `replaceState` keeps the
-  **Back button** returning to the list; the list `#list-resume` "resume hike" banner is the **fallback**
-  (e.g. if the session is too old/short to auto-resume). On wake the app also forces a fresh fix
-  (`getCurrentPosition`), arms an immediate re-acquire, and calls `updateHUD()` so the elapsed clock
-  **repaints the instant the phone wakes** (the 1 s `setInterval` is suspended while backgrounded on
-  iOS) — a quick glance refreshes the dot, progress, and clock within ~a second rather than waiting on
-  iOS to resume the frozen watch. See `ARCHITECTURE.md` §10a.
+  is mirrored to `localStorage` on every accepted fix, on a ~30 s heartbeat, and on **`visibilitychange
+  → hidden` *and* `pagehide`**, with an **absolute** start timestamp. (`localStorage` is chosen over
+  IndexedDB precisely here: its writes are **synchronous**, so they survive a freeze that an IndexedDB
+  transaction wouldn't.) If iOS reloads or evicts the PWA mid-hike, a **cold relaunch lands straight
+  back on the trail screen and auto-resumes** the live session: at boot, `bootRoute()` (called instead
+  of `routeFromHash()`) checks for a **fresh, resumable** saved session — slug ∈ `TRAILS`,
+  `Date.now() - savedAt ≤ SESSION_MAX_AGE_MS` (18 h), and **either paused or** `savedElapsedMs ≥
+  RESUME_MIN_MS` (20 s, to skip accidental starts) — and if so sets `resumeOnOpen=true` and
+  `history.replaceState(…, '#/trail/'+slug)` before routing. **Crucially this is decided on the saved
+  session, not on `location.hash`:** an installed iOS PWA relaunches *inconsistently* — sometimes at
+  the bare `start_url` (no hash), sometimes **restoring the last URL including the fragment** — so the
+  earlier `!location.hash` guard meant auto-resume fired only *some* of the time (the rest fell through
+  to a passive prompt that looks like "no active hike"). Deciding hash-independently makes resume
+  **deterministic** either way. The **timer keeps counting** through the gap (absolute start), and a
+  **stale-window re-acquire** re-snaps your position against the known GPX. `replaceState` keeps the
+  **Back button** returning to the list; the `#list-resume` banner is the fallback.
+  **Resident-process wakes (no reload)** — the *common* "just checking" case where iOS keeps the page
+  alive and fires **no `load` event** — are handled by `onWake()` (hooked to **both `pageshow` and
+  `visibilitychange → visible`**, idempotent): it refreshes the list resume banner, re-surfaces the
+  resume offer on a trail, repaints the clock at once (`updateHUD()` — the 1 s `setInterval` is
+  suspended while backgrounded), and — because iOS can leave `watchPosition` **silently dead** after a
+  screen-off gap — **`restartWatch()`s** the watch and kicks one fresh `getCurrentPosition({maximumAge:0})`
+  (deduped by `gpsWakePending`). See `ARCHITECTURE.md` §10a. **Pause/resume and end live in the
+  `#track-hud`, not the FAB** (the FAB only *starts*), so a stray map tap can never pause or reset an
+  active hike — a separate cause of "it paused itself."
 
 - Instead of pre-checking permission (impossible on iOS), the app **reacts to the error**. `watchPosition`'s error callback inspects the standard `GeolocationPositionError` code; **code `1` is `PERMISSION_DENIED`**:
 
