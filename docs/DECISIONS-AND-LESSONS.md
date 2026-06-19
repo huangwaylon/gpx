@@ -1061,6 +1061,60 @@ left the readout untouched; toggling language re-placed the held readout in the 
 
 ---
 
+### ADR-19: `maxBounds` clamps the *visible* viewport, not the whole map container (stop the on-load off-center drift)
+
+**Status.** Accepted (2026-06-19). Refines the per-zoom `maxBounds` introduced in ADR-16.
+
+**Context.**
+Opening a trail's detail map, the track centered correctly for a beat and then **slid down and partly
+behind the bottom sheet** — most visibly on the two compact **Japan** trails. Instrumenting the Leaflet
+map showed the sequence: `fitTrack()` fit the track at, e.g., center lat **35.8659** (deliberately
+*south* of the track's geographic center 35.8733, so the asymmetric `paddingBottomRight` lifts the track
+into the visible band **above** the sheet), and then over the next ~250 ms the center **animated north to
+35.8701** — an unwanted pan of ~0.0042° (~57 px), dragging the just-fit track downward.
+
+The culprit was `applyMaxBounds()`. It set `maxBounds` to the bare cached box (`trackLayer.getBounds()` +
+`padFor(z)`), and Leaflet's `setMaxBounds()` immediately fires `_panInsideMaxBounds`, which pans the
+current view back **inside** those bounds. But `maxBounds` constrains the **whole map container**, and the
+fit deliberately pushes the container's geometric center south of the track — so the viewport's (hidden)
+bottom strip, behind the sheet, pokes **south of** the cached box. `_panInsideMaxBounds` then pans north to
+pull that hidden strip inside, undoing the sheet offset. It's worst on a **small bbox** (the two Japan
+trails): the tall viewport overhangs the tight box furthest, so the corrective pan is largest. (The pan was
+masked in a synchronous read — it runs as a Leaflet **animation** — which is why a naïve `getCenter()` right
+after `setMaxBounds` looked fine; sampling over ~2 s caught it.)
+
+**Decision.**
+Clamp the box under the **visible** map, not the whole container. The header overlays the top and the sheet
+overlays the bottom; widen the clamp on exactly those covered edges so the visible viewport still can't pan
+onto never-cached tiles, while the hidden strips behind the header/sheet may extend past the cache —
+invisible, so harmless.
+
+- `applyMaxBounds()` converts the header inset (`70 px`, mirroring `fitTrack`'s `paddingTopLeft`) and the
+  sheet inset (`sheetPeekHeight()+30`, mirroring `paddingBottomRight`) into **degrees of latitude at the
+  current zoom** via `containerPointToLatLng`, and pads the north/south edges of the cached box by those
+  amounts (east/west unchanged — no horizontal overlay in portrait). The fitted, sheet-offset view is then
+  inside `maxBounds` by construction, so `_panInsideMaxBounds` has nothing to correct.
+- `fitTrack()`'s `fitBounds` gains `animate:false`, so the fit lands on its final center/zoom synchronously
+  and the `applyMaxBounds()` that follows reads a settled view (no chasing a mid-animation target) — and
+  there's no visible slide on load.
+
+**Consequences.**
+The track is fit once and stays put. The offline guarantee from ADR-16 is **preserved and arguably
+tighter-to-intent**: the constraint now means *the visible map can't reach a never-cached tile*, which is
+what the user actually sees — previously the sheet's worth of cached coverage at the bottom was wasted (the
+visible band could never even reach the box's south edge). Don't regress `applyMaxBounds` back to clamping
+the bare box against the full container, and keep the inset constants in sync with `fitTrack`'s padding.
+`APP_V` bumped to `wa-trails-app-v22`.
+
+**Verification.** In-browser, Leaflet's view methods instrumented and the center sampled over 2 s per trail:
+**all 10 trails** now show **zero** post-fit latitude drift (was +0.0042° / ~57 px on Kinpu, with the
+other compact trails comparable), and the track
+center sits a uniform ~6 px from the centre of the visible band between header and sheet. A hard pan north
+and south still clamps (can't roam onto uncached tiles). The resize path (`fitTrack` again) recenters with
+zero drift. Both Japan (GSI) and US (USGS) trails; no console errors.
+
+---
+
 
 
 All bugs below are **fixed in the current source**; each entry notes the verification.

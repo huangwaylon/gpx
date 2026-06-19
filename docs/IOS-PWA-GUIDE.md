@@ -17,7 +17,7 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | **Service workers** | Supported in Safari tabs + Home-Screen PWAs since iOS 11.1. **Not** available in WKWebView / in-app browsers. | Registers `./sw.js` (classic SW) on `load`. Offline breaks inside in-app browsers — **recommend "Open in Safari"** (GAP: not detected/surfaced in-app). |
 | **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** — via the global **"Save maps"** button or a per-trail card button — never background prefetch. |
 | **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
-| **Cache API** | Fully supported since iOS 11.1. | App **shell** only (`wa-trails-app-v21`). **Map tiles moved to IndexedDB** (`tiles-db.js`) — opening a Cache holding thousands of tile records is slow on WebKit and stalled launch (ADR-12). |
+| **Cache API** | Fully supported since iOS 11.1. | App **shell** only (`wa-trails-app-v22`). **Map tiles moved to IndexedDB** (`tiles-db.js`) — opening a Cache holding thousands of tile records is slow on WebKit and stalled launch (ADR-12). |
 | **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded, and the watch can come back **silently dead** (no fixes, no error). | GPS only works screen-on, foreground. On wake (`pageshow`/`visibilitychange`) the app **`restartWatch()`s** the watch + kicks a one-shot fix (with a 32 s self-heal guard so GPS can't wedge if iOS fires neither callback), and re-acquires Wake Lock. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
 | **`navigator.wakeLock` (standalone)** | Reliable in standalone PWAs on the **iOS 26+ target** (the 16.4–18.3 standalone breakage is below our floor). | Calls `wakeLock.request('screen')` in `startGPS()`, re-acquires on visibility change. Only relevant for phone-in-hand navigation; the pocket-and-check pattern is covered by GPS-gap recovery. No fallback needed. |
@@ -81,7 +81,7 @@ is now a **single** Cache-Storage cache, keyed by version string so it can be ro
 
 | Cache name (constant) | Contents | Population strategy |
 |---|---|---|
-| **`wa-trails-app-v21`** (`APP_V` in `sw.js`) | App shell (incl. `tiles-db.js`) + bundled trail data (GPX + hero images) | Precached on SW `install` via `fetch(u,{cache:'reload'})` + `cache.put` — shell must-succeed, trail assets best-effort; topped up on cache miss at runtime. |
+| **`wa-trails-app-v22`** (`APP_V` in `sw.js`) | App shell (incl. `tiles-db.js`) + bundled trail data (GPX + hero images) | Precached on SW `install` via `fetch(u,{cache:'reload'})` + `cache.put` — shell must-succeed, trail assets best-effort; topped up on cache miss at runtime. |
 
 Saved **map tiles** (USGS topo for US trails, GSI 地理院タイル for Japan trails) are **not** in any
 Cache-Storage cache — they live in the IndexedDB store defined by `tiles-db.js` (DB `wa-trails-tiles`,
@@ -92,7 +92,7 @@ handlers.
 `sw.js` declarations:
 
 ```js
-const APP_V = 'wa-trails-app-v21';   // tiles now live in IndexedDB (tiles-db.js), not a cache
+const APP_V = 'wa-trails-app-v22';   // tiles now live in IndexedDB (tiles-db.js), not a cache
 importScripts('./tiles-db.js');       // shared tile store → self.TileStore (also loaded by the page)
 ```
 
@@ -496,7 +496,7 @@ if (isTile(url)) {
 
 This means simply **panning the map while online warms the store** for free — but it does **not** guarantee complete coverage at all zooms, which is what Tier 3 is for.
 
-> **Panning can't escape the cached area offline.** The map sets a per-zoom `maxBounds` (`applyMaxBounds()`, recomputed on `zoomend` / after fitting the track) equal to the track's bounds expanded by the *same* `padFor(z)` the download uses. Because `padFor` tightens as you zoom in, the pannable box at each zoom matches the saved box at that zoom — so with no signal you can't drag the view onto a never-cached (blank) tile. The clamp is soft (default Leaflet viscosity).
+> **Panning can't escape the cached area offline.** The map sets a per-zoom `maxBounds` (`applyMaxBounds()`, recomputed on `zoomend` / after fitting the track) equal to the track's bounds expanded by the *same* `padFor(z)` the download uses. Because `padFor` tightens as you zoom in, the pannable box at each zoom matches the saved box at that zoom — so with no signal you can't drag the view onto a never-cached (blank) tile. The clamp is soft (default Leaflet viscosity). The box is widened on the top/bottom by the header/sheet insets so it bounds the **visible** viewport, not the whole container — otherwise the deliberately sheet-offset fit would be panned back down on load, sliding the track behind the sheet (ADR-19).
 
 > **Two tile sources, one IndexedDB store.** US trails use USGS topo (`{z}/{y}/{x}`); Japan trails use GSI 地理院タイル (`{z}/{x}/{y}.png`, Japanese labels on the `std` layer). Both are 256-px, EPSG:3857 Web-Mercator XYZ tiles and are CORS-enabled (`Access-Control-Allow-Origin: *`), so their bytes are stored as **readable (non-opaque)** records. The two URL templates put the `x`/`y` tokens in a **different order**, but `app.js` substitutes them by name (`.replace('{z}'…).replace('{y}'…).replace('{x}'…)`), so the same tile math drives both. They share the single IndexedDB tile store (`tiles-db.js` — DB `wa-trails-tiles`, store `tiles`), keyed by tile URL. (Practical note: GSI works fine from real iPhones / home networks; it can `403` from some datacenter IPs, which is irrelevant to end users.)
 

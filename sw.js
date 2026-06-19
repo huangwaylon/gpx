@@ -1,4 +1,4 @@
-const APP_V = 'wa-trails-app-v21';   // bumped: persistent tap-to-toggle elevation scrub + no iOS text-selection on the chart
+const APP_V = 'wa-trails-app-v22';   // bumped: detail map no longer drifts off-center after load (maxBounds clamps the visible viewport, not the whole container)
 
 importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 

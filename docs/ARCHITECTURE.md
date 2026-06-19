@@ -7,7 +7,7 @@
 
 > **Tile storage (ADR-12):** saved map tiles live in **IndexedDB** (`tiles-db.js` →
 > `window.TileStore`), **not** the Cache API. Cache Storage holds **only** the app shell, in a
-> single cache `APP_V` (`wa-trails-app-v21`). The body below reflects this; for the rationale see
+> single cache `APP_V` (`wa-trails-app-v22`). The body below reflects this; for the rationale see
 > ADR-12 in `docs/DECISIONS-AND-LESSONS.md`. **Cold-relaunch auto-resume (ADR-13):** a relaunch
 > mid-hike lands straight on the trail screen and resumes the live session (see §10a).
 > **Completion-manifest download gate:** a trail reads as "saved" only when a `localStorage`
@@ -508,6 +508,13 @@ cached box at that zoom, so **offline you can't pan onto a never-cached (blank) 
 at overview zooms, held to the saved frame at max detail. The clamp is **soft** (default Leaflet
 viscosity — a gentle bounce at the edge, not a hard wall).
 
+> The clamp box is widened on the top/bottom edges by the header and sheet insets (converted to
+> degrees at the current zoom), so it bounds the **visible** viewport — the band between the header
+> and the bottom sheet — rather than the whole map container. Otherwise `setMaxBounds` would yank the
+> deliberately sheet-offset fit (see `fitTrack`) back down on load, sliding the track behind the sheet
+> (worst on the compact Japan trails). The visible map still can't reach an uncached tile; the hidden
+> strips behind the header/sheet may, harmlessly. See **ADR-19**.
+
 ### Per-trail tile sources — `TILE_SOURCES` / `trailSource()`
 
 The base map is **per trail**. The single old `TILE_URL` constant is gone; instead `app.js`
@@ -632,7 +639,9 @@ ft-range label both read `.se`, not raw `.ele`, so the displayed curve is denois
 5. **Fit bounds** — via the `fitTrack()` helper (`app.js:519`) that `drawTrack` calls:
    `map.fitBounds(trackLayer.getBounds(), …)` with **sheet-aware padding**:
    top-left `[30,70]` (clears the header) and bottom-right `[30, sheetPeekHeight()+30]` so the
-   route isn't hidden behind the peeking bottom sheet (`app.js:520`).
+   route isn't hidden behind the peeking bottom sheet (`app.js:520`). The fit is **`animate:false`**
+   so it lands synchronously and the `applyMaxBounds()` it calls reads a settled view — no on-load
+   slide, no off-center drift (ADR-19).
 
 Markers are built by two small helpers:
 
@@ -1367,7 +1376,7 @@ ADR-12 — see the rationale below and in `docs/DECISIONS-AND-LESSONS.md`.)
 
 | Store | Name / constant | Contents | Written by |
 |---|---|---|---|
-| Cache Storage | `wa-trails-app-v21` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
+| Cache Storage | `wa-trails-app-v22` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
 | IndexedDB | `wa-trails-tiles` / store `tiles` (`tiles-db.js`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL → `{body, type}`. | The page's `saveTiles()` (commits each fetched tile's bytes directly, §12) and the SW's tile `fetch` handler (on every network fill while browsing). |
 
 > The store **names** retain the historic `wa-trails-` prefix (an internal identifier — not

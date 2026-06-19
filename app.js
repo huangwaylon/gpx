@@ -529,11 +529,28 @@ function initMap() {
 // bbox padded by padFor(z), which tightens as you zoom in; matching maxBounds to that box per zoom
 // means you can never pan onto a never-cached (blank) tile — wide roaming at overview, held to the
 // saved frame at max detail. Soft (default viscosity): a gentle bounce at the edge, not a hard wall.
+//
+// We clamp the box under the *visible* map, not the whole map container. The header overlays the top
+// and the bottom sheet overlays the bottom, and fitTrack() deliberately offsets the track up into the
+// visible band between them — so the map's geometric center sits south of the track, and the viewport's
+// (hidden) bottom strip pokes south of the cached box. If we clamped the bare cached box to the full
+// container, setMaxBounds()'s _panInsideMaxBounds would immediately animate that sheet-offset view back
+// down on load, dragging the just-fit track partly behind the sheet (worst on the compact Japan trails,
+// whose small bbox leaves the tall viewport poking furthest past the box). So we widen the clamp on the
+// covered edges by exactly the header/sheet inset (converted to degrees of latitude at this zoom): the
+// visible viewport still can't pan onto never-cached tiles, while the hidden strips behind the header
+// and sheet may extend past the cache — invisible, so harmless.
 function applyMaxBounds(){
   if(!map || !trackLayer) return;
+  const H=map.getSize().y; if(!H) return;
   const p=padFor(map.getZoom()), b=trackLayer.getBounds();
   const sw=b.getSouthWest(), ne=b.getNorthEast();
-  map.setMaxBounds([[sw.lat-p, sw.lng-p],[ne.lat+p, ne.lng+p]]);
+  // Mirror fitTrack's vertical padding (header at top, sheet peek at bottom).
+  const topPx=70, botPx=Math.min(H*0.9, sheetPeekHeight()+30);
+  const latAt=y=>map.containerPointToLatLng([0,y]).lat;
+  const degTop=Math.max(0, latAt(0)-latAt(topPx));        // lat span the header covers
+  const degBot=Math.max(0, latAt(H-botPx)-latAt(H));      // lat span the sheet covers
+  map.setMaxBounds([[sw.lat-p-degBot, sw.lng-p],[ne.lat+p+degTop, ne.lng+p]]);
 }
 
 async function loadTrail(trail) {
@@ -630,8 +647,10 @@ function drawTrack() {
 }
 
 // Fit the map to the full track, leaving room for the header (top) and the sheet peek (bottom).
+// animate:false → the fit lands on its final center/zoom synchronously (no slide), so the
+// applyMaxBounds() below reads the settled view and the clamp never has to chase a moving target.
 function fitTrack() {
-  if (map && trackLayer) map.fitBounds(trackLayer.getBounds(), { paddingTopLeft:[30,70], paddingBottomRight:[30, sheetPeekHeight()+30] });
+  if (map && trackLayer) map.fitBounds(trackLayer.getBounds(), { paddingTopLeft:[30,70], paddingBottomRight:[30, sheetPeekHeight()+30], animate:false });
   applyMaxBounds();   // re-clamp after a fit (zoomend won't fire if the fit didn't change zoom)
 }
 

@@ -153,7 +153,7 @@ Paste into the DevTools console:
 ```
 
 (Or DevTools → Application → Storage → **Clear site data**.) To ship an update to returning
-users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v21`) — the `activate` handler purges
+users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v22`) — the `activate` handler purges
 old caches. Reset language during testing with `localStorage.removeItem('lang')`.
 
 ## Adding a trail (short version)
@@ -246,3 +246,14 @@ These were flagged earlier and have since been addressed; noted so they don't ge
   in IndexedDB (re-checked on launch to demote an iOS-evicted set). Incidental SW tiles write no
   record, so they can't fake a ✓. The detail map also gets a per-zoom `maxBounds` clamped to the cached
   box, so offline panning can't reach never-cached (blank) tiles. See ADR-16 and Golden Rule #8.
+
+- **The detail map no longer drifts off-center right after load** (`APP_V` bumped to `wa-trails-app-v22`).
+  `fitTrack()` fits the track with asymmetric padding that lifts it into the visible band *above* the
+  bottom sheet — but `applyMaxBounds()` then clamped the **whole map container** to the bare cached box,
+  so `setMaxBounds`'s `_panInsideMaxBounds` animated that sheet-offset view back down, sliding the track
+  partly behind the sheet (most visible on the compact Japan trails). `applyMaxBounds()` now widens the
+  clamp on the top/bottom edges by the header/sheet insets (converted to degrees at the current zoom), so
+  it bounds the **visible** viewport, not the container; the visible map still can't pan onto an uncached
+  tile, while the hidden strips behind the header/sheet may, harmlessly. `fitTrack`'s fit is now
+  `animate:false` so the follow-up clamp reads a settled view. Don't regress `applyMaxBounds` back to
+  clamping the bare box against the full container. See ADR-19.

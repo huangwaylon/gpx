@@ -150,7 +150,7 @@ For **returning users**, the correct way to force everyone onto a new version on
 deploy is to bump the cache version constant at the top of `sw.js`:
 
 ```js
-const APP_V = 'wa-trails-app-v19';  // ← bump this (…-v20, …-v21) when you ship shell changes
+const APP_V = 'wa-trails-app-v22';  // ← bump this (…-v23, …-v24) when you ship shell changes
 ```
 
 There is a **single** cache now — the app shell. (ADR-12: saved map **tiles
