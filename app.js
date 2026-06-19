@@ -100,6 +100,11 @@ let turnDist = 0, turnIdx = 0, isOutAndBack = false;
 
 // Elevation-scrub state (drag a finger along the profile to inspect a point on the trail).
 let scrubbing = false, scrubMk = null, scrubRAF = 0, scrubX = 0, scrubRect = null, scrubCardRect = null;
+// Persistent inspected point: a tap or a drag-release leaves the dot + vertical line + readout on
+// screen until a tap clears it (see initProfileScrub). scrubHeld = a readout is currently shown;
+// scrubHeldD = its distance-along (m), kept so it can be re-placed after a profile redraw (resize /
+// language switch). scrubStartX/scrubMoved/scrubStartHeld are per-gesture (to tell a tap from a drag).
+let scrubHeld = false, scrubHeldD = 0, scrubStartX = 0, scrubMoved = false, scrubStartHeld = false;
 
 // Live trail-progress state.
 let tracking = false, paused = false;
@@ -182,6 +187,7 @@ function setLang(next) {
     updateTrackUI(); updateHUD();   // re-localize the tracking controls + HUD message
     if(pendingResume) renderResumePrompt();
     syncGpsCursor();
+    redrawScrubCursor();     // re-place a held readout (the rebuilt SVG wiped its cursor) in the new units
   }
 }
 
@@ -342,7 +348,7 @@ async function openDetail(trail) {
   const resumeThis = resumeOnOpen; resumeOnOpen = false;
   openingDetail = true;             // onWake stands down until this open's own resume decision is made
   curTrail = trail;
-  stopTracking(); hideResumePrompt(); scrubbing = false;   // fresh per-trail tracking/scrub state
+  stopTracking(); hideResumePrompt(); scrubbing = false; scrubHeld = false;   // fresh per-trail tracking/scrub state
   $('#list').hidden = true;
   $('#detail').hidden = false;
   $('#detail-title').textContent = loc(trail).name;
@@ -742,55 +748,88 @@ function drawProfileCursor(p, scrub){
 }
 
 // Put the blue GPS cursor back on the profile at the current position, if any (used after the
-// profile SVG is rebuilt or a scrub ends). onPos draws its own cursor from the fresh fix.
+// profile SVG is rebuilt or a scrub ends). onPos draws its own cursor from the fresh fix. Skips while
+// a scrub is active OR a readout is held, so it never overwrites the inspected point.
 function syncGpsCursor(){
-  if(curPos && trackPts.length && !scrubbing)
+  if(curPos && trackPts.length && !scrubbing && !scrubHeld)
     drawProfileCursor(trackPts[nearestIdx(curPos.lat,curPos.lon).idx], false);
 }
 
-// ── Elevation scrubbing ──
-// Bound once (from bindGlobal) via delegation, since the profile SVG is rebuilt on every
-// language switch / sheet re-render. touch-action:none on #elev-svg keeps the drag from
-// scrolling the sheet; window-level move/up listeners track the finger past the SVG edge.
-function initProfileScrub(){
-  document.addEventListener('pointerdown', e=>{
-    if(!e.target.closest || !e.target.closest('#elev-svg') || trackPts.length<2) return;
-    scrubbing=true;
-    const svg=$('#elev-svg');
-    scrubRect=svg.getBoundingClientRect();
-    scrubCardRect=svg.closest('#elev-card').getBoundingClientRect();   // cached for the readout pill
-    applyScrub(e.clientX);
-    window.addEventListener('pointermove', onScrubMove);
-    window.addEventListener('pointerup', endScrub);
-    window.addEventListener('pointercancel', endScrub);
-    e.preventDefault();
-  });
-}
-function onScrubMove(e){ scrubX=e.clientX; if(!scrubRAF) scrubRAF=requestAnimationFrame(()=>{ scrubRAF=0; applyScrub(scrubX); }); }
-function applyScrub(clientX){
-  const rect=scrubRect; if(!rect) return;
-  let f=(clientX-rect.left)/rect.width; f=Math.max(0,Math.min(1,f));
-  const p=pointAtDistance(f*totalDist); if(!p) return;
+// ── Elevation scrubbing (with a persistent, tap-to-toggle inspected point) ──
+// Bound once (from bindGlobal) via delegation, since the profile SVG is rebuilt on every language
+// switch / sheet re-render. touch-action:none + user-select:none on #elev-card keep the drag from
+// scrolling the sheet or selecting text; window-level move/up listeners track the finger past the edge.
+//
+// Interaction model:
+//   • Press-drag → live readout that follows the finger; on release the dot + vertical line + readout
+//     PERSIST, so you can let go and study them.
+//   • Tap on an empty profile → reveals the readout at that point and persists it.
+//   • Tap while a readout is held → clears it.
+// The held point is remembered by distance (scrubHeldD), so it survives a profile redraw (resize / lang).
+function placeScrub(p){
   drawProfileCursor(p, true);
   if(!scrubMk){
     scrubMk=L.marker([p.lat,p.lon], { interactive:false, zIndexOffset:900,
       icon:L.divIcon({ className:'', html:'<div class="scrub-dot"></div>', iconSize:[16,16], iconAnchor:[8,8] }) }).addTo(map);
   } else scrubMk.setLatLng([p.lat,p.lon]);
 }
-function endScrub(){
+function initProfileScrub(){
+  document.addEventListener('pointerdown', e=>{
+    if(!e.target.closest || !e.target.closest('#elev-svg') || trackPts.length<2) return;
+    const svg=$('#elev-svg');
+    scrubRect=svg.getBoundingClientRect();
+    scrubCardRect=svg.closest('#elev-card').getBoundingClientRect();   // cached for the readout pill
+    scrubbing=true; scrubMoved=false; scrubStartX=e.clientX; scrubStartHeld=scrubHeld;
+    // Empty state → reveal the readout on press, so a plain tap and a press-and-hold both show it. If
+    // a readout is already held, hold off — this gesture might be a tap to clear it or a drag to move
+    // it; only an actual drag (movement, in onScrubMove) should reposition it.
+    if(!scrubHeld) applyScrub(e.clientX);
+    window.addEventListener('pointermove', onScrubMove);
+    window.addEventListener('pointerup', endScrub);
+    window.addEventListener('pointercancel', endScrub);
+    e.preventDefault();
+  });
+}
+function onScrubMove(e){
+  scrubX=e.clientX;
+  if(Math.abs(scrubX-scrubStartX) > 6) scrubMoved=true;          // past the tap slop → it's a drag
+  if(!scrubRAF) scrubRAF=requestAnimationFrame(()=>{ scrubRAF=0;
+    if(scrubMoved || !scrubStartHeld) applyScrub(scrubX); });    // follow the finger on a drag (or any move in an empty-state gesture)
+}
+function applyScrub(clientX){
+  const rect=scrubRect; if(!rect) return;
+  let f=(clientX-rect.left)/rect.width; f=Math.max(0,Math.min(1,f));
+  scrubHeldD=f*totalDist;
+  const p=pointAtDistance(scrubHeldD); if(!p) return;
+  placeScrub(p);
+}
+function endScrub(e){
   scrubbing=false;
   window.removeEventListener('pointermove', onScrubMove);
   window.removeEventListener('pointerup', endScrub);
   window.removeEventListener('pointercancel', endScrub);
   if(scrubRAF){ cancelAnimationFrame(scrubRAF); scrubRAF=0; }
-  clearScrub();
+  // A clean tap (no drag) on a HELD readout dismisses it; otherwise a readout is on screen (revealed
+  // on press, or moved by a drag) → persist it. A pointercancel (the OS interrupting the gesture) is
+  // never treated as a deliberate tap, so it never clears.
+  const wasTap = !scrubMoved && (!e || e.type!=='pointercancel');
+  if(wasTap && scrubStartHeld) clearScrub();
+  else scrubHeld=true;
 }
-// Remove the scrub marker + readout, and restore the profile cursor to the GPS position (if any).
+// Remove the scrub marker + readout + held point, then restore the profile cursor to the GPS position
+// (if any). The single source of truth for "no readout is shown" (scrubHeld=false).
 function clearScrub(){
   if(scrubMk){ scrubMk.remove(); scrubMk=null; }
   const tip=$('#scrub-tip'); if(tip) tip.hidden=true;
   const g=$('#epos'); if(g) g.innerHTML='';
+  scrubHeld=false;
   syncGpsCursor();
+}
+// Re-place a persisted readout after the profile SVG is rebuilt (resize / language switch) so the held
+// dot + line + reading survive. No-op when nothing is held.
+function redrawScrubCursor(){
+  if(!scrubHeld || trackPts.length<2 || totalDist<=0) return;
+  const p=pointAtDistance(scrubHeldD); if(p) placeScrub(p);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -827,7 +866,7 @@ function onPos(pos){
   } else { gpsMk.setLatLng([lat,lon]); gpsAcc.setLatLng([lat,lon]); gpsAcc.setRadius(accuracy); }
   if(gpsFollow) map.setView([lat,lon], Math.max(map.getZoom(),15), {animate:true});
   if(tracking && !paused) updateProgress(lat,lon,accuracy);
-  if(trackPts.length && !scrubbing){
+  if(trackPts.length && !scrubbing && !scrubHeld){
     // While tracking, reuse the windowed snap index (cheaper than a full-track scan, and it
     // won't jump the cursor to the wrong overlapping leg of an out-and-back); else scan fully.
     const i = (tracking && !paused && progIdx>=0) ? progIdx : nearestIdx(lat,lon).idx;
@@ -1466,5 +1505,5 @@ function hav(la1,lo1,la2,lo2){
 // redraw profile + refit on rotation/resize
 let rzT;
 window.addEventListener('resize',()=>{ clearTimeout(rzT); rzT=setTimeout(()=>{
-  if(curTrail && map){ map.invalidateSize(); setSheet(sheetState); drawProfile(); syncGpsCursor(); fitTrack(); }
+  if(curTrail && map){ map.invalidateSize(); setSheet(sheetState); drawProfile(); syncGpsCursor(); redrawScrubCursor(); fitTrack(); }
 },250); });

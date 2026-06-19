@@ -1,4 +1,4 @@
-const APP_V = 'wa-trails-app-v20';   // bumped: completion-manifest offline-download fix + GPS/lifecycle correctness fixes
+const APP_V = 'wa-trails-app-v21';   // bumped: persistent tap-to-toggle elevation scrub + no iOS text-selection on the chart
 
 importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 

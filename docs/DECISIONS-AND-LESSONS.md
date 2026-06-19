@@ -1021,6 +1021,46 @@ return leg; a persist→`resumeSession` round-trip restored progress and re-deri
 
 ---
 
+### ADR-18: Persistent, tap-to-toggle elevation scrub (and kill iOS text-selection on the chart)
+
+**Status.** Accepted (2026-06-19). Evolves the scrub interaction from ADR-7/§9.
+
+**Context.**
+Scrubbing the elevation profile used to be a pure live gesture: the dot + vertical line + readout
+appeared only while a finger was down and **cleared on release** (`endScrub` always called
+`clearScrub`). So you couldn't drag to a point, let go, and *read* it — the readout vanished the
+instant you lifted. Separately, on iOS a press-hold on the SVG/labels was treated as a **text
+selection**, popping the blue selection handles (and the callout menu) over the chart.
+
+**Decision.**
+Make the inspected point **persistent and tap-toggleable**, and disable text selection on the chart.
+
+- **Persist on release.** `endScrub` no longer always clears. A drag leaves the dot/line/readout on
+  screen; a held readout is tracked by `scrubHeld` (shown?) + `scrubHeldD` (its distance-along).
+- **Tap toggles.** A tap (pointer down→up with movement under a small slop) on an **empty** profile
+  reveals + persists the readout; a tap while one is **held** clears it. A drag always ends persisted
+  at the final position. A `pointercancel` is never treated as a deliberate tap (never clears).
+- **Survives redraws.** `redrawScrubCursor()` re-places a held readout after the profile SVG is
+  rebuilt (resize / language switch), re-rendering it in the new units; `onPos`/`syncGpsCursor` are
+  guarded by `!scrubHeld`, so an incoming GPS fix never overwrites a held readout. Navigation
+  (`openDetail`/`showList`) resets it.
+- **No text-selection.** `#elev-card` gets `-webkit-user-select:none; user-select:none;
+  -webkit-touch-callout:none` (on top of the existing `touch-action:none` on `#elev-svg`), so a
+  press-hold scrubs instead of selecting text or raising the callout.
+
+**Consequences.**
+You can drop a marker, let go, and study the elevation/position at leisure; a single tap clears it.
+The behavior is a small state machine in `endScrub` keyed on *was-a-drag* and *was-held-at-start*;
+the held point is by distance (not pixels), so it's robust across re-renders and unit switches.
+
+**Verification.** Synthetic pointer events in-browser: tap on an empty profile → readout shown +
+`scrubHeld`; tap again → cleared; press-drag → live, and persisted on release; a GPS fix while held
+left the readout untouched; toggling language re-placed the held readout in the new units
+(`999 m / 2.8 km` ↔ `3,276 ft / 1.7 mi`); opening another trail reset it; `#elev-card` computes
+`user-select: none`. No console errors.
+
+---
+
 
 
 All bugs below are **fixed in the current source**; each entry notes the verification.

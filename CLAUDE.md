@@ -8,7 +8,8 @@ Guidance for Claude Code (and humans) working in this repository.
 It shows 10 trails — **8 in Washington State (USA)** and **2 in Japan** (Mt. Fuji's Yoshida
 route and Mt. Kinpu in the Yamanashi mountains) — on topographic maps with the GPX track overlaid, live GPS position,
 waypoints, and an elevation profile. The profile is **scrubbable** (drag a finger to inspect
-any point — a readout pill plus a synced marker on the map), and a **live trail-progress**
+any point — a readout pill plus a synced marker on the map); the inspected point **persists** when
+you let go (a tap reveals it, a tap clears it), and a **live trail-progress**
 mode fills the walked portion green and tracks elapsed time. US trails use **USGS** topo tiles;
 Japan trails use
 **GSI 地理院タイル** (Geospatial Information Authority of Japan). Built to work with **no
@@ -94,7 +95,10 @@ The detail screen builds a Leaflet map (`initMap`) using the trail's tile source
 fetches+parses the GPX (`loadTrail` → `drawTrack`/`drawProfile`), and shows a draggable bottom
 sheet. GPS uses `watchPosition`. Two interactive layers sit on top: **scrubbing** the elevation
 profile (`initProfileScrub`/`drawProfileCursor` → `pointAtDistance`) drags a synced marker along
-the trail with an elevation/distance readout; **live tracking** (`startTracking`/`updateProgress`
+the trail with an elevation/distance readout that **persists** on release and **toggles by tap**
+(tap an empty profile to drop a readout, tap again to clear; the held point is remembered by
+distance in `scrubHeld`/`scrubHeldD` so it survives a profile redraw, and GPS/`syncGpsCursor` won't
+overwrite it); **live tracking** (`startTracking`/`updateProgress`
 → `recolorProgress`, **started** by the `#btn-track` FAB; **paused/ended from the HUD**, never the
 FAB) snaps each GPS fix to the trail with a
 windowed-forward search, fills the walked portion green over the red base, and shows percent +
@@ -149,7 +153,7 @@ Paste into the DevTools console:
 ```
 
 (Or DevTools → Application → Storage → **Clear site data**.) To ship an update to returning
-users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v20`) — the `activate` handler purges
+users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v21`) — the `activate` handler purges
 old caches. Reset language during testing with `localStorage.removeItem('lang')`.
 
 ## Adding a trail (short version)

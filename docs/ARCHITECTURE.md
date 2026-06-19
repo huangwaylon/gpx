@@ -7,7 +7,7 @@
 
 > **Tile storage (ADR-12):** saved map tiles live in **IndexedDB** (`tiles-db.js` →
 > `window.TileStore`), **not** the Cache API. Cache Storage holds **only** the app shell, in a
-> single cache `APP_V` (`wa-trails-app-v20`). The body below reflects this; for the rationale see
+> single cache `APP_V` (`wa-trails-app-v21`). The body below reflects this; for the rationale see
 > ADR-12 in `docs/DECISIONS-AND-LESSONS.md`. **Cold-relaunch auto-resume (ADR-13):** a relaunch
 > mid-hike lands straight on the trail screen and resumes the live session (see §10a).
 > **Completion-manifest download gate:** a trail reads as "saved" only when a `localStorage`
@@ -709,25 +709,41 @@ false)` to track the hiker (`app.js:724`), while scrubbing passes `scrub=true` a
 floating readout pill `#scrub-tip` with elevation + distance-along (below). The group is
 cleared (`#epos` emptied) when GPS stops (`stopGPS`, `app.js:709`).
 
-### Elevation scrubbing — `initProfileScrub()`
+### Elevation scrubbing — `initProfileScrub()` (persistent, tap-to-toggle)
 
-Dragging a finger along the elevation profile inspects any point on the trail.
-**`initProfileScrub()`** (`app.js:646`) is bound **once** from `bindGlobal()` (`app.js:248`) via
-**delegation** — a document-level `pointerdown` filtered to `#elev-svg` — because the profile SVG
-is rebuilt on every language switch / sheet re-render, so a directly-bound listener wouldn't
-survive. `touch-action:none` on `#elev-svg` keeps the drag from scrolling the sheet.
+Dragging a finger along the elevation profile inspects any point on the trail, and the inspected
+point **persists** so you can let go and study it. **`initProfileScrub()`** is bound **once** from
+`bindGlobal()` via **delegation** — a document-level `pointerdown` filtered to `#elev-svg` — because
+the profile SVG is rebuilt on every language switch / sheet re-render, so a directly-bound listener
+wouldn't survive. `touch-action:none` **and** `user-select:none` / `-webkit-touch-callout:none` on
+`#elev-card` keep the drag from scrolling the sheet **and** stop iOS from treating a press-hold as a
+text selection (the blue selection handles) or firing the callout menu.
 
-- **`applyScrub(clientX)`** (`app.js:661`) maps the finger's x within the SVG to a fraction
-  `0..1`, converts it to a distance, and resolves the exact point via
-  **`pointAtDistance(D)`** (`app.js:592`) — a binary-search-plus-lerp over the monotonic
-  `trackPts[].d` returning `{lat,lon,se,d,idx}`. It then calls `drawProfileCursor(p, true)` (a
-  **violet** cursor + the `#scrub-tip` readout pill showing `fmtElev`/`fmtDistAlong`) and drops a
-  synced **violet `scrub-dot` marker** on the trail (created/moved on `map`).
-- **`onScrubMove`** (`app.js:660`) is rAF-throttled; window-level `pointermove`/`pointerup`/
-  `pointercancel` listeners (added on `pointerdown`) track the finger past the SVG edge.
-- **`endScrub()`** (`app.js:671`) tears down those listeners + the rAF and calls
-  **`clearScrub()`** (`app.js:680`), which removes the scrub marker and readout and restores the
-  blue GPS cursor (via `syncGpsCursor()`, `app.js:637`) if a fix is present.
+**Interaction model** (a held readout is tracked by `scrubHeld`; its distance-along by `scrubHeldD`):
+
+- **Press-drag** → a live readout follows the finger; on release the dot + vertical line + readout
+  **stay on screen**.
+- **Tap on an empty profile** → reveals the readout at that point and persists it.
+- **Tap while a readout is held** → clears it.
+
+Internals:
+
+- **`applyScrub(clientX)`** maps the finger's x within the SVG to a fraction `0..1`, converts it to a
+  distance (`scrubHeldD`), resolves the exact point via **`pointAtDistance(D)`** (binary-search +
+  lerp over the monotonic `trackPts[].d` → `{lat,lon,se,d,idx}`), then **`placeScrub(p)`** draws
+  `drawProfileCursor(p, true)` (a **violet** cursor + the `#scrub-tip` readout pill showing
+  `fmtElev`/`fmtDistAlong`) and creates/moves the synced **violet `scrub-dot` marker** on `map`.
+- **`onScrubMove`** is rAF-throttled and only repositions once the finger moves past a small slop
+  (so a tap isn't read as a tiny drag); window-level `pointermove`/`pointerup`/`pointercancel`
+  listeners (added on `pointerdown`) track the finger past the SVG edge.
+- **`endScrub(e)`** tears down those listeners + the rAF, then decides: a clean **tap on a held
+  readout** calls **`clearScrub()`** (removes marker + readout, sets `scrubHeld=false`, restores the
+  blue GPS cursor via `syncGpsCursor()`); **otherwise** a readout is on screen → `scrubHeld=true`. A
+  `pointercancel` is never treated as a deliberate tap, so it never clears.
+- **`redrawScrubCursor()`** re-places a held readout after the profile SVG is rebuilt (resize /
+  language switch), so the inspected point survives — and re-renders in the new units. Both `onPos`
+  and `syncGpsCursor` are guarded by `!scrubHeld`, so an incoming GPS fix never overwrites a held
+  readout.
 
 ---
 
@@ -1351,7 +1367,7 @@ ADR-12 — see the rationale below and in `docs/DECISIONS-AND-LESSONS.md`.)
 
 | Store | Name / constant | Contents | Written by |
 |---|---|---|---|
-| Cache Storage | `wa-trails-app-v20` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
+| Cache Storage | `wa-trails-app-v21` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
 | IndexedDB | `wa-trails-tiles` / store `tiles` (`tiles-db.js`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL → `{body, type}`. | The page's `saveTiles()` (commits each fetched tile's bytes directly, §12) and the SW's tile `fetch` handler (on every network fill while browsing). |
 
 > The store **names** retain the historic `wa-trails-` prefix (an internal identifier — not
