@@ -1,4 +1,4 @@
-const APP_V = 'wa-trails-app-v22';   // bumped: detail map no longer drifts off-center after load (maxBounds clamps the visible viewport, not the whole container)
+const APP_V = 'wa-trails-app-v23';   // bumped: Fuji round-trip data + reliability/a11y fixes (download timeout & quota stop, weak-signal HUD hint, resize no longer re-fits, sheet/HUD a11y)
 
 importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 
@@ -83,7 +83,9 @@ self.addEventListener('fetch', e => {
   // WebKit open/scan unrelated caches; scoping keeps shell serving off any large store.)
   e.respondWith(caches.open(APP_V).then(cache =>
     cache.match(e.request).then(hit => hit || fetch(e.request).then(res => {
-      if (res.ok) {
+      // Only cache a full (200) GET — a 206/Range or non-GET would throw in cache.put. The shell is
+      // all same-origin/unpkg full-file GETs today; this is a defensive guard against future drift.
+      if (res.ok && res.status === 200 && e.request.method === 'GET') {
         const u = new URL(url);
         if (u.origin === self.location.origin || u.hostname.includes('unpkg.com'))
           cache.put(e.request, res.clone());

@@ -153,7 +153,7 @@ Paste into the DevTools console:
 ```
 
 (Or DevTools → Application → Storage → **Clear site data**.) To ship an update to returning
-users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v22`) — the `activate` handler purges
+users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v23`) — the `activate` handler purges
 old caches. Reset language during testing with `localStorage.removeItem('lang')`.
 
 ## Adding a trail (short version)
@@ -257,3 +257,31 @@ These were flagged earlier and have since been addressed; noted so they don't ge
   tile, while the hidden strips behind the header/sheet may, harmlessly. `fitTrack`'s fit is now
   `animate:false` so the follow-up clamp reads a settled view. Don't regress `applyMaxBounds` back to
   clamping the bare box against the full container. See ADR-19.
+
+- **Reliability / accuracy / a11y pass + Fuji round-trip data fix** (`APP_V` bumped to `wa-trails-app-v23`,
+  2026-06-19). A batch of fixes from a full test sweep:
+  - **Fuji data:** the bundled Yoshida GPX is the **full round trip** (≈10.4 mi, up one trail and down
+    another back to the 5th Station). The stats had shipped the one-way ascent (4.2 mi / `Point to point`),
+    inconsistent with the track that's drawn/scrubbed. Corrected to `lengthMi: 10.4`, `route: "Loop"`,
+    `time: "8 – 10 h"`; gain stays the one-climb DEM figure (4,701 ft) per Golden Rule #4. Summary/
+    description (EN + JA) reworded to the round trip. The GPX is authoritative — don't "fix" it back.
+  - **Offline downloads:** each tile fetch now has a 15 s `AbortSignal.timeout` (a hung connection can no
+    longer freeze a download forever — a timeout counts as a retryable `fail`); `downloadAll` skips trails a
+    per-trail download already owns (no two engines racing the same slug's manifest/state), marks each card
+    `busy` only as it starts (so an early break leaves the rest idle, not stuck), and **stops early on
+    `dlQuotaHit`** (keeps already-completed trails' ✓). `gpxBox` is memoized per slug. The `navigator.onLine`
+    guard is now documented as a fast hint, not a reliable gate (saveTiles' fail-reporting is the real net).
+  - **Tracking:** sustained off-trail / weak-signal fix rejections now surface a `trackWeakSignal` HUD hint
+    (`trackSearching`) instead of a silently frozen percent. The `resize` handler only re-`fitTrack()`s on an
+    actual **orientation** change (`mapOrient`) — an iOS URL-bar/keyboard resize no longer yanks a zoomed-in
+    hiker back to the full-track view; a same-orientation resize just re-clamps bounds. The non-tracking GPS
+    profile cursor scans the downsampled `renderPts` (`nearestRenderPt`), not the full track, bounding per-fix
+    work on long trails. The YAMAP timeline leg/stay math wraps past midnight (`dur()`), ready for a multi-day plan.
+  - **Accessibility:** pinch-zoom re-enabled (dropped `maximum-scale=1`); `#map` is `role="application"` with a
+    label; the card list is `role="list"`/`listitem` with a clean link `aria-label` (hero `alt=""`); filter/sort
+    chips expose `aria-pressed`; the track HUD's per-second clock no longer lives in an `aria-live` region (only
+    the `.th-msg` milestone announces); the sheet grip is a keyboard `role="button"` (Enter/Space toggles, Esc
+    collapses) and the map FABs go `inert` when the sheet is full; the resume `alertdialog` takes focus + traps
+    Tab + Esc-dismisses; 44px tap targets added to the small HUD/resume/header controls; a GPX-load failure now
+    shows an inline `.load-err` instead of a blank sheet; the global download button's `aria-label` no longer
+    mismatches its visible label; `--muted` darkened for contrast; a `<meta name="description">` was added.

@@ -164,18 +164,18 @@ window.TRAILS = [
   // ───────────────────────── Japan (GSI 地理院タイル basemap) ─────────────────────────
   {
     slug: "fuji-yoshida",
-    name: "Mt. Fuji: Yoshida Trail (5th Station Ascent)",
+    name: "Mt. Fuji: Yoshida Trail (5th Station)",
     area: "Fujiyoshida, Yamanashi",
     img: "images/fuji-yoshida.webp",
     gpx: "gpx/Mt_Fuji_Yoshida.gpx",
     tiles: "gsi",
-    lengthMi: 4.2, gainFt: 4701, diff: "Hard",
-    route: "Point to point", time: "3 h 46 min",
+    lengthMi: 10.4, gainFt: 4701, diff: "Hard",
+    route: "Loop", time: "8 – 10 h",
     season: "Jul – Sep", dogs: "Not allowed",
     permit: "Climbing season only · Yoshida Trail reservation + ¥2,000 entry fee (2024–)",
     center: [35.3800, 138.7403],
-    summary: "The most popular route up Mt. Fuji — a relentless switchback climb from the Subaru Line 5th Station up through volcanic cinder and a line of mountain huts to the 3,710 m crater rim, the classic spot to watch the sunrise (goraikō).",
-    description: "This is the busiest of Mt. Fuji's four routes and the one most first-timers choose. From the Subaru Line 5th Station (≈2,300 m) the trail climbs steadily through cinder slopes and dwarf pine, passing red torii gates, small shrines, and a near-continuous string of mountain huts. The ascending and descending trails are separate above the 6th Station, so this track follows the up-route only, finishing at the Yoshida-side crater rim near Kusushi Shrine (≈3,710 m); the true summit, Kengamine (3,776 m), is a 30–60 min walk around the crater (ohachi-meguri). Many climbers break the ascent with an overnight hut stay to acclimatize and reach the rim for dawn.",
+    summary: "The most popular route up Mt. Fuji — a relentless switchback climb from the Subaru Line 5th Station up through volcanic cinder and a line of mountain huts to the 3,710 m crater rim (the classic sunrise / goraikō spot), then back down the dedicated descending trail to the 5th Station.",
+    description: "This is the busiest of Mt. Fuji's four routes and the one most first-timers choose. From the Subaru Line 5th Station (≈2,300 m) the trail climbs steadily through cinder slopes and dwarf pine, passing red torii gates, small shrines, and a near-continuous string of mountain huts. Above the 6th Station the ascending and descending trails split, so this is a loop: you climb the up-route to the Yoshida-side crater rim near Kusushi Shrine (≈3,710 m) — many add the 30–60 min crater walk (ohachi-meguri) out to the true summit, Kengamine (3,776 m) — then return on the separate descending switchbacks, rejoining the shared path at the 6th Station back down to the 5th. Many climbers break the ascent with an overnight hut stay to acclimatize and reach the rim for dawn.",
     tips: [
       "Climbing season only — roughly early July to early September. Off-season the route is snowbound, hut-less, and genuinely dangerous.",
       "Since 2024 the Yoshida Trail requires an advance reservation and a ¥2,000 entry fee (daily cap ~4,000; the 5th-Station gate is closed roughly 2 pm–3 am except for hut guests).",

@@ -1242,13 +1242,13 @@ satisfied from the cache, so source edits are invisible until the cache is inval
   reload re-fetches from disk).
 - To ship updates to users: **bump the cache version** so the new SW installs a fresh shell and the
   `activate` handler deletes the stale caches. The shell cache version is `APP_V` in `sw.js`
-  (currently **`'wa-trails-app-v19'`** — bumped each shell release; it was v2 when this bug was first
+  (currently **`'wa-trails-app-v23'`** — bumped each shell release; it was v2 when this bug was first
   written up). There is now **only one cache** (the shell): tiles moved out of Cache Storage into
   IndexedDB in **ADR-12**, so the old `TILE_V` (`'wa-trails-tiles-v1'`) tile cache is gone and
   `activate` deletes **every** cache except the current `APP_V`:
 
 ```js
-const APP_V = 'wa-trails-app-v19';   // shell cache version — bump on every shell change
+const APP_V = 'wa-trails-app-v23';   // shell cache version — bump on every shell change
 
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
@@ -1259,7 +1259,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v19'`, there is no `TILE_V`, the
+**Verification.** Confirmed in `sw.js`: `APP_V` is `'wa-trails-app-v23'`, there is no `TILE_V`, the
 shell is served cache-first (scoped to `APP_V` — ADR-12), and `activate` deletes every cache except
 the current `APP_V`.
 

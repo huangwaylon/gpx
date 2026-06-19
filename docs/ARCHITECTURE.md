@@ -2,12 +2,13 @@
 
 > Canonical architecture reference for the **Ume-chan's Trails** (梅ちゃんのトレイル)
 > Progressive Web App.
-> Every claim below is grounded in the source as of this writing; `file:line` references
-> point at the exact code.
+> Every claim below is grounded in the source as of this writing. `file:line` references point at
+> the relevant code, but **treat the line numbers as approximate** — `app.js` changes often and the
+> line numbers drift between edits; the named symbol (function/const) is the stable anchor, grep for it.
 
 > **Tile storage (ADR-12):** saved map tiles live in **IndexedDB** (`tiles-db.js` →
 > `window.TileStore`), **not** the Cache API. Cache Storage holds **only** the app shell, in a
-> single cache `APP_V` (`wa-trails-app-v22`). The body below reflects this; for the rationale see
+> single cache `APP_V` (`wa-trails-app-v23`). The body below reflects this; for the rationale see
 > ADR-12 in `docs/DECISIONS-AND-LESSONS.md`. **Cold-relaunch auto-resume (ADR-13):** a relaunch
 > mid-hike lands straight on the trail screen and resumes the live session (see §10a).
 > **Completion-manifest download gate:** a trail reads as "saved" only when a `localStorage`
@@ -266,8 +267,9 @@ The 10 trails are, in array order: the **8 Washington** trails `lake-22`, `snow-
 `lake-valhalla`, `talapus-lake`, `mount-pilchuck`, `bridal-veil`, `skyline-loop`,
 `enchantments`, followed by the **2 Japan** trails `fuji-yoshida` (Mt. Fuji: Yoshida Trail) and
 `kinpu-odarumi` (Mount Kinpu via Odarumi Pass). Both Japan trails set `tiles: "gsi"` and have
-**no GPX waypoints**. Across the set, one is `route: "Loop"` (`skyline-loop`), two are
-`"Point to point"` (`enchantments`, `fuji-yoshida`), and the rest are `"Out & back"`. The
+**no GPX waypoints**. Across the set, two are `route: "Loop"` (`skyline-loop`, `fuji-yoshida` —
+the Fuji track is the full round trip, up one trail and down another back to the 5th Station), one
+is `"Point to point"` (`enchantments`), and the rest are `"Out & back"`. The
 header has no subtitle and no trail count: aside from the `<h1 data-i18n="appName">`, the only
 header text node is the eyebrow `<span data-i18n="tagline">` (`index.html:36`), reading
 "山と渓谷の道しるべ" / "Field guide".
@@ -1376,7 +1378,7 @@ ADR-12 — see the rationale below and in `docs/DECISIONS-AND-LESSONS.md`.)
 
 | Store | Name / constant | Contents | Written by |
 |---|---|---|---|
-| Cache Storage | `wa-trails-app-v22` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
+| Cache Storage | `wa-trails-app-v23` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
 | IndexedDB | `wa-trails-tiles` / store `tiles` (`tiles-db.js`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL → `{body, type}`. | The page's `saveTiles()` (commits each fetched tile's bytes directly, §12) and the SW's tile `fetch` handler (on every network fill while browsing). |
 
 > The store **names** retain the historic `wa-trails-` prefix (an internal identifier — not

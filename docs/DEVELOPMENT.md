@@ -124,7 +124,7 @@ Paste this into the DevTools **Console** on the running app, then let it reload:
 ```
 
 This unregisters every service worker for the origin, deletes **all** caches
-(the single app-shell cache, `wa-trails-app-v19`), and deletes the IndexedDB
+(the single app-shell cache, `wa-trails-app-v23`), and deletes the IndexedDB
 database that holds the downloaded map tiles (`wa-trails-tiles`), then reloads.
 Dropping the tile DB is only needed when you want a clean offline reset; for an
 ordinary "just show my edited code" cycle, clearing the SW + shell cache is
@@ -150,7 +150,7 @@ For **returning users**, the correct way to force everyone onto a new version on
 deploy is to bump the cache version constant at the top of `sw.js`:
 
 ```js
-const APP_V = 'wa-trails-app-v22';  // ← bump this (…-v23, …-v24) when you ship shell changes
+const APP_V = 'wa-trails-app-v23';  // ← bump this (…-v24, …-v25) when you ship shell changes
 ```
 
 There is a **single** cache now — the app shell. (ADR-12: saved map **tiles
@@ -175,7 +175,7 @@ self.addEventListener('activate', e => {
 });
 ```
 
-So changing `APP_V` from `wa-trails-app-v19` to `wa-trails-app-v20` invalidates
+So changing `APP_V` from `wa-trails-app-v23` to `wa-trails-app-v24` invalidates
 the old app-shell cache for all users and re-precaches the new shell on next
 load. **Bump `APP_V` whenever you change shell files** (`index.html`, `app.css`,
 `app.js`, `trails.js`, `i18n.js`, `tiles-db.js`, or the bundled asset lists).
@@ -441,11 +441,11 @@ offline.
 
 Editing `trails.js`, `i18n.js`, and the precache list is a shell change. To make
 returning users pick it up on deploy, bump `APP_V` in `sw.js` (currently
-`wa-trails-app-v19`, so bump to the next version — see
+`wa-trails-app-v23`, so bump to the next version — see
 [the SW section](#3-the-service-worker-gotcha-read-this)):
 
 ```js
-const APP_V = 'wa-trails-app-v20';
+const APP_V = 'wa-trails-app-v24';
 ```
 
 (This re-precaches the new shell + asset list; it does **not** disturb users'
@@ -561,7 +561,7 @@ reload — it should come up in Japanese.
 
 If the app fails to load with the server stopped, the service worker isn't
 caching the shell correctly — check `SHELL` / `TRAIL_ASSETS` in `sw.js` and the
-DevTools **Application → Cache Storage** entry (the single `wa-trails-app-v19`
+DevTools **Application → Cache Storage** entry (the single `wa-trails-app-v23`
 cache). If the shell loads but **tiles** don't render offline, check
 **Application → IndexedDB → `wa-trails-tiles` → `tiles`** for saved entries (and
 re-run **Save maps** if it's empty).

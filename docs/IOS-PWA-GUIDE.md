@@ -17,7 +17,7 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | **Service workers** | Supported in Safari tabs + Home-Screen PWAs since iOS 11.1. **Not** available in WKWebView / in-app browsers. | Registers `./sw.js` (classic SW) on `load`. Offline breaks inside in-app browsers — **recommend "Open in Safari"** (GAP: not detected/surfaced in-app). |
 | **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** — via the global **"Save maps"** button or a per-trail card button — never background prefetch. |
 | **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
-| **Cache API** | Fully supported since iOS 11.1. | App **shell** only (`wa-trails-app-v22`). **Map tiles moved to IndexedDB** (`tiles-db.js`) — opening a Cache holding thousands of tile records is slow on WebKit and stalled launch (ADR-12). |
+| **Cache API** | Fully supported since iOS 11.1. | App **shell** only (`wa-trails-app-v23`). **Map tiles moved to IndexedDB** (`tiles-db.js`) — opening a Cache holding thousands of tile records is slow on WebKit and stalled launch (ADR-12). |
 | **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded, and the watch can come back **silently dead** (no fixes, no error). | GPS only works screen-on, foreground. On wake (`pageshow`/`visibilitychange`) the app **`restartWatch()`s** the watch + kicks a one-shot fix (with a 32 s self-heal guard so GPS can't wedge if iOS fires neither callback), and re-acquires Wake Lock. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
 | **`navigator.wakeLock` (standalone)** | Reliable in standalone PWAs on the **iOS 26+ target** (the 16.4–18.3 standalone breakage is below our floor). | Calls `wakeLock.request('screen')` in `startGPS()`, re-acquires on visibility change. Only relevant for phone-in-hand navigation; the pocket-and-check pattern is covered by GPS-gap recovery. No fallback needed. |
@@ -81,7 +81,7 @@ is now a **single** Cache-Storage cache, keyed by version string so it can be ro
 
 | Cache name (constant) | Contents | Population strategy |
 |---|---|---|
-| **`wa-trails-app-v22`** (`APP_V` in `sw.js`) | App shell (incl. `tiles-db.js`) + bundled trail data (GPX + hero images) | Precached on SW `install` via `fetch(u,{cache:'reload'})` + `cache.put` — shell must-succeed, trail assets best-effort; topped up on cache miss at runtime. |
+| **`wa-trails-app-v23`** (`APP_V` in `sw.js`) | App shell (incl. `tiles-db.js`) + bundled trail data (GPX + hero images) | Precached on SW `install` via `fetch(u,{cache:'reload'})` + `cache.put` — shell must-succeed, trail assets best-effort; topped up on cache miss at runtime. |
 
 Saved **map tiles** (USGS topo for US trails, GSI 地理院タイル for Japan trails) are **not** in any
 Cache-Storage cache — they live in the IndexedDB store defined by `tiles-db.js` (DB `wa-trails-tiles`,
@@ -92,7 +92,7 @@ handlers.
 `sw.js` declarations:
 
 ```js
-const APP_V = 'wa-trails-app-v22';   // tiles now live in IndexedDB (tiles-db.js), not a cache
+const APP_V = 'wa-trails-app-v23';   // tiles now live in IndexedDB (tiles-db.js), not a cache
 importScripts('./tiles-db.js');       // shared tile store → self.TileStore (also loaded by the page)
 ```
 
@@ -311,7 +311,7 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
 ```json
 {
   "name": "梅ちゃんのトレイル",
-  "short_name": "梅ちゃん",
+  "short_name": "梅ちゃんのトレイル",
   "id": "/ume-trails",
   "start_url": "./",
   "scope": "./",
@@ -328,7 +328,7 @@ The manifest (`manifest.json`) is intentionally minimal and sticks to fields iOS
 
 - `display:standalone` → real standalone launch on iOS.
 - `id:"/ume-trails"` → used on iOS 17+, harmlessly ignored earlier.
-- `name`/`short_name` are Japanese (`梅ちゃんのトレイル` / `梅ちゃん`) — iOS uses these for the install sheet / app identity; the Home-Screen icon label itself comes from `apple-mobile-web-app-title` (below).
+- `name`/`short_name` are Japanese (`梅ちゃんのトレイル`) — iOS uses these for the install sheet / app identity; the Home-Screen icon label itself comes from `apple-mobile-web-app-title` (below).
 - No `shortcuts`/`categories`/`screenshots` are declared (they'd be ignored anyway).
 - `background_color:#f4f6f3` is what iOS uses to paint the **auto-generated splash**.
 
@@ -429,7 +429,7 @@ The app is **bilingual**: **Japanese by default**, with an **English toggle** in
   function applyStaticI18n(){ document.documentElement.lang = lang; /* …swap [data-i18n] text… */ }
   ```
 
-- **Manifest identity is Japanese.** `name`/`short_name` and the `apple-mobile-web-app-title` meta are Japanese (`梅ちゃんのトレイル` / `梅ちゃん`), so the installed Home-Screen app is labeled in Japanese regardless of the in-app toggle (the manifest is static and not re-read on language switch). See *Web App Manifest specifics on iOS*.
+- **Manifest identity is Japanese.** `name`/`short_name` and the `apple-mobile-web-app-title` meta are Japanese (`梅ちゃんのトレイル`), so the installed Home-Screen app is labeled in Japanese regardless of the in-app toggle (the manifest is static and not re-read on language switch). See *Web App Manifest specifics on iOS*.
 
 > See `docs/I18N.md` for the complete i18n architecture (string tables, per-trail localized content, unit conversion, date/season formatting, etc.).
 

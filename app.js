@@ -81,6 +81,7 @@ const trailSource = trail => TILE_SOURCES[trail.tiles] || TILE_SOURCES.usgs;
 
 // ── App state ──
 let map = null, curTrail = null, trackLayer = null;
+let mapOrient = '';               // 'l'|'p' — last map orientation; resize re-fits only when this flips
 let trackPts = [], trackWpts = [];
 let totalDist = 0, gpsWatch = null, gpsMk = null, gpsAcc = null, gpsFollow = false;
 let curPos = null, wakeLock = null, wakeReq = false;   // wakeReq: a wakeLock.request() is in flight (re-entrancy guard)
@@ -113,6 +114,7 @@ let walkedDist = 0, progIdx = -1;   // monotonic distance-along reached (m); las
 let turnedAround = false;           // out-and-back: latched once we reach the turnaround so a re-acquire snaps to the RETURN leg, never the overlapping outbound leg
 let walkedLayer = null, walkedHalo = null, walkedLine = null;   // green "walked" overlay: white halo + green line (a layerGroup), drawn over the red base track
 let reacqMiss = 0;                  // consecutive off-window fixes (triggers a full re-acquire)
+let trackSearching = false;         // sustained fix rejections (weak GPS / off-trail) → show a HUD hint
 let pendingResume = null;           // a saved session offered for resume on the current trail
 let resumeOnOpen = false;           // bootRoute (cold relaunch) or the list "resume hike" banner → auto-resume on open
 let gpsWasHidden = false;           // GPS was live when last backgrounded (→ refresh fix on return)
@@ -264,10 +266,10 @@ function renderList() {
     const dl = cardDl.get(trail.slug) || 'idle';   // per-trail download state survives this re-render
     const pct = dl==='busy' ? (cardDlPct.get(trail.slug) ?? 0) : null;   // restore the busy ring after a re-render
     return `
-    <div class="card-wrap">
+    <div class="card-wrap" role="listitem">
       <a class="card" href="#/trail/${trail.slug}">
         <div class="card-img-wrap">
-          <img class="card-img" src="${trail.img}" alt="${tr.name}" loading="lazy">
+          <img class="card-img" src="${trail.img}" alt="" loading="lazy" width="1200" height="800">
           <span class="card-badge ${diffClass(trail.diff)}">${trDiff(trail.diff)}</span>
           <div class="card-titlebar">
             <div class="card-title">${tr.name}</div>
@@ -289,6 +291,11 @@ function renderList() {
   }).join('');
 }
 
+// Mirror each filter/sort chip's visual .active onto aria-pressed so screen readers convey the state.
+function syncChipPressed(){
+  $$('#filter-bar .chip').forEach(c => c.setAttribute('aria-pressed', c.classList.contains('active') ? 'true' : 'false'));
+}
+
 function bindGlobal() {
   $$('#filter-bar .chip').forEach(chip => {
     chip.addEventListener('click', () => {
@@ -299,9 +306,11 @@ function bindGlobal() {
         listSort = (listSort === chip.dataset.sort) ? null : chip.dataset.sort;
         $$('#filter-bar .chip[data-sort]').forEach(c => c.classList.toggle('active', c.dataset.sort === listSort));
       }
+      syncChipPressed();
       renderList();
     });
   });
+  syncChipPressed();   // initial aria-pressed state (the "all" filter chip starts active)
 
   $('#lang-toggle').addEventListener('click', () => setLang(lang === 'ja' ? 'en' : 'ja'));
   $('#btn-back').addEventListener('click', () => { location.hash = ''; });
@@ -311,6 +320,16 @@ function bindGlobal() {
   $('#th-close').addEventListener('click', endTracking);
   $('#tr-resume').addEventListener('click', () => { const s=pendingResume; hideResumePrompt(); if(s) resumeSession(s); });
   $('#tr-dismiss').addEventListener('click', () => { clearSession(); hideResumePrompt(); });
+  // The resume prompt is role="alertdialog": Escape dismisses it, and Tab is trapped between its two
+  // actions so keyboard focus can't wander onto the map/sheet behind it.
+  $('#track-resume').addEventListener('keydown', e => {
+    if(e.key==='Escape'){ clearSession(); hideResumePrompt(); const f=$('#btn-track'); if(f && !f.hidden) f.focus(); return; }
+    if(e.key==='Tab'){
+      const f=[$('#tr-dismiss'), $('#tr-resume')], i=f.indexOf(document.activeElement);
+      if(e.shiftKey && i<=0){ e.preventDefault(); f[f.length-1].focus(); }
+      else if(!e.shiftKey && i===f.length-1){ e.preventDefault(); f[0].focus(); }
+    }
+  });
   $('#dl-all').addEventListener('click', downloadAll);
   // Per-trail download: one delegated listener on the stable list container (survives every
   // renderList re-render). The button is a sibling of the card's <a>, so it doesn't navigate.
@@ -463,8 +482,9 @@ function renderPlanCard(plan) {
 function renderTimeline(plan) {
   const it = plan.itinerary;
   const hm = s => { const [h,m] = s.split(':').map(Number); return h*60 + m; };
+  const dur = (a,b) => { const d = b - a; return d < 0 ? d + 1440 : d; };   // minutes; wraps past midnight for a multi-day plan
   const rows = it.map((s, i) => {
-    const stay = s.depart ? hm(s.depart) - hm(s.time) : 0;
+    const stay = s.depart ? dur(hm(s.time), hm(s.depart)) : 0;
     const badge = stay
       ? `<span class="tl-stay">${lang==='ja' ? '滞在 '+fmtDur(stay) : fmtDur(stay)+' rest'}</span>`
       : '';
@@ -472,7 +492,7 @@ function renderTimeline(plan) {
       `<span class="tl-time">${s.time}</span>` +
       `<span class="tl-name">${s.name[lang] || s.name.en}${badge}</span></li>`;
     if (i === it.length - 1) return stop;
-    const leg = hm(it[i+1].time) - (s.depart ? hm(s.depart) : hm(s.time));
+    const leg = dur(s.depart ? hm(s.depart) : hm(s.time), hm(it[i+1].time));
     return stop + `<li class="tl-leg"><span>${fmtDur(leg)}</span></li>`;
   }).join('');
   const meta = `<div class="tl-meta">` +
@@ -523,6 +543,7 @@ function initMap() {
   map.on('dragstart', () => { gpsFollow = false; $('#btn-gps').classList.remove('on'); });
   map.on('zoomend', applyMaxBounds);   // the cached box tightens with zoom (padFor) — re-clamp panning to it
   zoom.getContainer().style.marginTop = 'calc(54px + env(safe-area-inset-top,0px))';
+  mapOrient = window.innerWidth > window.innerHeight ? 'l' : 'p';
 }
 
 // Clamp panning to the offline-cached box for the CURRENT zoom. The download pre-caches the track's
@@ -558,7 +579,14 @@ async function loadTrail(trail) {
   renderPts = []; walkedDist = 0; progIdx = -1; reacqMiss = 0; turnedAround = false;
   let text;
   try { text = await (await fetch(trail.gpx)).text(); }
-  catch(e) { console.error('GPX load failed', e); return; }
+  catch(e) {
+    console.error('GPX load failed', e);
+    // Don't leave a blank detail screen (e.g. offline with the GPX evicted) — tell the user.
+    if(curTrail===trail){ const body=$('#sheet-body');
+      if(body && !body.querySelector('.load-err'))
+        body.insertAdjacentHTML('afterbegin', `<div class="load-err" role="alert">${t('trailLoadError')}</div>`); }
+    return;
+  }
   if (curTrail !== trail) return;   // a newer navigation superseded this fetch — don't draw A's track / set A's farEnd onto B's map
   const xml = new DOMParser().parseFromString(text, 'text/xml');
 
@@ -741,6 +769,15 @@ function nearestIdx(lat,lon,from=0,to=trackPts.length-1){
   return { idx:bi, dist:best };
 }
 
+// Nearest DOWNSAMPLED render point (≤~1200, vs the full track of up to ~7k) to a lat/lon — used only
+// for the non-tracking GPS profile cursor, where sub-vertex precision doesn't matter. Keeps the
+// per-fix work bounded on the long trails (Enchantments, Fuji) instead of scanning every vertex.
+function nearestRenderPt(lat,lon){
+  let best=Infinity, bp=null;
+  for(const p of renderPts){ const dd=hav(lat,lon,p.lat,p.lon); if(dd<best){best=dd;bp=p;} }
+  return bp;
+}
+
 // Single point's elevation / distance-along, in the active language's units.
 function fmtElev(m){ return lang==='ja' ? `${Math.round(m).toLocaleString()} m` : `${Math.round(m*FT).toLocaleString()} ft`; }
 function fmtDistAlong(m){ return lang==='ja' ? `${(m/1000).toFixed(1)} km` : `${(m/(MI_PER_KM*1000)).toFixed(1)} mi`; }
@@ -770,8 +807,9 @@ function drawProfileCursor(p, scrub){
 // profile SVG is rebuilt or a scrub ends). onPos draws its own cursor from the fresh fix. Skips while
 // a scrub is active OR a readout is held, so it never overwrites the inspected point.
 function syncGpsCursor(){
-  if(curPos && trackPts.length && !scrubbing && !scrubHeld)
-    drawProfileCursor(trackPts[nearestIdx(curPos.lat,curPos.lon).idx], false);
+  if(!curPos || !trackPts.length || scrubbing || scrubHeld) return;
+  if(tracking && !paused && progIdx>=0) drawProfileCursor(trackPts[progIdx], false);
+  else { const rp=nearestRenderPt(curPos.lat,curPos.lon); if(rp) drawProfileCursor(rp, false); }
 }
 
 // ── Elevation scrubbing (with a persistent, tap-to-toggle inspected point) ──
@@ -887,9 +925,10 @@ function onPos(pos){
   if(tracking && !paused) updateProgress(lat,lon,accuracy);
   if(trackPts.length && !scrubbing && !scrubHeld){
     // While tracking, reuse the windowed snap index (cheaper than a full-track scan, and it
-    // won't jump the cursor to the wrong overlapping leg of an out-and-back); else scan fully.
-    const i = (tracking && !paused && progIdx>=0) ? progIdx : nearestIdx(lat,lon).idx;
-    drawProfileCursor(trackPts[i], false);
+    // won't jump the cursor to the wrong overlapping leg of an out-and-back); else use the nearest
+    // DOWNSAMPLED render point so the per-fix cost stays bounded on long trails.
+    if(tracking && !paused && progIdx>=0) drawProfileCursor(trackPts[progIdx], false);
+    else { const rp=nearestRenderPt(lat,lon); if(rp) drawProfileCursor(rp, false); }
   }
 }
 function onPosErr(err){ setLocating(false); if(err.code===1){ alert(t('alertDenied')); stopGPS(); } }
@@ -1029,7 +1068,7 @@ function startTracking(){
   hideResumePrompt();                      // starting fresh overrides any offered resume
   tracking=true; paused=false;
   trackStartTs=Date.now(); trackElapsedMs=0;
-  walkedDist=0; progIdx=-1; reacqMiss=0; turnedAround=false;
+  walkedDist=0; progIdx=-1; reacqMiss=0; turnedAround=false; trackSearching=false;
   if(walkedLayer){ walkedLayer.remove(); walkedLayer=walkedHalo=walkedLine=null; }
   $('#track-hud').hidden=false;
   if(gpsWatch===null) startGPS();          // tracking needs live fixes
@@ -1040,7 +1079,7 @@ function startTracking(){
 // Reset the in-memory session (used on navigation / trail-switch). Leaves the saved session in
 // localStorage intact so reopening the trail can still offer a resume; only endTracking() forgets it.
 function stopTracking(){
-  tracking=false; paused=false; reacqMiss=0;
+  tracking=false; paused=false; reacqMiss=0; trackSearching=false;
   clearInterval(hudTimer); hudTimer=null;
   const hud=$('#track-hud'); if(hud) hud.hidden=true;
   if(walkedLayer){ walkedLayer.remove(); walkedLayer=walkedHalo=walkedLine=null; }
@@ -1104,8 +1143,17 @@ function updateProgress(lat,lon,accuracy){
     const to  =Math.min(n-1, progIdx+Math.ceil(SNAP_FWD_M/avg));
     r=nearestIdx(lat,lon,from,to);
   }
-  if(r.dist>gate){ reacqMiss++; return; }           // off-trail/out-of-window: hold, count the miss
-  reacqMiss=0;
+  if(r.dist>gate){                                  // off-trail/out-of-window: hold, count the miss
+    reacqMiss++;
+    // After sustained rejections (e.g. a viewpoint just off the line, or weak signal under tree
+    // cover) progress would silently stall with no explanation — surface a HUD hint so the frozen
+    // percent reads as "searching", not "broken". Cleared the moment a fix is accepted again.
+    const wasSearching = trackSearching;
+    trackSearching = reacqMiss >= REACQUIRE_AFTER;
+    if(trackSearching !== wasSearching) updateHUD();
+    return;
+  }
+  reacqMiss=0; trackSearching=false;
   progIdx=r.idx;
   // Only recolor when the high-water mark actually advances (walkedDist is monotonic), so a
   // stationary or backward-jittering fix doesn't rebuild the polyline for an identical line.
@@ -1155,8 +1203,10 @@ function updateHUD(){
   $('.th-fill').style.width = pct+'%';
   $('.th-pct').textContent = pct+'%';
   $('.th-num').textContent = fmtElapsed(elapsedMs());
-  // Paused takes precedence so the frozen clock is explained; else the turnaround/complete cue.
+  // Paused takes precedence so the frozen clock is explained; then the searching/weak-signal hint;
+  // else the turnaround/complete cue.
   const m = paused ? t('trackPaused')
+          : trackSearching ? t('trackWeakSignal')
           : pct>=100 ? t(isOutAndBack ? 'trackTurnaround' : 'trackComplete') : '';
   const msg=$('.th-msg'); msg.textContent=m; msg.hidden=!m;
   hud.classList.toggle('paused', paused);
@@ -1205,6 +1255,7 @@ function maybeOfferResume(trail){
   renderResumePrompt();
   $('#track-resume').hidden=false;
   updateTrackUI();                                                   // hide the start FAB while the prompt owns the choice
+  requestAnimationFrame(()=>{ const r=$('#tr-resume'); if(r) r.focus(); });   // move focus into the alertdialog
 }
 function renderResumePrompt(){
   const s=pendingResume; if(!s) return;
@@ -1232,6 +1283,7 @@ function resumeSession(s){
   // correct leg) instead of crawling forward through 3 rejected windowed fixes. Keep walkedDist so
   // the out-and-back leg disambiguation still holds.
   reacqMiss=REACQUIRE_AFTER;
+  trackSearching=false;
   $('#track-hud').hidden=false;
   recolorProgress();
   if(!paused){ if(gpsWatch===null) startGPS(); else refreshGpsAfterGap(); }   // resume live, fresh fixes
@@ -1277,8 +1329,9 @@ function setSheet(state){
   computePeekH();
   const sheet=$('#sheet');
   const gps=$('#btn-gps'), track=$('#btn-track');
+  const landscapeDocked = matchMedia('(orientation:landscape) and (max-height:560px)').matches;
   let gpsBottom;
-  if (matchMedia('(orientation:landscape) and (max-height:560px)').matches){
+  if (landscapeDocked){
     sheet.style.height='';
     gpsBottom = 'calc(20px + var(--safe-b))';
   } else {
@@ -1288,6 +1341,12 @@ function setSheet(state){
   }
   if(gps) gps.style.bottom = gpsBottom;
   if(track) track.style.bottom = `calc(${gpsBottom} + 58px)`;   // stacked above the GPS FAB
+  // When the sheet is expanded full (portrait) it covers the map FABs — take them out of the focus
+  // order so a keyboard/SR user can't tab into controls hidden behind the sheet. (inert is supported
+  // on the iOS 26+ target.) In the landscape side-docked layout the FABs stay visible/usable.
+  const fabsHidden = state==='full' && !landscapeDocked;
+  [gps,track].forEach(el=>{ if(el) el.inert = fabsHidden; });
+  const grip=$('#grip'); if(grip) grip.setAttribute('aria-expanded', state==='full' ? 'true' : 'false');
 }
 function initSheetDrag(){
   const sheet=$('#sheet'), grip=$('#grip'), peek=$('#sheet-peek');
@@ -1304,6 +1363,13 @@ function initSheetDrag(){
   window.addEventListener('touchend',onEnd);
   window.addEventListener('mouseup',onEnd);
   peek.addEventListener('click',()=>{ if(!dragging) setSheet(sheetState==='peek'?'full':'peek'); });
+  // Keyboard operability for the grip (role="button"): Enter/Space toggles peek↔full; Escape collapses.
+  grip.addEventListener('keydown',e=>{
+    if(e.key==='Enter' || e.key===' '){ e.preventDefault(); setSheet(sheetState==='peek'?'full':'peek'); }
+  });
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape' && !$('#detail').hidden && sheetState==='full') setSheet('peek');
+  });
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1319,8 +1385,11 @@ function ll2t(lat,lon,z){ const n=1<<z; const x=Math.floor(n*(lon+180)/360);
 
 // Raw bounding box of a trail, computed from its GPX track points (the GPX is already
 // precached by the service worker, so this works offline too). Per-zoom padding is added
-// later in tileURLsFor() via padFor().
+// later in tileURLsFor() via padFor(). Memoized per slug — a deterministic parse, and the
+// global "save all" builds 10 of these (re-downloads shouldn't re-fetch+re-parse each one).
+const gpxBoxCache = new Map();
 async function gpxBox(trail){
+  if(gpxBoxCache.has(trail.slug)) return gpxBoxCache.get(trail.slug);
   let n=-90,s=90,e=-180,w=180;
   try{
     const xml=new DOMParser().parseFromString(await (await fetch(trail.gpx)).text(),'text/xml');
@@ -1331,7 +1400,9 @@ async function gpxBox(trail){
     if(n<s) throw 0;                              // no track points parsed
   }catch(_){ const [cy,cx]=trail.center;          // fall back to a small box around center
     n=cy+0.02; s=cy-0.02; e=cx+0.02; w=cx-0.02; }
-  return { n, s, e, w };
+  const box={ n, s, e, w };
+  gpxBoxCache.set(trail.slug, box);
+  return box;
 }
 
 // Every tile URL for one box across the source's zoom range (z10 up to src.maxZoom — 16 for
@@ -1352,8 +1423,8 @@ function tileURLsFor(box, src){
 // it suspends the backgrounded SW; on the SW-controlled path the SW also caches the same key, an
 // idempotent duplicate, not a 2nd fetch). Each tile is classified: `ok` (committed or already
 // present), `absent` (the host 404'd — legitimately no tile there; counts as covered, NOT a
-// failure), or `fail` (network error / the SW's offline 503 / 5xx / a quota abort — retryable, and
-// what blocks a trail from being recorded "complete"). Sets dlQuotaHit so the caller can warn.
+// failure), or `fail` (network error / timeout / the SW's offline 503 / 5xx / a quota abort —
+// retryable, and what blocks a trail from being recorded "complete"). Sets dlQuotaHit so the caller can warn.
 // Returns {ok, absent, fail}; reports progress via onProgress.
 let dlQuotaHit = false;
 async function saveTiles(urls, onProgress){
@@ -1364,7 +1435,7 @@ async function saveTiles(urls, onProgress){
       try{
         if(await TileStore.has(u)){ ok++; }                 // already committed
         else{
-          const r=await fetch(u,{mode:'cors'});
+          const r=await fetch(u,{mode:'cors', signal:AbortSignal.timeout(15000)});  // bounded: a hung tile times out → fail (retryable), never stalls the loop
           if(r.ok){ const type=r.headers.get('Content-Type')||'image/png'; await TileStore.put(u,{body:await r.arrayBuffer(), type}); ok++; }
           else if(r.status===404){ absent++; }              // host has no tile here → covered, not a miss
           else fail++;                                      // 503 (SW offline) / 5xx / other → retryable miss
@@ -1418,20 +1489,29 @@ async function downloadTrail(trail, urls, onProgress){
 // per-trail lets each earn its own honest completion record and paints each card live.)
 async function downloadAll(){
   if(dlState==='busy' || !('indexedDB'in window)) return;
-  // No connection → nothing can be fetched. Bail with a clear message instead of animating to a
-  // false "✓ saved". navigator.onLine===false reliably catches the genuinely-offline trail case.
+  // navigator.onLine===false is a fast "definitely offline" hint — bail early with a clear message
+  // rather than spinning every tile through its 15 s timeout. It's NOT fully reliable on iOS (it can
+  // read true on a connected-but-no-internet Wi-Fi), so the real safety net is saveTiles: tiles that
+  // fail are counted, the trail is never recorded "saved", and the user gets the dlPartial nudge.
   if(!navigator.onLine){ alert(t('dlOffline')); return; }
   dlQuotaHit=false;
   dlState='busy'; updateDlBtn(); updateDlProgress(0,1);
-  // Build every trail's URL list up front so the combined bar reflects true total progress.
+  // Build every trail's URL list up front so the combined bar reflects true total progress. Skip any
+  // trail a per-trail download already owns (its card is 'busy'), so the global and per-trail engines
+  // never drive — and race the manifest/state of — the same slug.
   const lists=[];
-  for(const trail of TRAILS){ const urls=[...new Set(await trailTileURLs(trail))]; lists.push({trail,urls}); setCardDl(trail.slug,'busy',0); }
+  for(const trail of TRAILS){
+    if(cardDl.get(trail.slug)==='busy') continue;
+    const urls=[...new Set(await trailTileURLs(trail))]; lists.push({trail,urls});
+  }
   const grand=lists.reduce((s,l)=>s+l.urls.length,0)||1;
   let base=0, anyFail=false;
   for(const {trail,urls} of lists){
+    setCardDl(trail.slug,'busy',0);   // mark busy only as we reach it, so an early quota-break leaves the rest idle (not stuck 'busy')
     const r=await downloadTrail(trail, urls, (d,tot)=>{ updateDlProgress(base+d, grand); setCardDl(trail.slug,'busy',Math.round(d/tot*100)); });
     base+=urls.length;
     if(r.fail===0) setCardDl(trail.slug,'done'); else { anyFail=true; setCardDl(trail.slug,'idle'); }
+    if(dlQuotaHit) break;             // out of storage — stop hammering more put()s that will abort; already-completed trails keep their ✓
   }
   dlState='idle'; updateDlBtn();                 // drop 'busy' so refreshCacheStatus can run + set the honest global state
   await refreshCacheStatus(); updateDlBtn();
@@ -1521,8 +1601,16 @@ function hav(la1,lo1,la2,lo2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-// redraw profile + refit on rotation/resize
+// redraw profile + refit on rotation/resize. Only re-fit the track on an actual ORIENTATION change —
+// on iOS the URL bar / on-screen keyboard fire `resize` constantly, and re-fitting then would yank a
+// hiker who has zoomed into their position back out to the whole-track view. A plain size change just
+// re-measures and re-clamps the bounds, leaving the user's zoom/pan intact.
 let rzT;
 window.addEventListener('resize',()=>{ clearTimeout(rzT); rzT=setTimeout(()=>{
-  if(curTrail && map){ map.invalidateSize(); setSheet(sheetState); drawProfile(); syncGpsCursor(); redrawScrubCursor(); fitTrack(); }
+  if(curTrail && map){
+    map.invalidateSize(); setSheet(sheetState); drawProfile(); syncGpsCursor(); redrawScrubCursor();
+    const o = window.innerWidth > window.innerHeight ? 'l' : 'p';
+    if(o !== mapOrient){ mapOrient = o; fitTrack(); }   // orientation flipped → re-fit
+    else applyMaxBounds();                               // same orientation → just re-clamp to the (now-resized) viewport
+  }
 },250); });

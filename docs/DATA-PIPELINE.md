@@ -43,7 +43,7 @@ Lake 22, Snow Lake, Lake Valhalla, Talapus Lake, Mount Pilchuck,
 Bridal Veil Falls & Lake Serene, Skyline Loop, The Enchantments Traverse.
 
 **Japan (GSI 地理院タイル basemap — each carries `tiles:"gsi"` in `trails.js`):**
-Mt. Fuji: Yoshida Trail (5th Station Ascent), Mount Kinpu (Odarumi Pass).
+Mt. Fuji: Yoshida Trail (5th Station), Mount Kinpu (Odarumi Pass).
 
 > **Update (2026-06):** the Japan list was trimmed from four to two. Mt. Fuji:
 > Gotemba Trail, Mount Daibosatsu Loop, and Mount Kinpu (Kanayama) were removed.
@@ -294,12 +294,18 @@ a record of the technique):
 > `alltrails/` as `大弛峠__金峰山.gpx` (大弛峠 = Odarumi Pass); there is no
 > separate English-named page capture for it.
 
-> The Yoshida GPX is a **one-way ascent** (5th Station → crater rim), and the
-> Yoshida page's `trailGeoStats` is **also** the one-way ascent (4.2 mi /
-> 4,701 ft) — they agree, which is why the route is `Point to point`.
-> **Update (2026-06):** the Yoshida GPX was **replaced** with a new track
-> (now **2,438** track points, **0** waypoints — see §5); its route is still
-> the one-way ascent and the shipped 4.2 mi / 4,701 ft stats are unchanged.
+> The Yoshida GPX is the **full round trip** — 5th Station → crater rim → back
+> down the separate descending trail to the 5th Station (≈10.4 mi by the track;
+> start elevation = end elevation, summit near the midpoint). The shipped stats
+> were aligned to the bundled track: `lengthMi: 10.4`, `route: "Loop"` (the
+> ascending and descending trails are distinct, so it's a lollipop, not a
+> there-and-back), `time: "8 – 10 h"`. The gain stays at the AllTrails one-climb
+> DEM figure (**4,701 ft**) per the elevation-gain rule — you only ascend once.
+> **Update (2026-06-19):** an earlier revision shipped the Yoshida page's
+> one-way `trailGeoStats` (4.2 mi / `Point to point`) against this round-trip
+> GPX; the stats/route/description were corrected to describe the round trip the
+> track actually draws. The GPX itself (now **2,438** track points, **0**
+> waypoints — see §5) is the intended, authoritative geometry.
 > Historically the Gotemba (round-trip out & back), Daibosatsu (loop), and
 > Kinpu/Kanayama (out & back) GPX lengths likewise matched their official
 > `trailGeoStats` lengths — but those three routes have since been removed.
@@ -343,12 +349,13 @@ trail info and photos, and the per-trail basemap — USGS for US trails, GSI
 | `bridal-veil` | Bridal Veil Falls & Lake Serene | 8.0 | 2,716 | Hard | Out & back |
 | `skyline-loop` | Skyline Loop | 5.7 | 1,781 | Hard | Loop |
 | `enchantments` | The Enchantments Traverse | 19.1 | 4,845 | Very Hard | Point to point |
-| `fuji-yoshida` | Mt. Fuji: Yoshida Trail (5th Station Ascent) | 4.2 | 4,701 | Hard | Point to point |
+| `fuji-yoshida` | Mt. Fuji: Yoshida Trail (5th Station) | 10.4 | 4,701 | Hard | Loop |
 | `kinpu-odarumi` | Mount Kinpu (Odarumi Pass) | 5.2 | 1,673 | Moderate | Out & back |
 
 The two Japan trails carry `tiles:"gsi"`. Their `durationFormatted`-derived
-`time` values are **3 h 46 min** (Yoshida) and **3 h 15 min** (Kinpu / Odarumi
-Pass). **Update (2026-06):** the `rating`/`reviews` columns that used to follow
+`time` values are **8 – 10 h** (Yoshida — a round-trip estimate, see the round-trip
+note in §2b; the page's `durationFormatted` was the one-way ascent) and **3 h 15 min**
+(Kinpu / Odarumi Pass). **Update (2026-06):** the `rating`/`reviews` columns that used to follow
 this table were dropped — those fields no longer exist in `trails.js` and star
 ratings were removed from the UI (the list-card slot the star occupied now
 shows the hike `time` ⏱). Three Japan trails — `fuji-gotemba` (12.5 mi /
@@ -697,7 +704,7 @@ Ordered checklist to add one trail end-to-end:
    the filenames exactly.
 7. **Register both in the service worker.** Add the new `gpx/...` and
    `images/...` paths to `TRAIL_ASSETS` in `sw.js` so they are precached for
-   offline. Bump `APP_V` (currently `wa-trails-app-v19`) so clients pick up the
+   offline. Bump `APP_V` (currently `wa-trails-app-v23`) so clients pick up the
    new asset list. (`sw.js`'s tile handler — `isTile()` — already matches both
    `nationalmap.gov` and `cyberjapandata.gsi.go.jp` and serves/stores their tiles
    in **IndexedDB**, so a `tiles:"gsi"` trail's tiles save offline with no further change.)

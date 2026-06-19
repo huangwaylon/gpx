@@ -2,7 +2,8 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="オフライン対応の登山ガイド。ワシントン州と日本の10コースを地形図・GPS・標高グラフ・コースタイムで。An offline hiking guide to 10 trails in Washington State and Japan.">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -35,7 +36,7 @@
       <div class="head-top">
         <span class="eyebrow" data-i18n="tagline">山と渓谷の道しるべ</span>
         <div class="head-actions">
-          <button type="button" id="dl-all" class="dl-all-btn" data-i18n-aria="dlAllAria" aria-label="すべての地図をオフライン保存">
+          <button type="button" id="dl-all" class="dl-all-btn">
             <span class="dl-ic" aria-hidden="true"></span><span class="dl-lbl"></span>
           </button>
           <button type="button" id="lang-toggle" class="lang-btn" data-i18n="langOther">EN</button>
@@ -43,7 +44,7 @@
       </div>
       <h1 data-i18n="appName">梅ちゃんのトレイル</h1>
     </header>
-    <div id="filter-bar">
+    <div id="filter-bar" role="toolbar" aria-label="Filter and sort trails" data-i18n-aria="filterBarAria">
       <button type="button" class="chip active" data-filter="all" data-i18n="filterAll">すべて</button>
       <button type="button" class="chip" data-filter="moderate" data-i18n="filterModerate">中級</button>
       <button type="button" class="chip" data-filter="hard" data-i18n="filterHard">上級</button>
@@ -63,7 +64,7 @@
       <span class="lr-text"><span class="lr-label"></span> · <span class="lr-trail"></span></span>
       <span class="lr-time"></span>
     </button>
-    <div id="trail-list"></div>
+    <div id="trail-list" role="list"></div>
   </section>
 
   <!-- ═══════════ DETAIL SCREEN ═══════════ -->
@@ -74,14 +75,14 @@
       </button>
       <span id="detail-title"></span>
     </div>
-    <div id="map"></div>
+    <div id="map" role="application" data-i18n-aria="mapAria" aria-label="Trail map"></div>
     <button type="button" class="map-fab recenter" id="btn-gps" data-i18n-aria="gpsAria" aria-label="現在地">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2"/><path d="M12 2.5v3"/><path d="M12 18.5v3"/><path d="M2.5 12h3"/><path d="M18.5 12h3"/></svg>
     </button>
     <button type="button" class="map-fab track" id="btn-track" data-i18n-aria="trackStartAria" aria-label="歩行の記録を開始"></button>
 
     <!-- Live trail-progress HUD (shown only while tracking) -->
-    <div id="track-hud" hidden role="status" aria-live="polite">
+    <div id="track-hud" hidden>
       <div class="th-bar"><span class="th-fill"></span></div>
       <div class="th-row">
         <span class="th-pct">0%</span>
@@ -94,7 +95,7 @@
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6 18 18"/><path d="M18 6 6 18"/></svg>
         </button>
       </div>
-      <div class="th-msg" hidden></div>
+      <div class="th-msg" role="status" aria-live="polite" hidden></div>
     </div>
 
     <!-- Resume prompt — offered when a saved tracking session for this trail survived a reload -->
@@ -112,7 +113,7 @@
     </div>
 
     <div id="sheet">
-      <div class="sheet-grip" id="grip"></div>
+      <div class="sheet-grip" id="grip" role="button" tabindex="0" aria-expanded="false" data-i18n-aria="sheetToggle" aria-label="Expand or collapse trail details"></div>
       <div id="sheet-peek">
         <div class="pk-title" id="pk-title"></div>
         <div class="pk-meta" id="pk-meta"></div>
