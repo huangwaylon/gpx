@@ -7,9 +7,12 @@
 
 > **Tile storage (ADR-12):** saved map tiles live in **IndexedDB** (`tiles-db.js` →
 > `window.TileStore`), **not** the Cache API. Cache Storage holds **only** the app shell, in a
-> single cache `APP_V` (`wa-trails-app-v19`). The body below reflects this; for the rationale see
+> single cache `APP_V` (`wa-trails-app-v20`). The body below reflects this; for the rationale see
 > ADR-12 in `docs/DECISIONS-AND-LESSONS.md`. **Cold-relaunch auto-resume (ADR-13):** a relaunch
 > mid-hike lands straight on the trail screen and resumes the live session (see §10a).
+> **Completion-manifest download gate:** a trail reads as "saved" only when a `localStorage`
+> manifest records a *complete* download **and** that record's multi-zoom probe tiles are still in
+> IndexedDB — incidentally-cached or partial tiles can no longer fake a green ✓ (see §12).
 
 ---
 
@@ -116,7 +119,8 @@ global, `window.I18N` (`i18n.js:6`), holding all UI strings and the Japanese ove
 
 - **`ui.{en,ja}`** — static UI strings keyed by name (`appName`, `tagline`, filter labels,
   section headings, the download-button labels `dlAll`/`dlAllDone`, the per-trail download labels
-  `dlOne`/`dlOneDone` and the `dlOffline` warning, the attribution credits
+  `dlOne`/`dlOneDone`, the `dlOffline` warning and the download-result alerts `dlPartial`/`dlQuota`,
+  the attribution credits
   `attribTrail`/`attribUsgs`/`attribGsi`, marker labels, alerts, …) (`i18n.js:9-130`).
 - **`fn.{en,ja}`** — functions producing locale-aware **dynamic** strings, called via `tf()`.
   Currently one entry, `planParty(n)` (EN `"<n> hikers"` / JA `"<n>人"`), used by the YAMAP
@@ -177,13 +181,15 @@ defaults to **`'ja'`** (`app.js:110-111`). The helpers:
   `[data-i18n]` / `[data-i18n-aria]` node, sets `document.title` to `t('appName')`, and calls
   **`updateDlBtn()`** so the global download button's label tracks the language (§12). It runs
   on boot (`app.js:166`) and again on every language switch.
-- **`setLang(next)`** (`app.js:147`) — sets `lang`, persists it to `localStorage.lang`,
-  re-runs `applyStaticI18n()`, **live-re-renders the list** (`renderList()`), and if a detail
-  view is open re-renders it (`#detail-title`, `renderPeek()`, `renderSheetBody()`), calls
+- **`setLang(next)`** (`app.js:170`) — sets `lang`, persists it to `localStorage.lang`,
+  re-runs `applyStaticI18n()`, **live-re-renders the list** (`renderList()`) and the list
+  resume banner (`updateListResume()`), and if a detail view is open re-renders it
+  (`#detail-title`, `renderPeek()`, `renderSheetBody()`), then calls **`setSheet(sheetState)`** so
+  the peek height / FAB offsets / map padding re-fit to the JA↔EN content-height difference, calls
   **`redrawTrailLabels()`** to re-bind the Leaflet marker popups **without rebuilding the
-  map**, and re-localizes the tracking FAB/HUD (`updateTrackUI()`/`updateHUD()`) and re-draws
-  the GPS profile cursor (`syncGpsCursor()`). It is wired to `#lang-toggle` in `bindGlobal()`
-  (`app.js:240`).
+  map**, re-localizes the tracking FAB/HUD (`updateTrackUI()`/`updateHUD()`) and any open resume
+  prompt (`renderResumePrompt()`), and re-draws the GPS profile cursor (`syncGpsCursor()`). It is
+  wired to `#lang-toggle` in `bindGlobal()` (`app.js:300`).
 
 ---
 
@@ -394,11 +400,14 @@ live `"NN%"` percentage with a CSS gradient fill driven by a `--p` custom proper
 and the button turns green (`.dl-all-btn.done`, `app.css:93`).
 
 **Per-trail status (ADR-15) is also shown**, on each list card's `.card-dl` button. State lives in a
-`cardDl` slug→state `Map` (so it survives `renderList` re-renders) and is painted by **`setCardDl()`**:
+`cardDl` slug→state `Map` (so it survives `renderList` re-renders), and the busy **percentage** lives
+in a parallel `cardDlPct` slug→number `Map` so `renderList` can restore the busy ring's `--p` after a
+filter/sort/language re-render mid-download. Both are painted by **`setCardDl()`**:
 idle (download arrow), busy (a determinate conic ring driven by `--p`, `.card-dl.busy`), done (pine-soft
-+ check, `.card-dl.done`). On boot, `refreshCacheStatus()` (§12) probes one sample tile per trail via
-`trailSaved()` and sets BOTH each card's state AND `dlState` to `'done'` only if **every** trail's
-sample is cached. The full download/progress machinery is documented in §12.
++ check, `.card-dl.done`). On boot, `refreshCacheStatus()` (§12) checks each trail via `trailSaved()` —
+which consults the **completion manifest** plus a **multi-zoom probe** of IndexedDB, *not* a single
+center tile — and sets BOTH each card's state AND `dlState` to `'done'` only if **every** trail is
+verified saved. The full download/progress machinery is documented in §12.
 
 ---
 
@@ -475,13 +484,29 @@ There is **no download button in the sheet** — downloading happens from the he
 3. `L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center,
    zoom:13, tap:true })` — the default zoom control is suppressed so it can be re-added in a
    custom position; `tap:true` enables Leaflet's tap handler for touch.
-4. Add a **zoom control at `topright`** (`L.control.zoom({ position:'topright' })`,
-   `app.js:420`).
-5. Add the **tile layer for that source** (below).
-6. `map.on('dragstart', …)` disables GPS follow mode and clears the FAB's `.on` highlight when
-   the user pans (`app.js:422`) — see §10.
-7. Nudge the zoom control down so it clears the floating header:
-   `marginTop = calc(54px + env(safe-area-inset-top,0px))` (`app.js:423`).
+4. Create a dedicated **`gpsPane`** at `z-index 650` (`map.createPane('gpsPane')`) — the GPS dot +
+   accuracy circle are placed on it (§10) so the blue dot sits **above** the green walked overlay,
+   which lives on Leaflet's `overlayPane` (z400).
+5. Add a **zoom control at `topright`** (`L.control.zoom({ position:'topright' })`,
+   `app.js:513`).
+6. Add the **tile layer for that source** (below).
+7. `map.on('dragstart', …)` disables GPS follow mode and clears the FAB's `.on` highlight when
+   the user pans (`app.js:517`) — see §10.
+8. `map.on('zoomend', applyMaxBounds)` — re-clamp the pannable area to the cached box at the new
+   zoom (the offline-cache padding `padFor(z)` tightens as you zoom in; see "Per-zoom max bounds"
+   below).
+9. Nudge the zoom control down so it clears the floating header:
+   `marginTop = calc(54px + env(safe-area-inset-top,0px))` (`app.js:519`).
+
+### Per-zoom max bounds — `applyMaxBounds()`
+
+**`applyMaxBounds()`** (`app.js:526`) clamps the map's pannable area (`map.setMaxBounds`) to the
+track's bounds expanded by **`padFor(currentZoom)`** — the *same* zoom-aware padding the offline
+download uses to decide which tiles to cache (§12). It is recomputed on every `zoomend` and after
+`fitTrack()`. Because `padFor` tightens as you zoom in, the pannable box at each zoom matches the
+cached box at that zoom, so **offline you can't pan onto a never-cached (blank) tile**: wide roaming
+at overview zooms, held to the saved frame at max detail. The clamp is **soft** (default Leaflet
+viscosity — a gentle bounce at the edge, not a hard wall).
 
 ### Per-trail tile sources — `TILE_SOURCES` / `trailSource()`
 
@@ -534,10 +559,12 @@ no connectivity.
 `loadTrail(t)` (`app.js:426`) turns a GPX file into in-memory geometry:
 
 1. Reset `trackPts`, `trackWpts`, `totalDist`, and the tracking state (`renderPts`,
-   `walkedDist`, `progIdx`) (`app.js:427-428`).
+   `walkedDist`, `progIdx`, `reacqMiss`, and the out-and-back `turnedAround` latch) (`app.js:534-535`).
 2. **Fetch** the GPX text: `await (await fetch(t.gpx)).text()`, wrapped in try/catch that logs
-   and bails on failure (`app.js:430-431`). (When offline, the SW serves the GPX from the
-   precached `APP_V` shell — see §15.)
+   and bails on failure (`app.js:537-538`). Immediately after the await, a
+   **`if (curTrail !== trail) return`** guard (`app.js:539`) drops the result if a newer navigation
+   superseded this one mid-fetch, so trail A's track / far-end can never be drawn onto trail B's map.
+   (When offline, the SW serves the GPX from the precached `APP_V` shell — see §15.)
 3. **Parse** with `new DOMParser().parseFromString(text, 'text/xml')` (`app.js:432`).
 4. **Waypoints** — for each `<wpt>`, read `lat`/`lon` attributes and the child `<name>` (CDATA,
    whitespace-collapsed), pushing `{ lat, lon, name, d:null }` into `trackWpts`
@@ -636,8 +663,10 @@ popups in the active language **without rebuilding the map**: it walks `endMarke
 
 ### `drawProfile()` — SVG generation
 
-`drawProfile()` (`app.js:552`) renders the elevation chart into `#elev-svg`. It bails early
-if the SVG is missing or there are `< 2` track points.
+`drawProfile()` (`app.js:661`) renders the elevation chart into `#elev-svg`. It bails early
+if the SVG is missing, there are `< 2` track points, or `totalDist <= 0` (a latent
+NaN-in-SVG guard — `X(d) = (d/totalDist)*W` would otherwise divide by zero;
+`drawProfileCursor()` carries the same `totalDist <= 0` guard).
 
 1. Sizing: `W = svg.clientWidth || 340`, fixed `H = PROF_H` (96); sets the `viewBox` to `0 0 W H`
    (the SVG uses `preserveAspectRatio="none"` so it stretches to the card width).
@@ -714,52 +743,67 @@ location; its click is bound to `toggleGPS` (`app.js`, in `bindGlobal`).
   - **Watching but not following** (and we have a `curPos`) → re-enable follow, re-highlight the
     FAB, and recenter the map on the user at `max(currentZoom, 15)`.
   - **Watching and following** → `stopGPS()`.
-- **`startGPS()`** (`app.js:698`): if `navigator.geolocation` is missing, `alert(t('alertNoGeo'))`
+- **`startGPS()`** (`app.js:807`): if `navigator.geolocation` is missing, `alert(t('alertNoGeo'))`
   and bail; otherwise request a wake lock (below), set `gpsFollow = true`, highlight the FAB
-  (`.on`), and start `navigator.geolocation.watchPosition(onPos, onPosErr,
+  (`.on`), show the **"Locating…" pill** (`setLocating(true)`), and start
+  `navigator.geolocation.watchPosition(onPos, onPosErr,
   {enableHighAccuracy:true, maximumAge:4000, timeout:30000})`, storing the watch id in `gpsWatch`.
-- **`stopGPS()`** (`app.js:704`): `clearWatch`, release the wake lock, reset
-  `gpsFollow`/`curPos`, remove the GPS marker and accuracy circle, drop the FAB highlight, and
-  clear the profile position layer (`#epos`).
+- **`stopGPS()`** (`app.js:814`): `clearWatch`, release the wake lock, reset
+  `gpsFollow`/`curPos`, hide the "Locating…" pill, remove the GPS marker and accuracy circle, drop
+  the FAB highlight, and clear the profile position layer (`#epos`).
 
 ### Position updates — `onPos()`
 
-`onPos(pos)` (`app.js:711`):
+`onPos(pos)` (`app.js:821`):
 
-1. Read `latitude`/`longitude`/`accuracy`; store `curPos = {lat,lon}`.
+1. Read `latitude`/`longitude`/`accuracy`; store `curPos = {lat,lon}` and hide the "Locating…" pill.
 2. **Pulsing dot + accuracy circle.** On the first fix it creates:
-   - `gpsMk` — an `L.marker` whose icon is a `<div class="gps-dot">` (the blue dot with the CSS
-     `gpspulse` keyframe ring, `app.css:361-363`), at `zIndexOffset:1000` so it sits above the
-     track.
-   - `gpsAcc` — an `L.circle` of `radius:accuracy`, faint blue fill (`C.blue`), used as the
-     accuracy halo.
-   On subsequent fixes it just repositions both and updates the circle's radius (`app.js:714-717`).
+   - `gpsMk` — an `L.marker` **on `gpsPane`** (z650, created in `initMap`, §7) whose icon is a
+     `<div class="gps-dot">` (the blue dot with the CSS `gpspulse` keyframe ring), at
+     `zIndexOffset:1000`. The pane is what keeps the dot **above the green walked overlay** (on
+     `overlayPane`, z400) — without it the dot could be painted under a walked line that mirrors the
+     track right under the user.
+   - `gpsAcc` — an `L.circle` (also on `gpsPane`) of `radius:accuracy`, faint blue fill (`C.blue`),
+     used as the accuracy halo.
+   On subsequent fixes it just repositions both and updates the circle's radius (`app.js:824-827`).
 3. **Follow mode.** If `gpsFollow`, recenter the map to the new position at `max(currentZoom,15)`
-   with animation (`app.js:718`).
+   with animation (`app.js:828`).
 4. **Feed live tracking.** If a tracking session is active (`tracking && !paused`), pass the fix
-   to `updateProgress` (§10a) (`app.js:719`).
+   to `updateProgress` (§10a) (`app.js:829`).
 5. **Profile cursor.** Draw the blue GPS cursor with `drawProfileCursor(trackPts[i], false)`
    (§9), where `i` **reuses the tracking snap index** (`progIdx`) when a session is active (so it
    can't jump to the wrong overlapping leg of an out-and-back), else `nearestIdx(lat,lon).idx`
-   (`app.js:720-725`).
+   (`app.js:830-835`).
 
-`onPosErr(err)` (`app.js:727`) specifically handles permission-denied (`code === 1`) with an
-instructional `alert(t('alertDenied'))` (pointing to iOS Settings → Privacy → Location Services →
-Safari) and stops GPS.
+`onPosErr(err)` (`app.js:837`) hides the "Locating…" pill, then specifically handles
+permission-denied (`code === 1`) with an instructional `alert(t('alertDenied'))` (pointing to iOS
+Settings → Privacy → Location Services → Safari) and stops GPS.
+
+### The "Locating…" pill — `setLocating()`
+
+A transient `#gps-locating` pill is shown while a fresh fix is pending (GPS start, or a screen-on
+re-acquire) and hidden the moment a fix lands or the attempt errors. **`setLocating(on)`**
+(`app.js:841`) toggles it and manages a safety auto-hide timer set to **35 s** — deliberately
+**longer** than the 30 s `watchPosition` timeout so the geolocation **error callback** (not this
+watchdog) drives the hide. If the watchdog fired first (the old 30 s), the pill could vanish to a
+false "located" state while a fix was still genuinely pending.
 
 ### How dragging disables follow
 
 `initMap()` registers `map.on('dragstart', …)` which sets `gpsFollow = false` and removes the
-FAB's `.on` class (`app.js:422`). So as soon as the user pans the map, the app stops yanking the
+FAB's `.on` class (`app.js:517`). So as soon as the user pans the map, the app stops yanking the
 view back; tapping the FAB again re-engages follow (the second branch of `toggleGPS`).
 
 ### Screen Wake Lock
 
-- **`reqWake()`** (`app.js`) requests `navigator.wakeLock.request('screen')` (guarded by a
+- **`reqWake()`** (`app.js:850`) requests `navigator.wakeLock.request('screen')` (guarded by a
   feature check, errors swallowed) so the screen stays on while navigating. Reliable on the
   iOS 26+ target. It only helps the phone-in-hand, watch-the-map case; the pocket-and-check
-  pattern is handled by GPS-gap recovery (§10a), independent of the lock.
-- **`relWake()`** (`app.js`) releases it and nulls `wakeLock`.
+  pattern is handled by GPS-gap recovery (§10a), independent of the lock. It is **re-entrancy
+  guarded**: a `wakeReq` flag short-circuits a request that's already in flight, and a second early
+  return bails when an `!released` lock is already held — so a double `onWake()` (`pageshow` *and*
+  `visibilitychange` both firing) can't orphan a second live lock.
+- **`relWake()`** (`app.js:857`) releases it and nulls `wakeLock`.
 - **Re-acquire on visibility.** Wake locks are dropped when a tab is backgrounded, so the
   **`onWake()`** handler (`app.js`, wired to **both `pageshow` and `visibilitychange → visible`**)
   re-requests the lock when the page becomes visible again **and** GPS is still active **and** there
@@ -790,13 +834,19 @@ split is deliberate — see the design note at the end of this section.
   it **continues** that session; otherwise it `startTracking()`. It can **never** pause or reset an
   active hike — that was the old `toggleTrack` footgun (a single stray tap mid-hike paused or, while
   a resume was offered, started over and wiped progress).
-- **`togglePause()`** (`app.js`): the HUD pause/resume button — the **only** way to pause, so
-  pausing is always deliberate. Banks elapsed time on pause (`trackElapsedMs += now - trackStartTs`)
-  and resumes the clock from now (reopening GPS if it had been closed). Persists either way.
-- **`startTracking()`** (`app.js`): resets progress (`walkedDist=0`, `progIdx=-1`,
-  `reacqMiss=0`), removes any old `walkedLayer`, shows the HUD, starts GPS if it isn't already
-  running (tracking needs live fixes), starts the HUD timer (`startHudTimer()` — a 1 s clock that
-  also re-persists every ~30 s so `savedAt` stays fresh), and writes the first `persistSession()`.
+- **`togglePause()`** (`app.js:950`): the HUD pause/resume button — the **only** way to pause, so
+  pausing is always deliberate. On pause it banks elapsed time (`trackElapsedMs += max(0, now -
+  trackStartTs)` — the `max(0,…)` guards a backward device-clock step, see "Elapsed-time clamp"
+  below) and freezes the clock. On resume it re-stamps `trackStartTs = now` and **revives GPS**: if
+  the watch was closed it `startGPS()`s; if the watch *survived* a long pocket-pause it calls
+  `refreshGpsAfterGap()` (the watch may have gone silently dead and `progIdx` is stale, so re-acquire
+  rather than trust it). Persists either way.
+- **`startTracking()`** (`app.js:969`): resets progress (`walkedDist=0`, `progIdx=-1`,
+  `reacqMiss=0`, `turnedAround=false`), removes any old `walkedLayer`, shows the HUD, starts GPS if
+  it isn't already running (tracking needs live fixes), starts the HUD timer (`startHudTimer()` — a
+  1 s clock that **also re-persists every ~30 s — even while paused** — so `savedAt` stays fresh and
+  a long summit-pause's session doesn't age toward staleness and get dropped), and writes the first
+  `persistSession()`.
 - **`stopTracking()`** (`app.js`): resets the **in-memory** session — hides the HUD, removes
   the green overlay, zeroes progress/elapsed — but **leaves GPS as-is** (the location dot can stay
   on) **and leaves the saved session in `localStorage` intact**, so reopening the trail can still
@@ -817,12 +867,25 @@ track vertex and advances the walked distance:
 - **Off-trail gate.** `offTrailGate(acc)` (`app.js`) = `max(25, min(60, 2.5*acc))` m — fixes
   whose nearest vertex is farther than the gate are rejected (progress holds), scaled to GPS
   accuracy (looser under tree cover).
-- **First fix / re-acquire** uses `acquireIdx(lat, lon, gate, near)` (`app.js`): among in-gate
-  vertices it takes the one whose distance-along is **closest to `near`** — the progress already
-  reached (`walkedDist`). On the **first** fix `near` is 0, so it picks the smallest-distance-along
+- **First fix / re-acquire** uses `acquireIdx(lat, lon, gate, near, lo, hi)` (`app.js:1022`): among
+  in-gate vertices **in the scan range `[lo..hi]`** (default = whole track) it takes the one whose
+  distance-along is **closest to `near`** — the progress already reached (`walkedDist`). On the
+  **first** fix `near` is 0, so it picks the smallest-distance-along
   vertex, and an out-and-back's trailhead/return overlap can't be mistaken for near-complete
   progress; **mid-hike** `near = walkedDist`, so a re-acquire on the return leg snaps to the return
   vertex (≈`walkedDist`) instead of jumping backward onto the overlapping outbound leg.
+- **Out-and-back descent latch — `turnedAround` + `turnIdx`.** On an out-and-back the outbound and
+  return legs overlap *geographically*, so the "closest distance-along to `walkedDist`" tie-break
+  alone could still re-snap onto the **outbound** leg during the descent — making the elevation
+  cursor / progress leap back up the climb on every screen-wake. To prevent this, `updateProgress`
+  sets a module-level **`turnedAround`** latch once `progIdx >= turnIdx` **or** `walkedDist >=
+  turnDist - SNAP_BACK_M` (`turnIdx` is the far-end vertex index, cached alongside `turnDist` in
+  `precomputeProfileAndFarEnd`, §8; the small `SNAP_BACK_M` slack is a safety net for a screen-off
+  gap right at the summit that leaves `walkedDist` just short of `turnDist`). While latched, a
+  re-acquire restricts its scan to the **return half** `[turnIdx..end]`, so every descent re-acquire
+  stays on the return leg. The latch is reset in `start`/`stopTracking` and `loadTrail`, and
+  **re-derived from the restored progress** in `resumeSession` (so a relaunch on the descent keeps
+  re-acquiring onto the return leg).
 - **Subsequent fixes** use `nearestIdx()` over a **forward window** only —
   `[progIdx - SNAP_BACK_M, progIdx + SNAP_FWD_M]` (constants `SNAP_BACK_M=80`, `SNAP_FWD_M=250` m,
   `app.js:57-58`) — so the return leg of an out-and-back (which overlaps the outbound) can't match
@@ -831,7 +894,8 @@ track vertex and advances the walked distance:
   the trailhead, pull it out at the summit, and every fix lands kilometres past the window and is
   rejected, stranding progress near the last snap. After **`REACQUIRE_AFTER` = 3** (`app.js:63`)
   consecutive out-of-window rejections (counted in `reacqMiss`), `updateProgress` falls back to
-  `acquireIdx()` for that fix, re-snapping from scratch so progress jumps to where you actually are.
+  `acquireIdx()` for that fix (whole-track, or — once `turnedAround` — the return half only),
+  re-snapping from scratch so progress jumps to where you actually are.
   Since `walkedDist` is monotonic and `acquireIdx(…, walkedDist)` snaps to the vertex nearest the
   progress already reached, this only ever fills *forward* on a curated route — it never un-colors.
 - **Monotonic advance.** `walkedDist` only ever grows; it recolors via `recolorProgress()`
@@ -842,12 +906,18 @@ track vertex and advances the walked distance:
 
 ### The HUD — `updateHUD()`
 
-`updateHUD()` (`app.js`) fills the `#track-hud` percent (`.th-pct`), progress bar (`.th-fill`),
+`updateHUD()` (`app.js:1091`) fills the `#track-hud` percent (`.th-pct`), progress bar (`.th-fill`),
 and elapsed time (`.th-num`, from `fmtElapsed(elapsedMs())`). **Out-and-back progress** is measured
 against the **far end** (`turnDist`, §8) so reaching the turnaround reads 100%; loops and
 point-to-point measure against the full `totalDist`. At 100% it shows a localized message
 (`trackTurnaround` for out-and-back, else `trackComplete`). It is also called immediately on
 `visibilitychange → visible` (§10) so the displayed clock repaints the moment the phone wakes.
+
+> **Known limitation — Mt. Fuji (`fuji-yoshida`).** Its GPX is a full round trip, but the trail is
+> declared **`route: "Point to point"`**, so progress is measured against the whole `totalDist` and
+> the summit (the geographic midpoint of the round trip) reads **~50%**, with no End marker at the
+> trailhead-coincident finish. This is **left as-is by product choice**, not a bug to fix — the
+> out-and-back turnaround handling above does not apply to it.
 
 ### Surviving a reload — session persistence & resume
 
@@ -870,15 +940,22 @@ therefore mirrored to `localStorage` under **`SESSION_KEY`** (`app.js`):
   within `SESSION_MAX_AGE_MS` (18 h) **and** it is either **paused** (a deliberate pause is honored
   however short) **or** clears the short-session floor (`savedElapsedMs ≥ RESUME_MIN_MS`, 20 s — which
   filters accidental tap-and-leave starts).
+- **Elapsed-time clamp.** Every elapsed computation — `elapsedMs()`, `savedElapsedMs(s)`, and
+  `togglePause()`'s banking — uses `Math.max(0, Date.now() - trackStartTs)`. This guards a
+  **backward device-clock step** (an iOS NTP correction after hours off-grid): without the clamp,
+  elapsed could go negative and make `freshResumable` silently discard a genuine multi-hour hike as
+  "trivially short".
 - **`maybeOfferResume(trail)`** (`app.js`), called at the end of `openDetail()` after the track
   loads (when **not** auto-resuming), offers the **`#track-resume`** prompt for this trail's saved
   session and **hides the start FAB** while the prompt owns the choice. Rendered by
   `renderResumePrompt()` with the saved percent + elapsed, re-localized live by `setLang()`.
-- **`resumeSession(s)`** (`app.js`) restores `walkedDist`/`progIdx`/`paused`, redraws the green
-  overlay, reopens GPS (only if not paused), restarts the HUD timer, and re-stamps the session.
-  Bound to the prompt's **Resume**; **Dismiss** calls `clearSession()` (and the start FAB returns).
-  Because the windowed snap resumes from the restored `progIdx`, the **stale-window re-acquire**
-  (above) snaps you to your real position within a few fixes.
+- **`resumeSession(s)`** (`app.js`) restores `walkedDist`/`progIdx`/`paused`, re-derives the
+  out-and-back `turnedAround` latch from that restored progress, redraws the green overlay, and (if
+  not paused) revives GPS — `startGPS()` if the watch was closed, else `refreshGpsAfterGap()` — while
+  **arming an immediate re-acquire** (`reacqMiss = REACQUIRE_AFTER`) so the first post-resume fix
+  re-snaps from scratch (the saved position is known-stale) rather than crawling through 3 rejected
+  windowed fixes. It then restarts the HUD timer and re-stamps the session. Bound to the prompt's
+  **Resume**; **Dismiss** calls `clearSession()` (and the start FAB returns).
 
 `RESUME_MIN_MS` (20 s, `app.js`) is the short-session floor inside `freshResumable`, shared by every
 resume path. A **paused** session bypasses it (pausing is intentional, so it's always resumable).
@@ -913,21 +990,33 @@ all: iOS keeps the page **resident** and foregrounds it with **no `load` event**
 never runs. The lifecycle layer handles this. iOS fires wake events inconsistently, so we hook
 **both `pageshow` and `visibilitychange → visible`** through one idempotent **`onWake()`** (and
 **both `pagehide` and `visibilitychange → hidden`** through `onHide()`, which persists the session
-and clears `gpsWakePending` (a self-heal: iOS can abandon a wake-time `getCurrentPosition`
-mid-flight when the phone is re-pocketed, firing neither callback, which would otherwise leave the
-flag stuck and make every later `refreshGpsAfterGap()` bail). `onWake()`:
+and clears `gpsWakePending` + its `gpsWakeGuard` timer — a self-heal: iOS can abandon a wake-time
+`getCurrentPosition` mid-flight when the phone is re-pocketed, firing neither callback, which would
+otherwise leave the flag stuck and make every later `refreshGpsAfterGap()` bail). `onWake()`:
 **(1)** refreshes the list `#list-resume` banner so a resident wake onto the list still surfaces the
-hike; **(2)** on a trail screen with a resumable session but no prompt yet, re-surfaces the offer;
-**(3)** if tracking, repaints the clock at once (the 1 s interval is suspended while hidden); and
-**(4)** if GPS was live, runs `refreshGpsAfterGap()` — which **arms an immediate re-acquire**
+hike; **(2)** on a trail screen with a resumable session but no prompt yet, re-surfaces the offer
+(**stood down while `booting` or `openingDetail`** is set — see below); **(3)** if tracking, repaints
+the clock at once (the 1 s interval is suspended while hidden); and
+**(4)** if GPS was live, runs `refreshGpsAfterGap()` — **but only when not paused**
+(`!(tracking && paused)`): a paused wake skips the re-acquire so it can't taint the eventual un-pause
+with a spurious wrong-leg re-snap (the wake-lock re-acquire above still runs so the screen stays on
+if the user un-pauses). `refreshGpsAfterGap()` itself **arms an immediate re-acquire**
 (`reacqMiss = REACQUIRE_AFTER`), **kicks one fresh fix** (`getCurrentPosition({maximumAge:0})`), and
 **`restartWatch()`s** the position watch. The watch restart matters: iOS can leave `watchPosition`
 **silently dead** after a screen-off gap (no fixes, no error), so a one-shot alone would paint one
 fix and then nothing — re-issuing the watch (no permission re-prompt within a granted session)
 restores continuity. `refreshGpsAfterGap()` is deduped by **`gpsWakePending`** so a rapid lock/unlock
-or a `pageshow`+`visibilitychange` double-fire can't stack overlapping requests. A `#gps-locating`
-"Locating…" pill (`setLocating()`) covers the brief GPS cold-start. (`booting` suppresses the wake
-resume-surfacing during the very first load, where `bootRoute` already owns the resume.)
+or a `pageshow`+`visibilitychange` double-fire can't stack overlapping requests; a **`gpsWakeGuard`**
+timer (32 s) **always** clears that flag afterward, even if iOS fires neither GPS callback, so GPS
+can never get permanently wedged. A `#gps-locating`
+"Locating…" pill (`setLocating()`) covers the brief GPS cold-start.
+
+> **Two boot/open guards stand `onWake`'s resume-surfacing down so it can't race the owner of that
+> decision:** **`booting`** (true until just after the first `load`) defers to `bootRoute`, which owns
+> the initial-load resume; and **`openingDetail`** (set true at the top of `openDetail` and cleared in
+> its `finally`) defers to `openDetail`'s own post-`loadTrail` resume — without it a resident wake
+> firing during a cold relaunch's `openDetail` could flash a resume prompt that `openDetail` then
+> replaces. `onWake` re-surfaces a resume only when `!booting && !openingDetail`.
 
 This does **not** add background tracking (impossible on iOS web — see `IOS-PWA-GUIDE.md`): no GPS
 fixes are captured while the screen is off, and no breadcrumb path is recorded. It makes the
@@ -998,43 +1087,68 @@ connectivity. **Saved tiles go into IndexedDB** (`tiles-db.js` → `TileStore`),
 The **global** `#dl-all` button (`.dl-all-btn`, `index.html:38`, bound to `downloadAll` in
 `bindGlobal()`) saves **all** trails in one tap; a **per-trail** `.card-dl` button on each list
 card (rendered by `renderList`, wired via one delegated `#trail-list` listener to `downloadOne`)
-saves just that trail. Both share the same engine — `saveTiles(urls, onProgress)` plus
-`trailTileURLs(trail)` — and the same `trailSaved(trail)` probe. The old download **modal** is
+saves just that trail. Both share the same engine — `saveTiles(urls, onProgress)` →
+`downloadTrail(trail, urls, onProgress)`, fed by `trailTileURLs(trail)` — and the same
+`trailSaved(trail)` probe. The old download **modal** is
 gone (each button's own idle/percent/done state is its status); iOS has no background fetch, so
 every download is a foreground, user-initiated action with inline progress on the button itself.
 
+### The completion manifest — why "saved" is gated on a record, not a tile probe
+
+A trail counts as **saved** only when **both** are true: a **completion-manifest record** exists for
+it in `localStorage`, **and** that record's multi-zoom **probe tiles are all still in IndexedDB**.
+The manifest (`MANIFEST_KEY = 'tileManifest'`) maps `slug → { savedAt, probes }`, where `probes` is a
+handful (~8) of tile URLs spread evenly across the trail's zoom-ordered tile set (`sampleProbes(urls,
+k=8)`). Helpers: `readManifest` / `writeManifest` / `markSaved(slug, urls)` (writes a record) /
+`clearSaved(slug)` (forgets one).
+
+**Why it exists (the reported bug):** the *old* `trailSaved` probed **one z14 center tile**, and the
+button's "done" was gated on `ok > 0`. But the service worker caches **every tile it serves while you
+browse online** (the §15 tile branch, `e.waitUntil(TileStore.put(...))`), so merely *viewing* a map
+online planted that one probe tile and **faked a green ✓ while most tiles were missing** → a blank map
+offline. A partial/interrupted download likewise flipped to ✓. The manifest gate fixes both: a
+manifest record is written **only** by a download that committed its *whole* expected set with **zero
+hard failures**, so incidentally-cached SW tiles (which write no record) and partial downloads (which
+clear the record) can never masquerade as a complete offline download.
+
 ### Button state — `dlState` / `updateDlBtn()` / `updateDlProgress()`
 
-The button's appearance is driven by the module-level **`dlState`** (`'idle' | 'busy' |
+The global button's appearance is driven by the module-level **`dlState`** (`'idle' | 'busy' |
 'done'`, `app.js:88`):
 
-- **`updateDlBtn()`** (`app.js`) toggles the `.busy` / `.done` classes and sets the
+- **`updateDlBtn()`** (`app.js:1399`) toggles the `.busy` / `.done` classes and sets the
   static label — `t('dlAll')` in `idle`, `t('dlAllDone')` in `done`. `applyStaticI18n()` calls
   it so the label tracks the language (§1a).
-- **`updateDlProgress(done,total)`** (`app.js`) computes a percentage, writes it to the
+- **`updateDlProgress(done,total)`** (`app.js:1408`) computes a percentage, writes it to the
   button's **`--p` CSS custom property** (which drives the gradient fill of `.dl-all-btn.busy`,
   `app.css:89-92`), and — while `busy` — sets the button text to the live `"NN%"`.
+
+The per-trail card buttons are painted by **`setCardDl(slug, state, pct)`** (`app.js:1418`) off the
+`cardDl` slug→state map; the busy **percentage** is mirrored into a `cardDlPct` slug→number map so
+`renderList` can restore the busy ring's `--p` after a filter/sort/language re-render *mid-download*
+(item 7 — the running download holds its slug in a closure and keeps painting on its next tick).
 
 ### Web Mercator tile math
 
 The download converts a lat/lon box to **XYZ tile ranges** at each zoom:
 
-- **`ll2t(lat, lon, z)`** (`app.js`) is the standard slippy-map projection:
+- **`ll2t(lat, lon, z)`** (`app.js:1258`) is the standard slippy-map projection:
   `n = 2^z`, `x = floor(n*(lon+180)/360)`, and
   `y = floor(n*(1 - ln(tan(φ) + sec(φ))/π)/2)` with `φ = lat·π/180`. Returns `{x, y}`.
-- **`tRange(b, z)`** (`app.js`) projects the SW and NE corners and returns the inclusive
+- **`tRange(b, z)`** (`app.js:1256`) projects the SW and NE corners and returns the inclusive
   `{x0,x1,y0,y1}` tile range (min/max-ed so corner order doesn't matter).
 - **`DL_MIN_Z = 10`** (`app.js:11`) — the overview floor for downloads. Each trail caches from
   z10 up to **its source's `maxZoom`**: **z10–16** for USGS, **z10–18** for GSI. The upper bound
-  is the source's real native ceiling, so no 404-ing tiles are requested.
+  is the source's real native ceiling, so no 404-ing tiles are requested. (The *same* `padFor(z)`
+  padding that bounds the download also clamps panning per zoom, §7's `applyMaxBounds`.)
 
 ### Per-trail bounding box — `gpxBox()`
 
-**`gpxBox(trail)`** (`app.js`) is **async**: it fetches the trail's GPX (served from the
+**`gpxBox(trail)`** (`app.js:1265`) is **async**: it fetches the trail's GPX (served from the
 SW precache, so it works offline too), parses it, and computes the min/max lat/lon over all
 `<trkpt>` elements. If parsing yields no track points it **falls back** to `trail.center ±
 0.02°`. It returns the **raw** box; the surrounding context buffer is added later, per zoom,
-by `tileURLsFor()` via **`padFor(z)`** (`app.js`) — **0.05°** at z≤12, **0.03°** at z13–14,
+by `tileURLsFor()` via **`padFor(z)`** (`app.js:16`) — **0.05°** at z≤12, **0.03°** at z13–14,
 **0.015°** at z15–16, **0.008°** at z17, **0.004°** at z18. Padding is heaviest at overview
 zooms (where you pan to see surrounding terrain) and progressively tighter toward max detail,
 since each extra zoom quadruples the tile count and you rarely pan far while reading z17–18
@@ -1042,39 +1156,59 @@ detail right at your position. This replaces
 the old `trailBox()`/`countTiles()`/`tileURLs()` trio, which depended on the *currently open*
 trail's live `trackPts`; `gpxBox()` works for any trail without it being open.
 
-### Expanding a box to URLs — `tileURLsFor()`
+### Expanding a box to URLs — `tileURLsFor()` / `trailTileURLs()`
 
-**`tileURLsFor(box, src)`** (`app.js`) expands a box into every concrete tile URL
+**`tileURLsFor(box, src)`** (`app.js:1282`) expands a box into every concrete tile URL
 across **z10 up to `src.maxZoom`**, **expanding the box by `padFor(z)` for each zoom**, then
 substituting tokens **by name** into that source's template
 (`src.url.replace('{z}',z).replace('{y}',y).replace('{x}',x)`). Because it substitutes by name,
 the same routine builds both the USGS `{z}/{y}/{x}` and the GSI `{z}/{x}/{y}` URLs correctly
-(§7), each to its own zoom ceiling.
+(§7), each to its own zoom ceiling. **`trailTileURLs(trail)`** (`app.js:1347`) is the one-liner that
+wraps `tileURLsFor(await gpxBox(trail), trailSource(trail))` for one trail.
 
-### Batched fetch into IndexedDB — `downloadAll()`
+### Batched fetch into IndexedDB — `saveTiles()` / `downloadTrail()` / `downloadAll()`
 
-**`downloadAll()`** (`app.js`) is the whole flow:
+**`saveTiles(urls, onProgress)`** (`app.js:1301`) is the shared fetch-and-commit engine. It dedupes
+the list with a `Set` and walks it in **batches of 8** (`BATCH = 8`, `Promise.allSettled` so one bad
+tile can't abort a batch). For each tile it **classifies** the outcome rather than just counting
+successes:
 
-1. Bail if already `busy` **or** IndexedDB is unavailable (`!('indexedDB' in window)`); set
-   `dlState='busy'`, `updateDlBtn()`, and seed the progress bar (`updateDlProgress(0,1)`).
-2. **Gather every tile URL across all trails.** For each `trail` of `TRAILS`, `await
-   gpxBox(trail)` and push `tileURLsFor(box, trailSource(trail))` — i.e. each trail
-   contributes tiles from **its own** source (USGS to z16 or GSI to z18). The combined list is then
-   **deduped** with a `Set`, so tiles shared by overlapping trails are fetched once.
-3. Iterate the URLs in **batches of 8** (`BATCH = 8`). For each URL it **skips ones already
-   present** (`await TileStore.has(u)`), otherwise `fetch(u, {mode:'cors'})`. **Who stores the
-   bytes depends on whether a Service Worker controls the page:**
-   - **Controlled** (`navigator.serviceWorker.controller` truthy — the normal case): the SW's tile
-     `fetch` handler intercepts the request and writes the response into IndexedDB itself, so the
-     page only has to **trigger** the fetch.
-   - **Uncontrolled** (rare — a first-ever load before the SW has claimed the page): the page
-     **stores directly** via `TileStore.put(u, {body: await r.arrayBuffer(), type})` when the
-     response is `ok`.
+- **`ok`** — already present (`TileStore.has`) **or** fetched `ok` and **committed to IndexedDB on
+  the page** (`TileStore.put(u, {body: await r.arrayBuffer(), type})`). Committing **on the page**
+  (rather than leaning on the SW's deferred `e.waitUntil` write, which iOS can cut off when it
+  suspends the backgrounded SW) is what makes "saved" mean *stored*, not merely *fetched*. On the
+  SW-controlled path the SW also caches the same key — an idempotent duplicate, not a second fetch.
+- **`absent`** — the host returned **404**: there is legitimately no tile there, so it **counts as
+  covered, not a failure**.
+- **`fail`** — a network error, the SW's offline **503**, a **5xx**, or an IndexedDB **quota abort** —
+  *retryable*, and what blocks a trail from being recorded complete. A `QuotaExceededError` also sets
+  the module flag **`dlQuotaHit`** so the caller can warn.
 
-   Each settled request bumps `done` and calls `updateDlProgress(done, total)`.
-   `Promise.allSettled` ensures one failed tile doesn't abort the batch. The page opens **no Cache**
-   at any point.
-4. On completion set `dlState='done'` and `updateDlBtn()` (green "✓ Maps saved" label).
+It returns **`{ok, absent, fail}`** and reports progress via `onProgress(done, total)`.
+
+**`downloadTrail(trail, urls, onProgress)`** (`app.js:1351`) is the per-trail core both buttons share:
+it runs `saveTiles`, then **writes the completion-manifest record iff `fail === 0`** (`markSaved`),
+else **clears any record** (`clearSaved`) — so a partial/interrupted download can never claim saved.
+
+**`downloadAll()`** (`app.js:1361`) is the global flow:
+
+1. Bail if already `busy` **or** IndexedDB is unavailable; if `!navigator.onLine`, bail with the
+   `dlOffline` alert (don't animate to a false ✓ offline). Reset `dlQuotaHit`, set `dlState='busy'`,
+   `updateDlBtn()`, seed the bar.
+2. Build **each trail's URL list up front** (`trailTileURLs`), mark every card `busy`, and sum the
+   grand total so the **single combined progress bar** reflects true overall progress.
+3. **Iterate trails one-by-one** — a per-trail loop over `downloadTrail`, *not* one big deduped list.
+   Trails are geographically disjoint, so there's no cross-trail tile overlap to dedupe, and running
+   per-trail lets **each card earn its own honest completion record** and paint live (busy→done/idle).
+   Progress is offset by the running `base` so the global bar advances smoothly across trails.
+4. Drop `dlState` to `'idle'`, then **reconcile the global state via `await refreshCacheStatus()`**
+   (which sets `done` only if *every* trail is verified saved) and `updateDlBtn()`.
+5. Finally, alert **`dlQuota`** if storage ran out, else **`dlPartial`** if any trail had `fail > 0`.
+
+**`downloadOne(slug)`** (`app.js:1385`) is the per-trail card button: same guards (busy / IndexedDB /
+`navigator.onLine`) and the same `downloadTrail` core, scoped to one trail and painted via
+`setCardDl`. On success it runs `refreshCacheStatus().then(updateDlBtn)` (this trail completing may
+flip the global button to ✓); otherwise it alerts `dlQuota` / `dlPartial`.
 
 > Because the page and the SW share the **same IndexedDB store** (`tiles-db.js` →
 > `wa-trails-tiles`), every pre-downloaded trail — US or Japan — is later served **IndexedDB-first**
@@ -1086,19 +1220,27 @@ the same routine builds both the USGS `{z}/{y}/{x}` and the GSI `{z}/{x}/{y}` UR
 > z17–18 GSI levels.) iOS's 7-day eviction applies to the IndexedDB store just as it did to the old
 > tile cache.
 
-### Status sampling — `refreshCacheStatus()`
+### Status verification — `trailSaved()` / `refreshCacheStatus()`
 
-**`refreshCacheStatus()`** (`app.js`) decides the button's startup state. It bails if IndexedDB is
-unavailable (`!('indexedDB' in window)`), and otherwise, for **each** trail, computes the **z14
-center tile** (`ll2t(center, 14)`), builds that tile's URL **from that trail's own source** (so the
-GSI trails are probed against the GSI URL), and checks **`TileStore.has(u)`** (an indexed key
-count — it never deserializes the bytes). It sets `dlState='done'` **only if every trail's sample
-tile is present**, otherwise `'idle'`. It runs **off the boot critical path**: boot calls
-`refreshCacheStatus().then(updateDlBtn)` **without awaiting it before routing** (ADR-12 — awaiting a
-Cache open here is what used to stall launch once many tiles were saved). It also skips while a
-download is `busy`. (It samples a single representative tile per trail rather than verifying the
-whole set — so a partially-downloaded set can still read as `done`; see the open caveats in
-`CLAUDE.md`.)
+**`trailSaved(trail)`** (`app.js:1432`) is the truth source for "is this trail saved?". It reads the
+trail's **completion-manifest record**; with no record it returns `false`. Otherwise it verifies that
+**all** of the record's probe tiles (the ~8 spread across zoom levels by `sampleProbes`) are still in
+IndexedDB via `TileStore.has`. If **any** probe is missing — i.e. iOS evicted the set under the 7-day
+rule — it `clearSaved(slug)`s the now-stale record and returns `false` (so the trail is demoted *and*
+its record forgotten).
+
+**`refreshCacheStatus()`** (`app.js:1443`) decides the buttons' startup state from that truth. It
+bails if IndexedDB is unavailable or a download is `busy`; otherwise, for **each** trail, it calls
+`trailSaved(trail)` and `setCardDl(slug, saved ? 'done' : 'idle')` (leaving a `busy` card alone). It
+sets `dlState='done'` **only if every** trail is verified saved, else `'idle'`. It runs **off the boot
+critical path**: boot calls `refreshCacheStatus().then(updateDlBtn)` **without awaiting it before
+routing** (ADR-12 — awaiting an IndexedDB open here is what used to stall launch once many tiles were
+saved).
+
+> This is the fix for the false-✓ caveat the previous revision flagged as "still open". The old probe
+> sampled a **single z14 center tile** and gated "done" on `ok > 0`, so a tile the SW had cached
+> incidentally while you browsed online faked a complete download. The manifest + multi-zoom probe
+> closes both holes: only a complete download writes a record, and a partial eviction trips a probe.
 
 ---
 
@@ -1121,14 +1263,16 @@ these directly and re-render by rewriting `innerHTML`.
 | `gpsAcc` | `app.js:85` | The GPS accuracy circle (or `null`). |
 | `gpsFollow` | `app.js:85` | Whether the map auto-recenters on the user. |
 | `curPos` | `app.js:86` | Last known `{lat, lon}` fix (or `null`). |
-| `wakeLock` | `app.js:86` | The active Screen Wake Lock sentinel (or `null`). |
+| `wakeLock` | `app.js:86` | The active Screen Wake Lock sentinel (or `null`); `wakeReq` is the re-entrancy flag (a `reqWake()` is in flight). |
 | `sheetState` | `app.js:87` | Bottom-sheet state: `'peek' | 'full'`. |
 | `dlState` | `app.js:88` | Global offline-maps download state: `'idle' | 'busy' | 'done'` — drives the `#dl-all` button (§12). |
+| `cardDl` / `cardDlPct` | `app.js:89-90` | Per-trail download state by slug (`'idle'|'busy'|'done'`) and the busy progress % by slug — survive `renderList` re-renders so a card button (and its busy ring) repaint correctly mid-download (§5, §12). |
+| `dlQuotaHit` | `app.js:1300` | Set by `saveTiles` when an IndexedDB `QuotaExceededError` was hit, so `downloadAll`/`downloadOne` alert `dlQuota` (§12). |
 | `eleLo` / `eleHi` / `eleRange` | `app.js:91` | Cached smoothed-elevation bounds for the profile Y scale (set in `loadTrail`, §8). |
 | `renderPts` | `app.js:94` | Downsampled track points (with cumulative `.d`) for the polyline, reused by the green walked overlay (§10a). |
-| `turnDist` / `isOutAndBack` | `app.js:97` | Far-end (turnaround) distance and out-and-back flag, used by live-tracking progress (§8, §10a). |
-| scrub state | `app.js:100` | `scrubbing`, `scrubMk`, `scrubRAF`, `scrubX`, `scrubRect`, `scrubCardRect` — elevation-scrub gesture state (§9). |
-| tracking state | `app.js` | `tracking`/`paused`, `trackStartTs`/`trackElapsedMs`/`hudTimer`/`hudTicks` (heartbeat-persist counter), `walkedDist`/`progIdx`, `walkedLayer`, `reacqMiss` (consecutive off-window fixes → re-acquire), `pendingResume` (saved session offered for resume), `resumeOnOpen` (a list-banner / cold-relaunch resume that auto-resumes on open), `gpsWasHidden` (GPS was live when last backgrounded → refresh on return), `gpsWakePending` (a wake-time one-shot fix is in flight → dedupes rapid visibility flips), `booting` (true until just after first load → `onWake` defers the resume to `bootRoute`), `locatingTimer` (safety auto-hide for the "Locating…" pill), plus `SESSION_KEY`/`SESSION_MAX_AGE_MS` (18 h)/`RESUME_MIN_MS` (20 s) — the live trail-progress session, mirrored to `localStorage` so it survives a reload (§10a). |
+| `turnDist` / `turnIdx` / `isOutAndBack` | `app.js:99` | Far-end (turnaround) distance + vertex index and the out-and-back flag, used by live-tracking progress and the `turnedAround` re-acquire latch (§8, §10a). |
+| scrub state | `app.js:102` | `scrubbing`, `scrubMk`, `scrubRAF`, `scrubX`, `scrubRect`, `scrubCardRect` — elevation-scrub gesture state (§9). |
+| tracking state | `app.js:104-118` | `tracking`/`paused`, `trackStartTs`/`trackElapsedMs`/`hudTimer`/`hudTicks` (heartbeat-persist counter), `walkedDist`/`progIdx`, `turnedAround` (out-and-back descent latch → re-acquire on the return leg only), `walkedLayer`/`walkedHalo`/`walkedLine`, `reacqMiss` (consecutive off-window fixes → re-acquire), `pendingResume` (saved session offered for resume), `resumeOnOpen` (a list-banner / cold-relaunch resume that auto-resumes on open), `gpsWasHidden` (GPS was live when last backgrounded → refresh on return), `gpsWakePending` (a wake-time one-shot fix is in flight → dedupes rapid visibility flips) + `gpsWakeGuard` (the 32 s timer that always clears it), `booting` (true until just after first load → `onWake` defers the resume to `bootRoute`), `openingDetail` (true while `openDetail` awaits → `onWake` stands its resume down), `locatingTimer` (safety auto-hide for the "Locating…" pill), plus `SESSION_KEY`/`SESSION_MAX_AGE_MS` (18 h)/`RESUME_MIN_MS` (20 s) — the live trail-progress session, mirrored to `localStorage` so it survives a reload (§10a). |
 | `lang` | `app.js:126` | Active language: `'ja'` (default) or `'en'`, seeded from `localStorage.lang` (§1a). |
 | `listFilter` | `app.js:227` | Active difficulty filter (`'all'` or a `diffKey`). |
 | `listSort` | `app.js:227` | Active sort (`'dist'`, `'gain'`, or `null`). |
@@ -1149,7 +1293,9 @@ palette (track/marker hex, mirroring app.css), the live-tracking snap window `SN
 the difficulty `DIFF` table, and the per-trail basemap table **`TILE_SOURCES`** with its resolver
 **`trailSource()`** (§7). There is **no `TILE_CACHE` constant** anymore — saved tiles live in
 IndexedDB, in the **`wa-trails-tiles`** store defined by `tiles-db.js` (`window.TileStore`), which
-`app.js` calls (`TileStore.has`/`put`) rather than opening a Cache.
+`app.js` calls (`TileStore.has`/`put`) rather than opening a Cache. The **completion manifest** lives
+in `localStorage` under `MANIFEST_KEY = 'tileManifest'` (slug → `{savedAt, probes}`), the truth source
+for the download buttons' "saved" state (§12).
 
 ---
 
@@ -1205,8 +1351,8 @@ ADR-12 — see the rationale below and in `docs/DECISIONS-AND-LESSONS.md`.)
 
 | Store | Name / constant | Contents | Written by |
 |---|---|---|---|
-| Cache Storage | `wa-trails-app-v19` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
-| IndexedDB | `wa-trails-tiles` / store `tiles` (`tiles-db.js`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL → `{body, type}`. | The page's `downloadAll()` (directly when the SW hasn't claimed the page) and the SW's tile `fetch` handler (on every network fill, the normal case). |
+| Cache Storage | `wa-trails-app-v20` = `APP_V` (`sw.js:1`) | **App shell + bundled assets** — HTML/CSS/JS (incl. `i18n.js` and **`tiles-db.js`**), manifest, icons, Leaflet CSS+JS, and **all 10 GPX files + 10 hero images**. ~20 files. | SW `install` (precache SHELL + best-effort `TRAIL_ASSETS`); SW `fetch` fills same-origin/unpkg misses. |
+| IndexedDB | `wa-trails-tiles` / store `tiles` (`tiles-db.js`) | **Map tiles** — both **USGS** topo (US trails) and **GSI 地理院タイル** (Japan trails), keyed by full URL → `{body, type}`. | The page's `saveTiles()` (commits each fetched tile's bytes directly, §12) and the SW's tile `fetch` handler (on every network fill while browsing). |
 
 > The store **names** retain the historic `wa-trails-` prefix (an internal identifier — not
 > user-facing). The product is "Ume-chan's Trails"; only these internal keys keep the old prefix.
@@ -1263,11 +1409,13 @@ large cache). Users simply re-download tiles once into IndexedDB.
 
 The page and the SW share **one IndexedDB store** (`tiles-db.js` is loaded by both — the page via
 `<script src>`, the SW via `importScripts`), so they no longer need to agree on a cache name. During
-`downloadAll()` (§12) the page just **triggers** each tile fetch; when the SW controls the page its
-tile branch stores the bytes, and the page only stores directly on a first-ever load before the SW
-has claimed it. Afterward the SW serves every saved tile **IndexedDB-first**. The `activate` cleanup
-touches only Cache Storage, so IndexedDB tiles persist across app updates (subject only to iOS's
-7-day eviction).
+a download (§12) the page **commits each fetched tile's bytes itself** (`saveTiles` →
+`TileStore.put`), so reaching "saved" means the bytes are actually stored — it does **not** rely on
+the SW's deferred `e.waitUntil` write, which iOS can cut off when it suspends the backgrounded SW. On
+the SW-controlled path the SW also caches the same key (an idempotent duplicate), and merely browsing
+a map online still warms the store via that branch. Afterward the SW serves every saved tile
+**IndexedDB-first**. The `activate` cleanup touches only Cache Storage, so IndexedDB tiles persist
+across app updates (subject only to iOS's 7-day eviction).
 
 ---
 
@@ -1324,14 +1472,15 @@ user taps ◎ (GPS)
                        ─► nearest trackPt ─► drawProfileCursor(trackPts[i], false)
 
 user taps "⬇ Save maps" (#dl-all, downloads ALL trails)
-   └─► downloadAll()  ─► dlState='busy' ─► updateDlBtn()
-         └─► for each trail: gpxBox(t) ─► tileURLsFor(box, trailSource(t))
-             ─► dedupe (Set) over all trails/both sources, z10..src.maxZoom (USGS 16, GSI 18)
-             ─► batched fetch(8); skip if TileStore.has(u)
-             │     ├─ SW controls page: SW's tile fetch handler stores it in IndexedDB
-             │     └─ else (first load): TileStore.put(u, {body, type}) directly
-             ─► updateDlProgress(done,total) (NN% + --p fill)
-             ─► dlState='done' ─► updateDlBtn() (green "✓ Maps saved")
+   └─► downloadAll()  ─► (navigator.onLine? else alert dlOffline) ─► dlState='busy' ─► updateDlBtn()
+         └─► for each trail, one by one: downloadTrail(t, trailTileURLs(t), onProgress)
+             ─► saveTiles: batched fetch(8); skip if TileStore.has(u); else fetch + TileStore.put
+             │     (commits bytes on the PAGE; classifies ok / absent[404] / fail[net·503·5xx·quota])
+             ─► fail===0 ? markSaved(slug, probes) + card 'done' : clearSaved(slug) + card 'idle'
+             ─► updateDlProgress(base+done, grand) (combined NN% + --p fill)
+             ─► dlState='idle' ─► await refreshCacheStatus() (verify manifest+probes per trail)
+             ─► updateDlBtn() (green "✓ Maps saved" iff EVERY trail verified)
+             ─► alert dlQuota (storage full) / dlPartial (any fail>0)
 
 user reopens app mid-hike (iOS evicted the PWA; bare start_url OR a restored #/trail/<slug>)
    └─► load ─► bootRoute(): fresh session? ─► replaceState '#/trail/<slug>' (hash-independent)

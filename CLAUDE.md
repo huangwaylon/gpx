@@ -52,10 +52,17 @@ is fully translated.
    tiles are fetched by the global `#dl-all` button in the header (caches every trail across both
    sources) **and** by a per-trail button on each list card's top-right (`.card-dl`, caches just that
    trail). Both share one engine: `saveTiles()` (the fetch/commit loop), `trailTileURLs()`, and the
-   `trailSaved()` probe; the global path is `saveTiles` over all trails, the per-trail path is
-   `downloadOne(slug)`. Each button's own idle / percent / done state is its single source of truth —
-   the old download **modal** and a **separate** per-card ✓ badge stay removed (the button's `done`
-   state *is* the badge). Per-trail state lives in the `cardDl` slug→state map (survives `renderList`
+   `trailSaved()` check; the global path is `downloadAll` (a per-trail loop over `downloadTrail`), the
+   per-trail path is `downloadOne(slug)`. Each button's own idle / percent / done state is its single
+   source of truth — the old download **modal** and a **separate** per-card ✓ badge stay removed (the
+   button's `done` state *is* the badge). **A trail's "✓ saved" is manifest-backed, never a single-tile
+   guess:** `done` is set only when `saveTiles` returns `fail===0` (the full expected set committed;
+   host 404s count as `absent`, not failures), which writes a completion record to
+   `localStorage.tileManifest` (`markSaved`); `trailSaved()`/`refreshCacheStatus()` then report a trail
+   saved only if that record exists **and** its multi-zoom probe tiles are still in IndexedDB (so an
+   iOS-evicted set is demoted, and tiles the SW cached incidentally while browsing online — which write
+   no record — can't fake a ✓). Don't regress this back to an `ok>0` gate or a one-tile probe (ADR-16).
+   Per-trail state lives in the `cardDl` slug→state map (+ `cardDlPct` for the busy ring; both survive `renderList`
    re-renders); one delegated `#trail-list` listener handles all card buttons. (Per-trail download was
    removed in an earlier iteration and deliberately re-added on 2026-06-18 — see ADR-15.)
 
@@ -142,7 +149,7 @@ Paste into the DevTools console:
 ```
 
 (Or DevTools → Application → Storage → **Clear site data**.) To ship an update to returning
-users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v19`) — the `activate` handler purges
+users, bump `APP_V` in `sw.js` (currently `wa-trails-app-v20`) — the `activate` handler purges
 old caches. Reset language during testing with `localStorage.removeItem('lang')`.
 
 ## Adding a trail (short version)
@@ -224,6 +231,14 @@ These were flagged earlier and have since been addressed; noted so they don't ge
   Cache Storage holds only the ~20 shell files, `refreshCacheStatus()` no longer blocks first
   paint, and the SW serves the shell scoped to `APP_V` (no global `caches.match`). See ADR-12.
 
-Still open: the global download button's "✓ saved" state is a heuristic
-(`refreshCacheStatus()` samples one z14 center tile per trail and requires all of them to be
-present), so a partially-downloaded set can still flip it to ✓.
+- **Download "✓ saved" is now manifest-backed, not a single-tile guess** (`APP_V` bumped to
+  `wa-trails-app-v20`). The old `trailSaved()` sampled **one** z14 center tile per trail — but the SW
+  caches every tile you view online, so merely browsing a map planted that probe tile and faked a ✓
+  while most tiles were missing (the reported "✓ but blank map offline" bug). `done` was also gated on
+  `ok>0`, so a partial/interrupted download flipped to ✓ too. Now a trail is "saved" only if it has a
+  **completion record** in `localStorage.tileManifest` — written **solely** by a download that
+  committed its full expected tile set with **zero hard failures** (`saveTiles` gates `done` on
+  `fail===0`; host 404s count as `absent`) — **and** that record's multi-zoom probe tiles are all still
+  in IndexedDB (re-checked on launch to demote an iOS-evicted set). Incidental SW tiles write no
+  record, so they can't fake a ✓. The detail map also gets a per-zoom `maxBounds` clamped to the cached
+  box, so offline panning can't reach never-cached (blank) tiles. See ADR-16 and Golden Rule #8.

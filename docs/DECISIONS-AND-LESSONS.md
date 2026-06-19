@@ -912,9 +912,118 @@ errors. The green walked-line halo (a separate same-commit change) was verified 
 
 ---
 
+### ADR-16: Manifest-backed offline "saved" state (kill the false ✓), with completeness gating and per-zoom map bounds
+
+**Status.** Accepted (2026-06-19). Closes the *"still open"* item under ADR-12/ADR-15 (the single-tile "saved" heuristic) and fixes the user-reported **"green ✓ but blank map offline."**
+
+**Context.**
+A trail's "✓ saved" was decided by `trailSaved()` probing **one** tile — the z14 tile at the trail's
+center — and `done` was set by `downloadAll`/`downloadOne` whenever `saveTiles` returned `ok>0`. Two
+independent flaws made the ✓ lie:
+
+1. **Incidental service-worker caching.** The SW's tile branch caches **every tile it serves while you
+   browse online** into the same IndexedDB store (`e.waitUntil(TileStore.put(...))` — ADR-12). So merely
+   opening a trail's map online planted tiles around the center, including the z14 probe tile. On the
+   next launch `refreshCacheStatus()` saw that one tile and flipped the card (and, across all trails,
+   the global button) to ✓ — with the bulk of the z10–16/18 set never downloaded. Offline, the map was
+   blank: the SW returned `503` for the missing tiles.
+2. **`ok>0` gating.** A download interrupted after a few tiles (iOS suspending the tab, a dropped
+   connection) still reported `done`, because `ok` counts even already-present tiles and `fail` was
+   computed but never read.
+
+There was no record anywhere of *what a complete download is*, so "fully saved" could not be verified.
+
+**Decision.**
+Track completion explicitly and verify it.
+
+- **Completeness gating in `saveTiles`.** It now classifies each tile as `ok` (committed or already
+  present), `absent` (the host returned **404** — legitimately no tile there; counts as covered, **not**
+  a failure), or `fail` (network error / the SW's offline 503 / 5xx / an IndexedDB quota abort —
+  retryable), returning `{ok, absent, fail}`. A quota abort is caught (`QuotaExceededError`, surfaced via
+  `tiles-db.js`'s new `tx.onabort` rejection) and sets `dlQuotaHit`. **"done" requires `fail===0`** — the
+  whole expected set committed, 404s tolerated.
+- **Per-trail completion manifest** (`localStorage.tileManifest`). `downloadTrail()` writes a record
+  (`markSaved`) **only** when `fail===0`; otherwise it clears any stale record. Each record stores
+  `savedAt` plus a handful of **probe URLs sampled evenly across the zoom-ordered tile list**
+  (`sampleProbes`, ~8 tiles spanning z10→max).
+- **Verified read.** `trailSaved()` returns true only if a manifest record exists **and** all of its
+  probe tiles are still in IndexedDB (`TileStore.has`); a missing probe means iOS evicted the set (the
+  7-day rule), so it `clearSaved()`s the record and returns false. Tiles the SW cached incidentally have
+  no manifest record, so they can no longer fake a ✓.
+- **`downloadAll` per-trail loop.** Trails are geographically disjoint (no cross-trail tile overlap worth
+  deduping), so the global button now iterates trails through the same `downloadTrail` core — one
+  combined progress bar (`base`/`grand`), each card painted busy→done/idle live, global state reconciled
+  by `refreshCacheStatus()` at the end. It alerts `dlQuota` or `dlPartial` (new i18n keys) when a run
+  can't claim full success, instead of silently animating to a false ✓.
+- **Per-zoom `maxBounds`.** `applyMaxBounds()` clamps the detail map to the track's bounds expanded by
+  `padFor(currentZoom)` — the same per-zoom padding the downloader caches — recomputed on `zoomend` and
+  after `fitTrack`. Since `padFor` tightens as you zoom in, the pannable area matches the saved box at
+  every zoom, so offline you can't pan onto never-cached (blank) tiles. This is a second, distinct
+  "✓ but blank" path (a genuinely-complete download, but the user panned past the deliberately-tight
+  high-zoom frame) and it's now closed too.
+
+**Consequences.**
+- The ✓ now means *this trail's full tile set was downloaded and its sample tiles across zoom levels are
+  still present* — it survives an `APP_V` bump (IndexedDB isn't purged) and is demoted after eviction.
+- Re-running an interrupted download is safe and cheap (`saveTiles` dedupes and skips already-stored
+  tiles); only a `fail===0` run writes the manifest.
+- **Never regress** `done` back to an `ok>0` gate, and never re-introduce a single-tile "saved" probe —
+  that's the exact shape of the original false-✓ bug (Golden Rule #8).
+- `APP_V` bumped to `wa-trails-app-v20`.
+- The `cardDl` per-slug state map gained a sibling `cardDlPct` so `renderList` can restore the busy ring
+  mid-download.
+
+**Verification.** In a browser with the SW active: planting one center tile with **no** manifest →
+`trailSaved` false (the old bug is gone); `markSaved` with present probes → true; probes pointing at a
+missing tile → false **and** the record cleared. `saveTiles` over a valid z12 tile + a z17 (beyond USGS's
+z16 ceiling) tile returned `{ok:1, absent:1, fail:0}` (the 404 classified `absent`, not `fail`). A planted
+tile fetched back through the SW replayed its bytes from IndexedDB. `maxBounds` width shrank from 0.066°
+at z13 to 0.036° at z16. Offline (network blocked) the app booted, parsed the precached GPX, drew the
+profile, and served a saved tile — all with no network. No console errors.
+
+---
+
+### ADR-17: Out-and-back descent — re-acquire onto the *return* leg, not the overlapping outbound leg
+
+**Status.** Accepted (2026-06-19). Refines the windowed-snap / re-acquire design (ADR-14).
+
+**Context.**
+On an out-and-back the GPX is a closed round trip, so the outbound and return legs are **geographically
+coincident**. A re-acquire (first fix, or after the windowed search goes stale — every screen-wake on a
+long descent) used `acquireIdx`, which picks the in-gate vertex whose distance-along is **closest to
+`walkedDist`**. Parked at the turnaround (`walkedDist≈turnDist`), the outbound twin and the return vertex
+for any descent position are **equidistant** in distance-along, so the tie broke to the lower index —
+the **outbound** leg. Result: every wake on the descent re-snapped progress and the elevation-profile
+cursor back **up** the climb. The original `walkedDist >= turnDist-1` guard didn't help: sparse GPS leaves
+`walkedDist` a little short of `turnDist` at the summit, so it never triggered (caught in testing —
+the descent still mis-snapped at 2676 m vs a 2720 m turn).
+
+**Decision.**
+Latch a `turnedAround` flag once we've reached the turn — `progIdx >= turnIdx` (the normal
+continuous-tracking path) **or** `walkedDist >= turnDist - SNAP_BACK_M` (an 80 m safety net for a
+screen-off gap right at the summit). While latched, a re-acquire restricts `acquireIdx`'s scan to the
+**return half** `[turnIdx..end]` (new `lo`/`hi` params), so it can only snap to the descending leg. The
+margin is deliberately small so a wake during the *final approach* can't fling progress past the summit;
+the common case (you actually summit while tracking) latches via `progIdx>=turnIdx` regardless. `turnIdx`
+is now a module global (set in `precomputeProfileAndFarEnd` beside `turnDist`); the latch resets in
+start/stopTracking and `loadTrail`, and is re-derived from restored progress in `resumeSession`.
+
+**Consequences.**
+The descent cursor and green progress track your real position across every wake. A rare residual: if
+GPS is so sparse that no fix lands within 80 m of the summit *and* `progIdx` never reached `turnIdx`, the
+first descent re-acquire can still hit the outbound leg — but it self-heals on subsequent fixes as
+`walkedDist` comes within the margin, and the failure is the prior behavior, not a new one.
+
+**Verification.** Driving synthetic fixes along Talapus (an out-and-back): ascending to ~285 m below the
+turn did **not** latch (no false jump); reaching the turn latched; a re-acquire after a simulated gap on
+the descent snapped to a return-leg index (≥ `turnIdx`), and a deeper second re-acquire stayed on the
+return leg; a persist→`resumeSession` round-trip restored progress and re-derived the latch.
+
+---
 
 
-All four bugs below are **fixed in the current source**; each entry notes the verification.
+
+All bugs below are **fixed in the current source**; each entry notes the verification.
 
 ### Bug 1 — Trail cards collapsed / overlapping (~69 px tall)
 

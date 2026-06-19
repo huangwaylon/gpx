@@ -35,30 +35,30 @@
       <div class="head-top">
         <span class="eyebrow" data-i18n="tagline">山と渓谷の道しるべ</span>
         <div class="head-actions">
-          <button id="dl-all" class="dl-all-btn" data-i18n-aria="dlAllAria" aria-label="すべての地図をオフライン保存">
+          <button type="button" id="dl-all" class="dl-all-btn" data-i18n-aria="dlAllAria" aria-label="すべての地図をオフライン保存">
             <span class="dl-ic" aria-hidden="true"></span><span class="dl-lbl"></span>
           </button>
-          <button id="lang-toggle" class="lang-btn" data-i18n="langOther">EN</button>
+          <button type="button" id="lang-toggle" class="lang-btn" data-i18n="langOther">EN</button>
         </div>
       </div>
       <h1 data-i18n="appName">梅ちゃんのトレイル</h1>
     </header>
     <div id="filter-bar">
-      <button class="chip active" data-filter="all" data-i18n="filterAll">すべて</button>
-      <button class="chip" data-filter="moderate" data-i18n="filterModerate">中級</button>
-      <button class="chip" data-filter="hard" data-i18n="filterHard">上級</button>
-      <button class="chip" data-filter="veryhard" data-i18n="filterVeryhard">超上級</button>
+      <button type="button" class="chip active" data-filter="all" data-i18n="filterAll">すべて</button>
+      <button type="button" class="chip" data-filter="moderate" data-i18n="filterModerate">中級</button>
+      <button type="button" class="chip" data-filter="hard" data-i18n="filterHard">上級</button>
+      <button type="button" class="chip" data-filter="veryhard" data-i18n="filterVeryhard">超上級</button>
       <span class="chip-div" aria-hidden="true"></span>
-      <button class="chip chip-sort" data-sort="dist">
+      <button type="button" class="chip chip-sort" data-sort="dist">
         <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4v16"/><path d="m3.5 7.5 3.5-3.5 3.5 3.5"/><path d="M17 20V4"/><path d="m13.5 16.5 3.5 3.5 3.5-3.5"/></svg>
         <span data-i18n="sortDist">距離</span>
       </button>
-      <button class="chip chip-sort" data-sort="gain">
+      <button type="button" class="chip chip-sort" data-sort="gain">
         <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4v16"/><path d="m3.5 7.5 3.5-3.5 3.5 3.5"/><path d="M17 20V4"/><path d="m13.5 16.5 3.5 3.5 3.5-3.5"/></svg>
         <span data-i18n="sortGain">標高</span>
       </button>
     </div>
-    <button id="list-resume" class="list-resume" hidden>
+    <button type="button" id="list-resume" class="list-resume" hidden>
       <span class="lr-ic" aria-hidden="true"></span>
       <span class="lr-text"><span class="lr-label"></span> · <span class="lr-trail"></span></span>
       <span class="lr-time"></span>
@@ -69,16 +69,16 @@
   <!-- ═══════════ DETAIL SCREEN ═══════════ -->
   <section id="detail" class="screen" hidden>
     <div id="detail-header">
-      <button class="hbtn" id="btn-back" data-i18n-aria="back" aria-label="戻る">
+      <button type="button" class="hbtn" id="btn-back" data-i18n-aria="back" aria-label="戻る">
         <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
       </button>
       <span id="detail-title"></span>
     </div>
     <div id="map"></div>
-    <button class="map-fab recenter" id="btn-gps" data-i18n-aria="gpsAria" aria-label="現在地">
+    <button type="button" class="map-fab recenter" id="btn-gps" data-i18n-aria="gpsAria" aria-label="現在地">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2"/><path d="M12 2.5v3"/><path d="M12 18.5v3"/><path d="M2.5 12h3"/><path d="M18.5 12h3"/></svg>
     </button>
-    <button class="map-fab track" id="btn-track" data-i18n-aria="trackStartAria" aria-label="歩行の記録を開始"></button>
+    <button type="button" class="map-fab track" id="btn-track" data-i18n-aria="trackStartAria" aria-label="歩行の記録を開始"></button>
 
     <!-- Live trail-progress HUD (shown only while tracking) -->
     <div id="track-hud" hidden role="status" aria-live="polite">
@@ -89,8 +89,8 @@
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.2 1.8"/></svg>
           <span class="th-num">0:00</span>
         </span>
-        <button class="th-pause" id="th-pause" data-i18n-aria="trackPauseAria" aria-label="記録を一時停止"></button>
-        <button class="th-close" id="th-close" data-i18n-aria="trackEndAria" aria-label="計測を終了してリセット">
+        <button type="button" class="th-pause" id="th-pause" data-i18n-aria="trackPauseAria" aria-label="記録を一時停止"></button>
+        <button type="button" class="th-close" id="th-close" data-i18n-aria="trackEndAria" aria-label="記録を終了してリセット">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6 18 18"/><path d="M18 6 6 18"/></svg>
         </button>
       </div>
@@ -101,8 +101,8 @@
     <div id="track-resume" hidden role="alertdialog" aria-labelledby="tr-msg">
       <span class="tr-msg" id="tr-msg"></span>
       <div class="tr-actions">
-        <button class="tr-dismiss" id="tr-dismiss" data-i18n="trackDismiss">破棄</button>
-        <button class="tr-resume" id="tr-resume" data-i18n="trackResume">再開</button>
+        <button type="button" class="tr-dismiss" id="tr-dismiss" data-i18n="trackDismiss">破棄</button>
+        <button type="button" class="tr-resume" id="tr-resume" data-i18n="trackResume">再開</button>
       </div>
     </div>
 

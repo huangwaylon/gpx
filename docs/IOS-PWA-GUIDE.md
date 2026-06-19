@@ -17,12 +17,12 @@ This document captures hard-won research about iOS Safari PWA behavior (2025/202
 | **Service workers** | Supported in Safari tabs + Home-Screen PWAs since iOS 11.1. **Not** available in WKWebView / in-app browsers. | Registers `./sw.js` (classic SW) on `load`. Offline breaks inside in-app browsers — **recommend "Open in Safari"** (GAP: not detected/surfaced in-app). |
 | **Background Sync / Periodic Sync / Background Fetch** | All **unsupported** on iOS. | Tile caching is **foreground & user-initiated** — via the global **"Save maps"** button or a per-trail card button — never background prefetch. |
 | **SW ES modules / nested workers** | Modules need iOS 15+, nested workers 15.5/16.4. | App ships a **classic, non-module** SW — no `type:'module'`, no nested workers. |
-| **Cache API** | Fully supported since iOS 11.1. | App **shell** only (`wa-trails-app-v19`). **Map tiles moved to IndexedDB** (`tiles-db.js`) — opening a Cache holding thousands of tile records is slow on WebKit and stalled launch (ADR-12). |
-| **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded, and the watch can come back **silently dead** (no fixes, no error). | GPS only works screen-on, foreground. On wake (`pageshow`/`visibilitychange`) the app **`restartWatch()`s** the watch + kicks a one-shot fix, and re-acquires Wake Lock. **Document: keep screen on.** |
+| **Cache API** | Fully supported since iOS 11.1. | App **shell** only (`wa-trails-app-v20`). **Map tiles moved to IndexedDB** (`tiles-db.js`) — opening a Cache holding thousands of tile records is slow on WebKit and stalled launch (ADR-12). |
+| **`watchPosition()` in background** | **No** background geolocation; JS suspends when screen locks / app is backgrounded, and the watch can come back **silently dead** (no fixes, no error). | GPS only works screen-on, foreground. On wake (`pageshow`/`visibilitychange`) the app **`restartWatch()`s** the watch + kicks a one-shot fix (with a 32 s self-heal guard so GPS can't wedge if iOS fires neither callback), and re-acquires Wake Lock. **Document: keep screen on.** |
 | **`navigator.permissions.query` for geolocation** | **Not** supported on iOS — cannot pre-check. | App skips pre-checks; handles `GeolocationPositionError.code === 1` in `onPosErr`. |
 | **`navigator.wakeLock` (standalone)** | Reliable in standalone PWAs on the **iOS 26+ target** (the 16.4–18.3 standalone breakage is below our floor). | Calls `wakeLock.request('screen')` in `startGPS()`, re-acquires on visibility change. Only relevant for phone-in-hand navigation; the pocket-and-check pattern is covered by GPS-gap recovery. No fallback needed. |
 | **`beforeinstallprompt`** | **Never fires** on iOS. | Installation is left to the user (Safari **Share → Add to Home Screen**); the app shows **no in-app install banner or prompt** and performs **no standalone detection**. |
-| **7-day storage eviction** | iOS evicts **all** script-writable storage after 7 days of no interaction. `persist()` does **not** help. | `refreshCacheStatus()` re-checks a sample tile for every trail on startup and sets each card's button (and the global button) to "saved" only if its sample is present. Affects `localStorage` too (e.g. the `lang` preference resets to JA default). **GAP: no auto re-prompt** when tiles are gone. |
+| **7-day storage eviction** | iOS evicts **all** script-writable storage after 7 days of no interaction. `persist()` does **not** help. | `refreshCacheStatus()` re-checks each trail's **completion-manifest** record on startup and re-probes its multi-zoom sample tiles in IndexedDB; a card's button (and the global button) reads "saved" only if the record is present **and** every probe survives. Affects `localStorage` too — both the `lang` preference and the manifest itself (a wiped manifest simply reverts every button to "⬇"). **GAP: no auto re-prompt** when tiles are gone. |
 | **Manifest features** | `display:standalone` works; `fullscreen`/`minimal-ui` → standalone; `shortcuts`/`categories`/`screenshots` ignored; `id` needs iOS 17+. | Manifest uses `display:standalone` + `id:"/ume-trails"` and a Japanese `name`. Relies on Apple meta tags for capability; ships **both** `mobile-web-app-capable` and `apple-mobile-web-app-capable`. |
 | **Splash screen** | Auto-generated from `background_color` + icon; no manifest control. | Sets `background_color:#f4f6f3`; accepts the auto splash. |
 | **`navigator.connection`** | Network Information API unsupported. | App relies on cache-first SW + `navigator.onLine` semantics (see Other quirks). |
@@ -81,7 +81,7 @@ is now a **single** Cache-Storage cache, keyed by version string so it can be ro
 
 | Cache name (constant) | Contents | Population strategy |
 |---|---|---|
-| **`wa-trails-app-v19`** (`APP_V` in `sw.js`) | App shell (incl. `tiles-db.js`) + bundled trail data (GPX + hero images) | Precached on SW `install` via `fetch(u,{cache:'reload'})` + `cache.put` — shell must-succeed, trail assets best-effort; topped up on cache miss at runtime. |
+| **`wa-trails-app-v20`** (`APP_V` in `sw.js`) | App shell (incl. `tiles-db.js`) + bundled trail data (GPX + hero images) | Precached on SW `install` via `fetch(u,{cache:'reload'})` + `cache.put` — shell must-succeed, trail assets best-effort; topped up on cache miss at runtime. |
 
 Saved **map tiles** (USGS topo for US trails, GSI 地理院タイル for Japan trails) are **not** in any
 Cache-Storage cache — they live in the IndexedDB store defined by `tiles-db.js` (DB `wa-trails-tiles`,
@@ -92,7 +92,7 @@ handlers.
 `sw.js` declarations:
 
 ```js
-const APP_V = 'wa-trails-app-v19';   // tiles now live in IndexedDB (tiles-db.js), not a cache
+const APP_V = 'wa-trails-app-v20';   // tiles now live in IndexedDB (tiles-db.js), not a cache
 importScripts('./tiles-db.js');       // shared tile store → self.TileStore (also loaded by the page)
 ```
 
@@ -170,7 +170,11 @@ await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
   resume offer on a trail, repaints the clock at once (`updateHUD()` — the 1 s `setInterval` is
   suspended while backgrounded), and — because iOS can leave `watchPosition` **silently dead** after a
   screen-off gap — **`restartWatch()`s** the watch and kicks one fresh `getCurrentPosition({maximumAge:0})`
-  (deduped by `gpsWakePending`). See `ARCHITECTURE.md` §10a. **Pause/resume and end live in the
+  (deduped by `gpsWakePending`, with a **32 s `gpsWakeGuard` self-heal** that *always* clears that flag
+  afterward — iOS can abandon a wake-time one-shot mid-flight when the phone is re-pocketed, firing
+  **neither** callback, which would otherwise leave the flag stuck and wedge GPS for the rest of the
+  hike). A **paused** wake skips this re-acquire (so it can't taint the eventual un-pause with a wrong-leg
+  re-snap); the wake-lock re-acquire still runs. See `ARCHITECTURE.md` §10a. **Pause/resume and end live in the
   `#track-hud`, not the FAB** (the FAB only *starts*), so a stray map tap can never pause or reset an
   active hike — a separate cause of "it paused itself."
 
@@ -245,23 +249,32 @@ await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
 
 ### How this app handles it
 - **Implication:** **downloaded map tiles can simply vanish after a week of not opening the app** — exactly the scenario where a user downloads a trail on Sunday and hikes it the *next* weekend. The app must not assume cached tiles are still present.
-- **`localStorage` is evicted too.** The 7-day rule covers *all* script-writable storage, including `localStorage`. The only thing the app keeps there is the **language preference** (`localStorage.lang`), so after 7 days of non-use that preference can reset and the app falls back to its **Japanese default** on next launch — the same eviction mechanism that drops the tile cache also drops the saved language. This is benign (the user just re-toggles to English), but worth knowing when reasoning about "why did my settings reset." See *Internationalization (i18n)* and `docs/I18N.md`.
-- The app **verifies cache state on every startup** rather than trusting it. `refreshCacheStatus()` runs during boot and, for each trail, checks whether a **representative sample tile** (the trail's center tile at zoom 14, built from *that trail's* tile source) is still in the **IndexedDB tile store** (`TileStore.has(url)` — a cheap key-count probe that never deserializes the bytes). The result drives **both** that trail's card button (via `setCardDl`) **and** the global **"Save maps"** button: the global button is set to **"done"** (`✓ Maps saved` / `✓ 保存済み`) only if **every** trail's sample tile is present; if any is missing it stays **"idle"** (`⬇ Save maps` / `⬇ 地図を保存`):
+- **`localStorage` is evicted too.** The 7-day rule covers *all* script-writable storage, including `localStorage`. The app keeps two things there: the **language preference** (`localStorage.lang`) and the **download completion manifest** (`tileManifest` — which trails were fully saved, plus each set's probe tiles). After 7 days of non-use both can reset: the language falls back to its **Japanese default**, and a wiped manifest simply reverts every download button to "⬇" (which, since the IndexedDB tiles are evicted on the same timer, is the *correct* state). This is benign, but worth knowing when reasoning about "why did my settings reset." See *Internationalization (i18n)* and `docs/I18N.md`.
+- The app **verifies download state on every startup** rather than trusting it. A trail counts as **saved** only when a **completion-manifest record** exists for it (written solely by a download that committed its *whole* expected tile set with zero hard failures) **and** that record's **multi-zoom probe tiles** — a handful (~8) spread across zoom levels — are all still in the IndexedDB tile store. `trailSaved(trail)` enforces both; if any probe is missing it `clearSaved()`s the now-stale record (demoting *and* forgetting it). `refreshCacheStatus()` runs that check for every trail on boot and drives **both** each card's button (via `setCardDl`) **and** the global **"Save maps"** button (set **"done"** — `✓ Maps saved` / `✓ 保存済み` — only if **every** trail is verified, else **"idle"** — `⬇ Save maps` / `⬇ 地図を保存`):
 
   ```js
+  async function trailSaved(trail){
+    const rec = readManifest()[trail.slug];                  // completion record written by a full download
+    if(!rec || !Array.isArray(rec.probes) || !rec.probes.length) return false;
+    for(const u of rec.probes)                               // re-probe the sampled tiles
+      if(!(await TileStore.has(u))){ clearSaved(trail.slug); return false; }   // evicted → demote + forget
+    return true;
+  }
   async function refreshCacheStatus(){
     if(dlState==='busy' || !('indexedDB'in window)) return;
     try{
       let all=true;
       for(const trail of TRAILS){
-        const {x,y}=ll2t(trail.center[0],trail.center[1],14);
-        const u=trailSource(trail).url.replace('{z}',14).replace('{y}',y).replace('{x}',x);
-        if(!(await TileStore.has(u))){ all=false; break; }   // sample-tile probe (per-trail source)
+        const saved = await trailSaved(trail);
+        if(cardDl.get(trail.slug)!=='busy') setCardDl(trail.slug, saved?'done':'idle');
+        if(!saved) all=false;
       }
       dlState = all ? 'done' : 'idle';
     }catch(_){}
   }
   ```
+
+  **This is the fix for the old false-✓.** Previously the probe sampled a **single z14 center tile** and "done" was gated on `ok > 0`, so a tile the service worker had cached *incidentally while you merely browsed a map online* faked a complete download → a blank map on the trail with no signal. A partial/interrupted download flipped to ✓ for the same reason. The manifest gate closes both holes: incidental SW tiles write no record, partial downloads clear theirs, and the multi-zoom probe catches a partial eviction a single center tile would miss.
 
   Boot in `app.js` runs the probe **off the critical path** — it is **not** awaited before routing the first screen. `bootRoute()` paints first, and the saved-maps button state updates a tick later when the IndexedDB probe resolves:
 
@@ -273,12 +286,12 @@ await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
   refreshCacheStatus().then(updateDlBtn);
   ```
 
-  If eviction has occurred, a trail's sample tile is missing → that card's button (and, if any trail is missing, the global button) reverts from "✓ saved" to "⬇". So the **UI self-corrects** after eviction. Each card's button now reflects its **own** trail's status (a per-trail "saved" check), while the global button shows "saved" only when *every* trail is covered.
+  If eviction has occurred, a trail's probe tiles are missing → that card's button (and, if any trail is missing, the global button) reverts from "✓ saved" to "⬇". So the **UI self-corrects** after eviction. Each card's button reflects its **own** trail's status; the global button shows "saved" only when *every* trail is covered.
 
 - **GAP — no proactive re-prompt.** The app reflects eviction in the button state but does **not** actively warn the user (e.g. *"Your saved maps have expired — re-download before you go"*) and does not auto-re-download. A user who previously downloaded the maps could arrive at the trailhead, offline, with an empty cache and no warning.
   **Recommendations:**
-  1. **Persist a "user intended this offline" flag** (in `localStorage`) when they tap "Save maps." On startup, if that flag is set but `refreshCacheStatus()` finds sample tiles gone, show a re-download prompt.
-  2. **Probe more than one tile** before declaring maps "saved" — a single sample tile per trail can be a false positive (present) or false negative. A few spot-checks across zoom levels would make the status trustworthier.
+  1. **Persist a "user intended this offline" flag** (in `localStorage`) when they tap "Save maps." On startup, if that flag is set but `refreshCacheStatus()` finds the tiles gone, show a re-download prompt.
+  2. (Done) The status check now **probes several tiles across zoom levels** behind a manifest record rather than one center tile, so a partial/incidental cache no longer reads as a complete download.
   3. Keep the app opened/used often enough, or simply re-download before each trip; this is the only guaranteed defense against the 7-day timer.
 
 ---
@@ -483,18 +496,21 @@ if (isTile(url)) {
 
 This means simply **panning the map while online warms the store** for free — but it does **not** guarantee complete coverage at all zooms, which is what Tier 3 is for.
 
+> **Panning can't escape the cached area offline.** The map sets a per-zoom `maxBounds` (`applyMaxBounds()`, recomputed on `zoomend` / after fitting the track) equal to the track's bounds expanded by the *same* `padFor(z)` the download uses. Because `padFor` tightens as you zoom in, the pannable box at each zoom matches the saved box at that zoom — so with no signal you can't drag the view onto a never-cached (blank) tile. The clamp is soft (default Leaflet viscosity).
+
 > **Two tile sources, one IndexedDB store.** US trails use USGS topo (`{z}/{y}/{x}`); Japan trails use GSI 地理院タイル (`{z}/{x}/{y}.png`, Japanese labels on the `std` layer). Both are 256-px, EPSG:3857 Web-Mercator XYZ tiles and are CORS-enabled (`Access-Control-Allow-Origin: *`), so their bytes are stored as **readable (non-opaque)** records. The two URL templates put the `x`/`y` tokens in a **different order**, but `app.js` substitutes them by name (`.replace('{z}'…).replace('{y}'…).replace('{x}'…)`), so the same tile math drives both. They share the single IndexedDB tile store (`tiles-db.js` — DB `wa-trails-tiles`, store `tiles`), keyed by tile URL. (Practical note: GSI works fine from real iPhones / home networks; it can `403` from some datacenter IPs, which is irrelevant to end users.)
 
 ### Tier 3 — User explicitly downloads tiles ("Save maps")
 Two buttons pre-cache tiles into the **IndexedDB tile store**: a **global** "Save maps" button (`#dl-all`, next to the language toggle) caches **all 10 trails across both tile sources** in one tap, and a **per-trail** button on each list card (`.card-dl`) caches just that trail. The old download *modal* is gone — each button's own idle/percent/done state is its status.
 
-Both share one engine. `trailTileURLs(trail)` computes a trail's bounding box from its (already-precached) GPX via `gpxBox()` and builds the full tile-URL list **using its own source template** across **z10 up to that source's `maxZoom`** (USGS 16, GSI 18). `saveTiles(urls, onProgress)` dedupes with a `Set` and fetches the missing tiles in batches of 8, **committing each tile's bytes to IndexedDB on the page** — so reaching "saved" means the bytes are stored, not merely fetched (the SW's own deferred `e.waitUntil` write can be cut off when iOS suspends the backgrounded SW). `downloadAll()` runs `saveTiles` over every trail; `downloadOne(slug)` runs it over one. Both **guard on `navigator.onLine`** (bailing with the `dlOffline` alert rather than faking a "saved" state offline) and flip to "done" only when tiles were actually stored:
+Both share one engine. `trailTileURLs(trail)` computes a trail's bounding box from its (already-precached) GPX via `gpxBox()` and builds the full tile-URL list **using its own source template** across **z10 up to that source's `maxZoom`** (USGS 16, GSI 18). `saveTiles(urls, onProgress)` dedupes with a `Set`, fetches the missing tiles in batches of 8, and **commits each tile's bytes to IndexedDB on the page** — so reaching "saved" means the bytes are stored, not merely fetched (the SW's own deferred `e.waitUntil` write can be cut off when iOS suspends the backgrounded SW). It **classifies** each tile: `ok` (committed or already present), `absent` (the host 404'd — legitimately no tile there, so it counts as *covered*, not a failure), or `fail` (network error / the SW's offline 503 / 5xx / an IndexedDB quota abort — *retryable*); a `QuotaExceededError` also sets `dlQuotaHit`. `downloadTrail(trail, urls, onProgress)` runs `saveTiles` and then **records a completion-manifest entry only if `fail === 0`** (else clears it), so a partial/interrupted download never claims "saved." `downloadAll()` loops `downloadTrail` over every trail **one at a time** behind a single combined progress bar (trails are geographically disjoint, so there's no cross-trail overlap to dedupe and each card earns its own honest "done"); `downloadOne(slug)` runs it for one. Both **guard on `navigator.onLine`** (bailing with the `dlOffline` alert rather than faking a "saved" state offline), and on finishing they **alert** `dlQuota` (storage full) or `dlPartial` (some tiles failed) as appropriate:
 
 ```js
 const DL_MIN_Z = 10;   // overview floor; ceiling = each source's maxZoom (USGS 16, GSI 18)
 // Zoom-aware context buffer (degrees) added around each track per zoom: wider at overview
 // zooms, progressively tighter toward max detail (z17–18 tiles are tiny, so a wide frame is
-// costly and you rarely pan far when reading them).
+// costly and you rarely pan far when reading them). The SAME padFor also clamps map panning
+// per zoom (maxBounds), so offline you can't pan onto a never-cached blank tile.
 const padFor = z => z<=12 ? 0.05 : z<=14 ? 0.03 : z<=16 ? 0.015 : z===17 ? 0.008 : 0.004;
 
 // Raw bbox of one trail, parsed from its precached GPX (falls back to a small
@@ -503,65 +519,79 @@ async function gpxBox(trail){ /* …parse trkpt min/max lat/lon… */ }
 
 // Every tile URL for one box across z10..src.maxZoom, built from that source's URL template.
 // Each zoom expands the box by its own padFor(z) before computing the tile range.
-function tileURLsFor(box, src){
-  const urls = [];
-  for (let z=DL_MIN_Z; z<=src.maxZoom; z++){ const p = padFor(z);
-    const r = tRange({ n:box.n+p, s:box.s-p, e:box.e+p, w:box.w-p }, z);
-    for (let x=r.x0; x<=r.x1; x++) for (let y=r.y0; y<=r.y1; y++)
-      urls.push(src.url.replace('{z}',z).replace('{y}',y).replace('{x}',x)); }
-  return urls;
-}
+function tileURLsFor(box, src){ /* …loop z, build src.url.replace('{z}'…'{y}'…'{x}'…)… */ }
 async function trailTileURLs(trail){ return tileURLsFor(await gpxBox(trail), trailSource(trail)); }
 
-// Shared engine — fetch each missing tile and COMMIT its bytes to IndexedDB on the page
-// (so "saved" means stored, not merely fetched). Returns {ok, fail}.
+// Shared engine — fetch each missing tile and COMMIT its bytes to IndexedDB on the page.
+// Classifies each tile so a 404 (no tile there) isn't mistaken for a failure. Returns {ok, absent, fail}.
+let dlQuotaHit = false;
 async function saveTiles(urls, onProgress){
   urls = [...new Set(urls)];                          // dedupe
-  const total = urls.length || 1; let done = 0, ok = 0, fail = 0; const BATCH = 8;
-  for (let i = 0; i < urls.length; i += BATCH){
+  const total = urls.length || 1; let done=0, ok=0, absent=0, fail=0; const BATCH=8;
+  for (let i=0; i<urls.length; i+=BATCH){
     await Promise.allSettled(urls.slice(i, i+BATCH).map(async u => {
       try{
-        if (await TileStore.has(u)) ok++;             // already stored
+        if (await TileStore.has(u)) ok++;             // already committed
         else { const r = await fetch(u, { mode:'cors' });
           if (r.ok){ const type = r.headers.get('Content-Type')||'image/png';
             await TileStore.put(u, { body: await r.arrayBuffer(), type }); ok++; }
-          else fail++; }
-      }catch(_){ fail++; }
+          else if (r.status===404) absent++;          // host has no tile here → covered, not a miss
+          else fail++; }                              // 503 (SW offline) / 5xx → retryable miss
+      }catch(e){ if(e && e.name==='QuotaExceededError') dlQuotaHit=true; fail++; }
       done++; if (onProgress) onProgress(done, total);
     }));
   }
-  return { ok, fail };
+  return { ok, absent, fail };
 }
 
-async function downloadAll(){                          // global "Save maps"
-  if (dlState === 'busy' || !('indexedDB' in window)) return;
+// Save one trail's set and record a manifest entry ONLY if everything committed (404s are fine).
+async function downloadTrail(trail, urls, onProgress){
+  const r = await saveTiles(urls, onProgress);
+  if (r.fail===0) markSaved(trail.slug, urls);        // complete → trustworthy "saved" record
+  else clearSaved(trail.slug);                         // partial/interrupted → never claim saved
+  return r;
+}
+
+async function downloadAll(){                          // global "Save maps" — every trail, one by one
+  if (dlState==='busy' || !('indexedDB' in window)) return;
   if (!navigator.onLine){ alert(t('dlOffline')); return; }   // no connection → don't fake "saved"
-  dlState = 'busy'; updateDlBtn(); updateDlProgress(0, 1);
-  let urls = [];
-  for (const trail of TRAILS) urls.push(...await trailTileURLs(trail));
-  const { ok } = await saveTiles(urls, updateDlProgress);
-  dlState = ok>0 ? 'done' : 'idle'; updateDlBtn();
-  refreshCacheStatus().then(updateDlBtn);              // reconcile to "all trails saved?" + paint cards
+  dlQuotaHit=false; dlState='busy'; updateDlBtn(); updateDlProgress(0,1);
+  const lists = []; for (const trail of TRAILS){ const urls=[...new Set(await trailTileURLs(trail))];
+    lists.push({trail, urls}); setCardDl(trail.slug,'busy',0); }
+  const grand = lists.reduce((s,l)=>s+l.urls.length,0)||1; let base=0, anyFail=false;
+  for (const {trail, urls} of lists){
+    const r = await downloadTrail(trail, urls,
+      (d,tot)=>{ updateDlProgress(base+d, grand); setCardDl(trail.slug,'busy',Math.round(d/tot*100)); });
+    base += urls.length;
+    if (r.fail===0) setCardDl(trail.slug,'done'); else { anyFail=true; setCardDl(trail.slug,'idle'); }
+  }
+  dlState='idle'; updateDlBtn();
+  await refreshCacheStatus(); updateDlBtn();            // reconcile to "every trail verified saved?"
+  if (dlQuotaHit) alert(t('dlQuota')); else if (anyFail) alert(t('dlPartial'));
 }
 
-async function downloadOne(slug){                      // per-trail card button
-  if (cardDl.get(slug) === 'busy' || !('indexedDB' in window)) return;
+async function downloadOne(slug){                      // per-trail card button — same engine + guards
+  if (cardDl.get(slug)==='busy' || !('indexedDB' in window)) return;
   if (!navigator.onLine){ alert(t('dlOffline')); return; }
-  const trail = TRAILS.find(x => x.slug === slug); if (!trail) return;
-  setCardDl(slug, 'busy', 0);
-  const { ok } = await saveTiles(await trailTileURLs(trail),
-                                 (d,total) => setCardDl(slug, 'busy', Math.round(d/total*100)));
-  setCardDl(slug, ok>0 ? 'done' : 'idle');
+  const trail = TRAILS.find(x => x.slug===slug); if (!trail) return;
+  dlQuotaHit=false; setCardDl(slug,'busy',0);
+  const r = await downloadTrail(trail, [...new Set(await trailTileURLs(trail))],
+                                (d,total)=>setCardDl(slug,'busy',Math.round(d/total*100)));
+  setCardDl(slug, r.fail===0 ? 'done' : 'idle');
+  if (r.fail===0) refreshCacheStatus().then(updateDlBtn);   // this trail may complete the global ✓
+  else if (dlQuotaHit) alert(t('dlQuota')); else alert(t('dlPartial'));
 }
 ```
 
-**Global-button states** are driven by `dlState` (`'idle' | 'busy' | 'done'`) via `updateDlBtn()`/`updateDlProgress()`. (Each per-trail card button mirrors the same three states from the `cardDl` map via `setCardDl()`, showing a conic progress ring instead of a percentage label.)
+**Global-button states** are driven by `dlState` (`'idle' | 'busy' | 'done'`) via `updateDlBtn()`/`updateDlProgress()`. (Each per-trail card button mirrors the same three states from the `cardDl` map via `setCardDl()`, showing a conic progress ring instead of a percentage label; the busy % is cached in a parallel `cardDlPct` map so a filter/sort/language re-render mid-download restores the ring.)
 
 | `dlState` | Label (EN / JA) | Visual |
 |---|---|---|
 | `idle` | `⬇ Save maps` / `⬇ 地図を保存` | default |
 | `busy` | live `NN%` | inline CSS gradient fill via a `--p` custom property |
 | `done` | `✓ Maps saved` / `✓ 保存済み` | "done" styling |
+
+A button shows **done** only when `refreshCacheStatus()` re-confirms the relevant trail(s) against the completion manifest + probe tiles — *not* merely because some bytes were fetched. The two result alerts use new i18n keys (EN/JA both present): **`dlPartial`** ("Some map tiles couldn't be saved (weak connection)…") and **`dlQuota`** ("Out of storage — couldn't save all maps…").
 
 Neither button shows a tile-count preview before committing — it just shows live progress as it works (a percentage on the global button, a conic ring on the card button).
 
@@ -598,7 +628,7 @@ This is the central design decision, and it's driven by both platform limits and
 | Meta tags (both capability tags), manifest link, global "Save maps" button (`#dl-all`), `[data-i18n]` hooks | `index.html` |
 | Manifest (iOS-respected fields; Japanese identity) | `manifest.json` |
 | Caching strategy, shell precache (`{cache:'reload'}`), two-host tile match → IndexedDB | `sw.js`, `tiles-db.js` |
-| Geolocation, Wake Lock, language preference, cache-status probe, global + per-trail tile download (`downloadAll`/`downloadOne`/`saveTiles`/`gpxBox`), tile sources | `app.js` |
+| Geolocation, Wake Lock, language preference, download verification (`trailSaved`/`refreshCacheStatus` + the `tileManifest`), global + per-trail tile download (`downloadAll`/`downloadOne`/`downloadTrail`/`saveTiles`/`gpxBox`), tile sources | `app.js` |
 | i18n string tables, per-trail localized content, unit/date formatting | `i18n.js` (design: `docs/I18N.md`) |
 | Safe-area variables, full-screen `#app` pinning (`position:fixed`), display font sizes | `app.css` |
 | Trail metadata (10 trails: 8 WA + 2 Japan) | `trails.js` |
@@ -609,12 +639,13 @@ This is the central design decision, and it's driven by both platform limits and
 ### Gap checklist (for the backlog)
 
 - [ ] **In-app browser / no-SW detection** → "Open in Safari" hint.
-- [ ] **Eviction re-prompt** → persist a "wanted offline" intent; warn + offer re-download when the sample-tile probe fails; probe more than one tile per trail (each button's "saved" check samples a single z14 center tile, so a partially-downloaded set can still read ✓).
+- [ ] **Eviction re-prompt** → persist a "wanted offline" intent; warn + offer re-download when `refreshCacheStatus()` finds a previously-saved trail's tiles evicted.
 - [ ] **Offline status chip** via `navigator.onLine` + `online`/`offline` events.
 - [ ] **Geolocation error UX** for codes `2`/`3` (position unavailable / timeout).
 - [ ] **16px font-size** on any future text input.
 
 Closed since the previous revision:
 
+- [x] **False-✓ saved state** — the "saved" check is now gated on a **completion manifest** (written only by a download that committed its *whole* set with zero hard failures) **plus a multi-zoom probe**, replacing the old single z14-center-tile / `ok>0` heuristic. Tiles the SW cached incidentally while browsing online, and partial/interrupted downloads, can no longer fake a green ✓ (so the partial-download / blank-map-offline bug is fixed).
 - [x] **`mobile-web-app-capable`** meta tag — now shipped alongside the legacy `apple-mobile-web-app-capable` (both present in `index.html`).
 - [x] **Wake Lock fallback (silent `<video>` + Auto-Lock tip)** — **dropped, won't do.** It only addressed iOS 16.4–18.3 standalone, which is below the iOS 26+ target where Wake Lock is reliable; and the app's pocket-and-check usage doesn't depend on the lock anyway.

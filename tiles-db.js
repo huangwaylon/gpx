@@ -34,9 +34,11 @@
   // Run one request inside a fresh transaction; resolve with its result.
   function run(mode, make) {
     return db().then(d => new Promise((resolve, reject) => {
-      const req = make(d.transaction(STORE, mode).objectStore(STORE));
+      const tx = d.transaction(STORE, mode);
+      const req = make(tx.objectStore(STORE));
       req.onsuccess = () => resolve(req.result);
       req.onerror   = () => reject(req.error);
+      tx.onabort    = () => reject(tx.error || req.error);   // a quota failure aborts the tx (→ QuotaExceededError)
     }));
   }
 

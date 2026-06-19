@@ -1,4 +1,4 @@
-const APP_V = 'wa-trails-app-v19';   // bumped: align per-trail download chip with the difficulty badge (same size + horizontal line)
+const APP_V = 'wa-trails-app-v20';   // bumped: completion-manifest offline-download fix + GPS/lifecycle correctness fixes
 
 importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 
