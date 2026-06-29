@@ -1,4 +1,4 @@
-const APP_V = 'wa-trails-app-v23';   // bumped: Fuji round-trip data + reliability/a11y fixes (download timeout & quota stop, weak-signal HUD hint, resize no longer re-fits, sheet/HUD a11y)
+const APP_V = 'wa-trails-app-v24';   // bumped: free-hike mode (record-anywhere GPS track, no preset trail)
 
 importScripts('./tiles-db.js');       // shared store → self.TileStore (also loaded by the page)
 

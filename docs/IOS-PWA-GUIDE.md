@@ -141,9 +141,13 @@ await Promise.all(keys.filter(k => k !== APP_V).map(k => caches.delete(k)));
     onPos, onPosErr, { enableHighAccuracy:true, maximumAge:4000, timeout:30000 });
   ```
 
-  Because the watch dies when the screen sleeps, **no GPS is recorded while the screen is off, and
-  no breadcrumb path is ever stored** — live tracking is a screen-on tool. What the app *does*
-  rescue is the **session** itself: see *Live trail-progress survives a reload* below.
+  Because the watch dies when the screen sleeps, **no GPS is recorded while the screen is off.** For
+  trail tracking that means progress freezes (the *session* is still rescued — see *Live trail-progress
+  survives a reload* below). For **free-hike mode** (record-anywhere; see `DECISIONS-AND-LESSONS.md`
+  ADR-20) a breadcrumb path **is** stored — but only while screen-on: a screen-off gap (and a
+  pause/resume) deliberately **breaks the recorded line into a new segment** rather than drawing or
+  counting a straight line across ground we never actually recorded. Live tracking, either mode, is a
+  screen-on tool.
   **User guidance to document in-product:** *Keep your screen on while navigating; the blue dot stops updating when the phone sleeps.* (The app also holds a Wake Lock while navigating — see next section — which is reliable on the iOS 26+ target, but the dot still stops the moment you lock the phone yourself, so the guidance still matters for the pocket-and-check pattern.)
 
 - **Live trail-progress survives a reload — and a cold relaunch auto-resumes.** Even though fixes

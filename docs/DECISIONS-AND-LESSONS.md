@@ -1115,6 +1115,72 @@ zero drift. Both Japan (GSI) and US (USGS) trails; no console errors.
 
 ---
 
+### ADR-20: Free-hike mode — record an arbitrary route by reusing the trail-tracking apparatus
+
+**Status.** Accepted (2026-06-29). `APP_V` bumped to `wa-trails-app-v24`.
+
+**Context.**
+The app was built entirely around **10 curated trails**: every screen, the GPS/Wake-Lock/session
+machinery, and the live-progress overlay assume a known GPX track to snap to. The new ask was the
+opposite shape — *no* preset trail: open a map on your current location, hit start, and record the
+path you actually walk (drawn live, with distance + elapsed), anywhere. The platform constraints are
+identical to trail tracking (foreground/screen-on GPS, no background geolocation, 7-day eviction,
+inconsistent iOS lifecycle), so the hard, well-tested parts should be **shared, not duplicated**.
+
+**Decision.**
+Run free-hike as a **mode of the existing detail screen**, not a new screen. `curTrail` stays `null`
+and a single `freeHike` flag distinguishes it; routing adds `#/hike → openFreeHike()`. Everything
+reused verbatim: the Leaflet map + FABs + bottom sheet, `onPos`/`startGPS`/`stopGPS`, the wake-gap
+recovery (`refreshGpsAfterGap`/`restartWatch`), the Wake Lock, the start/pause/end FAB + HUD, and the
+`localStorage` resume session (with cold-relaunch auto-resume via `bootRoute`). Only **two** things
+branch on `freeHike`:
+1. **Per-fix handler.** `onPos` calls `recordFix()` (append the raw fix to a green polyline) instead
+   of `updateProgress()` (snap to the GPX).
+2. **HUD readout.** Recorded distance with the progress bar hidden, instead of trail %.
+
+Three design choices worth calling out:
+
+- **The recorded path is line *segments* (`recSegs = [lat,lon][][]`), not one flat array.** A
+  pause→resume, a screen-off GPS gap (`refreshGpsAfterGap`), or a resume-after-relaunch sets a
+  `recBreak` flag; the next accepted fix starts a **new** segment. So a gap is **neither drawn as a
+  bogus straight line nor added to the distance** — which is the only honest representation given the
+  iOS "no breadcrumb while the screen is off" reality (see IOS-PWA-GUIDE §Geolocation). Fixes are also
+  gated: drop accuracy worse than `REC_MAX_ACC_M` (50 m, a wild jump would zig-zag the line), ignore
+  sub-`REC_MIN_MOVE_M` (5 m) steps as stationary jitter (which also avoids churning `localStorage`).
+- **Basemap chosen from the first fix, not a preset region.** A free hike has no `tiles` field, so
+  `regionSourceKey(lat,lon)` picks GSI inside a rough Japan bbox, else USGS, and `swapTileSource()`
+  swaps the layer once the first fix lands. The map opens centered on the last known fix
+  (`localStorage.lastPos`) so it isn't a blank world map while locating.
+- **No offline tile box.** You can be anywhere, so there's no pre-cached bbox: `applyMaxBounds` is a
+  no-op (null `trackLayer`), there's **no "save maps" affordance**, and offline the recorded path
+  (an SVG overlay) still draws while only the basemap goes blank. The resume session shares
+  `SESSION_KEY` with a `hike:true` discriminator (+ `HIKE_SLUG='__hike__'` for the list banner);
+  `freshResumable`/`sessionMatchesScreen` gate every resume path for both modes.
+
+**Alternatives rejected.**
+- *A dedicated free-hike screen with its own map.* Would have duplicated the map init, the whole GPS
+  plumbing, the wake/lifecycle handlers, and the resume session — all global-state-based and the most
+  bug-prone code in the app. Reuse won.
+- *A synthetic "free hike" trail object as `curTrail`.* Would have forced `freeHike` guards into every
+  trail-specific function (profile, scrub, fit, bounds, sheet body) that reads `curTrail`. Keeping
+  `curTrail === null` + one `freeHike` flag localizes the branching to the few functions that truly differ.
+
+**Consequences.**
+Free-hike inherits all of trail tracking's iOS resilience for free, and the two modes can't drift
+apart on the shared paths. Don't regress: keep recording **segmented** (the gap-break is correctness,
+not polish), keep `curTrail === null` in free-hike (don't fake a trail), and don't add a per-trail-style
+offline download for free hikes (there's no bounded area to cache).
+
+**Verification.** In-browser with a mocked, scriptable geolocation: open via the FAB (USGS region) and
+Japan (GSI swap confirmed by tile host + attribution); record a walk (green path + live distance/time);
+pause (distance frozen, paused fixes ignored) then resume (a **second segment** with a visible gap, the
+gap **not** counted); back→list shows the resume banner→restore; **cold relaunch from the bare start URL
+auto-routes to `#/hike` and auto-resumes** (path restored, continuation in a fresh segment); end clears
+the path + session and reverts the peek to its hint; language switch flips units (km↔mi) and re-renders.
+Trail mode re-checked for no regression (profile + `%` HUD intact). No console errors throughout.
+
+---
+
 
 
 All bugs below are **fixed in the current source**; each entry notes the verification.

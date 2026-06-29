@@ -72,6 +72,19 @@ window.I18N = {
       sheetToggle: "Expand or collapse trail details",
       filterBarAria: "Filter and sort trails",
       trailLoadError: "Couldn't load this trail's map data — reconnect and reopen to try again.",
+      // Free hike — record your own route, off the curated trails
+      freeHike: "Free hike",
+      recordHikeAria: "Record a free hike",
+      fhHint: "Tap ▶ to record the path you walk.",
+      fhStartAria: "Start recording your hike",
+      fhAboutTitle: "Free hike",
+      fhAbout: "Record your own route anywhere. Your path draws on the map as you walk, with live distance and elapsed time — no preset trail needed.",
+      fhTipsTitle: "Good to know",
+      fhTips: [
+        "Keep your screen on — GPS pauses and your path stops recording while the phone is asleep.",
+        "Works offline, but the background map is blank unless you've already saved nearby maps. Your recorded path always draws.",
+        "Your hike is saved as you go, so you can reopen it if the app restarts mid-walk.",
+      ],
     },
     ja: {
       appName: "梅ちゃんのトレイル",
@@ -138,6 +151,19 @@ window.I18N = {
       sheetToggle: "コース詳細を開く・閉じる",
       filterBarAria: "コースの絞り込みと並べ替え",
       trailLoadError: "このコースの地図データを読み込めませんでした。通信を確認して開き直してください。",
+      // Free hike — record your own route, off the curated trails
+      freeHike: "フリーハイク",
+      recordHikeAria: "フリーハイクを記録",
+      fhHint: "▶ を押すと、歩いた道を記録します。",
+      fhStartAria: "歩行の記録を開始",
+      fhAboutTitle: "フリーハイクとは",
+      fhAbout: "好きな場所で歩いた道を記録できます。歩くにつれて地図上に軌跡が描かれ、距離と経過時間がリアルタイムで表示されます。決まったコースは必要ありません。",
+      fhTipsTitle: "知っておくこと",
+      fhTips: [
+        "画面はつけたままに — スリープ中はGPSが止まり、軌跡の記録も止まります。",
+        "オフラインでも使えますが、付近の地図を保存していないと背景の地図は空白になります。歩いた軌跡は常に表示されます。",
+        "記録は歩きながら自動で保存されるので、途中でアプリが再起動しても再開できます。",
+      ],
     },
   },
 

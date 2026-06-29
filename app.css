@@ -145,6 +145,21 @@ img { display:block; }
 }
 #trail-list::-webkit-scrollbar { display:none; }
 
+/* Free-hike entry — extended FAB pinned bottom-right of the list, above the home indicator.
+   Opens the record-anywhere map (#/hike); the pine fill marks it as the app's primary action. */
+.record-fab {
+  position:absolute; z-index:20;
+  right:calc(18px + var(--safe-r)); bottom:calc(18px + var(--safe-b));
+  display:flex; align-items:center; gap:8px;
+  height:52px; padding:0 20px 0 17px; border:none; border-radius:999px;
+  background:var(--pine); color:#fff; font-family:inherit; font-size:15px; font-weight:700;
+  cursor:pointer; box-shadow:var(--sh-fab);
+  transition:transform .1s, background .15s;
+}
+.record-fab:active { transform:scale(0.95); background:var(--pine-d); }
+.record-fab .rec-ic { display:flex; }
+.record-fab .ic { width:21px; height:21px; }
+
 .card {
   display:block; text-decoration:none; color:inherit;
   flex-shrink:0; border-radius:var(--r-card); overflow:hidden;
@@ -265,6 +280,10 @@ img { display:block; }
   box-shadow:var(--sh-pop); padding:11px 13px 10px;
 }
 #track-hud[hidden] { display:none; }
+/* Free-hike HUD: no preset trail to measure against, so hide the progress bar — the .th-pct
+   slot shows recorded distance instead of a percentage. */
+#track-hud.freehike .th-bar { display:none; }
+#track-hud.freehike .th-row { margin-top:0; }
 .th-bar { height:6px; border-radius:3px; background:var(--paper-2); overflow:hidden; }
 .th-fill { display:block; height:100%; width:0%; border-radius:3px; transition:width .4s ease;
   background:linear-gradient(90deg, var(--pine), var(--progress)); }

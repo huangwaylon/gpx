@@ -10,7 +10,10 @@ route and Mt. Kinpu in the Yamanashi mountains) — on topographic maps with the
 waypoints, and an elevation profile. The profile is **scrubbable** (drag a finger to inspect
 any point — a readout pill plus a synced marker on the map); the inspected point **persists** when
 you let go (a tap reveals it, a tap clears it), and a **live trail-progress**
-mode fills the walked portion green and tracks elapsed time. US trails use **USGS** topo tiles;
+mode fills the walked portion green and tracks elapsed time. There's also a **free-hike** mode
+(no preset trail): from the list, tap **フリーハイク / Free hike** to open a map on your current
+location, then record the path you walk — drawn live as a green track with distance + elapsed time,
+basemap auto-picked by region (USGS in the US, GSI in Japan). US trails use **USGS** topo tiles;
 Japan trails use
 **GSI 地理院タイル** (Geospatial Information Authority of Japan). Built to work with **no
 cell signal** on the trail once installed to the home screen via Safari.
@@ -88,7 +91,7 @@ is fully translated.
 ## Architecture in one breath
 
 One HTML document, two screens toggled by the `hidden` attribute. **Hash routing**:
-`#/trail/<slug>` → `openDetail()`; empty hash → `showList()`. The list renders cards from
+`#/trail/<slug>` → `openDetail()`; `#/hike` → `openFreeHike()` (free-hike mode); empty hash → `showList()`. The list renders cards from
 `window.TRAILS` (10 trails), merged with Japanese content from `I18N.trails` via `loc(trail)`.
 The detail screen builds a Leaflet map (`initMap`) using the trail's tile source
 (`TILE_SOURCES` — USGS for US, GSI for Japan, chosen by each trail's optional `tiles` field),
@@ -285,3 +288,26 @@ These were flagged earlier and have since been addressed; noted so they don't ge
     Tab + Esc-dismisses; 44px tap targets added to the small HUD/resume/header controls; a GPX-load failure now
     shows an inline `.load-err` instead of a blank sheet; the global download button's `aria-label` no longer
     mismatches its visible label; `--muted` darkened for contrast; a `<meta name="description">` was added.
+
+- **Free-hike mode — record your own route off the curated trails** (`APP_V` bumped to `wa-trails-app-v24`,
+  2026-06-29). A new mode reached from the list via the **フリーハイク / Free hike** extended FAB (`#btn-record`,
+  bottom-right) and routed at `#/hike` (`openFreeHike`). It **reuses the detail screen and the whole tracking
+  apparatus** — the same map, GPS plumbing (`onPos`/wake-gap recovery/Wake Lock), start/pause/end FAB + HUD, and
+  the `localStorage` resume session (incl. cold-relaunch auto-resume via `bootRoute`). `curTrail` stays `null`;
+  a `freeHike` flag swaps the two things that differ: the **per-fix handler** (`recordFix` appends raw GPS fixes
+  to a green polyline instead of `updateProgress` snapping to a GPX) and the **HUD readout** (recorded distance,
+  no progress bar, vs trail %). Key design points, all deliberate — don't regress:
+  - **The recorded path is stored as line *segments*** (`recSegs` = `[lat,lon][][]`), not one flat array. A
+    pause→resume **or** a screen-off GPS gap sets `recBreak`, so the next fix starts a **new** segment: the gap is
+    neither drawn as a bogus straight line nor counted in the distance (honest — we genuinely didn't record it).
+    This is the same honesty the iOS "no breadcrumb while screen off" constraint demands.
+  - Fixes worse than `REC_MAX_ACC_M` (50 m) are dropped (a wild jump would zig-zag the line); sub-`REC_MIN_MOVE_M`
+    (5 m) steps are ignored as stationary jitter (and don't churn `localStorage` writes).
+  - **No preset region**, so the basemap is chosen from the **first GPS fix** (`regionSourceKey` → GSI inside a
+    rough Japan bbox, else USGS) and swapped live once (`swapTileSource`); the map opens centered on the last
+    known fix (`localStorage.lastPos`) so it isn't a blank world map while locating.
+  - The free hike has **no offline tile box** (you can be anywhere), so `applyMaxBounds` is a no-op (null
+    `trackLayer`) and the recorded path — an SVG overlay — **still draws with no signal**; only the basemap is
+    blank unless nearby maps were already saved. There is **no "save maps" affordance** for free hikes.
+  - The resume session uses the same `SESSION_KEY` with a `hike:true` discriminator (and `HIKE_SLUG` =
+    `'__hike__'` for the list-resume banner); `freshResumable`/`sessionMatchesScreen` gate every resume path.

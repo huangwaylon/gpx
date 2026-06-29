@@ -306,7 +306,9 @@ Navigation is driven entirely by `location.hash`:
 
 - **`routeFromHash()`** (`app.js:200`) matches the hash against
   `^#\/trail\/([\w-]+)`. If it matches and a trail with that `slug` exists, it calls
-  `openDetail(t)`; otherwise it falls back to `showList()`.
+  `openDetail(t)`; the hash `#/hike` calls **`openFreeHike()`** (free-hike record-anywhere mode —
+  reuses the detail screen with `curTrail===null` + a `freeHike` flag; see `DECISIONS-AND-LESSONS.md`
+  ADR-20); otherwise it falls back to `showList()`.
 - It runs **on boot** — though indirectly: the `load` handler calls **`bootRoute()`** (§10a),
   which (after optionally seeding the hash for a mid-hike resume) calls `routeFromHash()` once —
   and **on every hash change** (`window.addEventListener('hashchange', routeFromHash)`,

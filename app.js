@@ -43,6 +43,7 @@ const ICON_PATHS = {
   sunset:  '<path d="M12 10V2"/><path d="m4.93 10.93 1.41 1.41"/><path d="M2 18h2"/><path d="M20 18h2"/><path d="m19.07 10.93-1.41 1.41"/><path d="M22 22H2"/><path d="m16 6-4 4-4-4"/><path d="M16 18a4 4 0 0 0-8 0"/>',
   ext:     '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
   chevDown:'<path d="m6 9 6 6 6-6"/>',
+  navigate:'<path d="M3 11 22 2 13 21 11 13 3 11Z"/>',
 };
 function icon(name, cls){
   return `<svg class="ic${cls?' '+cls:''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" `+
@@ -115,6 +116,18 @@ let turnedAround = false;           // out-and-back: latched once we reach the t
 let walkedLayer = null, walkedHalo = null, walkedLine = null;   // green "walked" overlay: white halo + green line (a layerGroup), drawn over the red base track
 let reacqMiss = 0;                  // consecutive off-window fixes (triggers a full re-acquire)
 let trackSearching = false;         // sustained fix rejections (weak GPS / off-trail) → show a HUD hint
+
+// Free-hike (record-anywhere) state. A free hike has no preset GPX — we record raw GPS fixes into
+// recSegs and draw them as a green line as you walk. It reuses the whole tracking apparatus
+// (start/pause/end FAB+HUD, the screen-on Wake Lock, GPS-gap recovery, and the localStorage resume
+// session); `freeHike` is the flag that swaps the per-fix handler (recordFix vs updateProgress) and
+// the HUD readout (distance vs trail %). `tileLayer` is held so the basemap can be swapped to the
+// right region (USGS/GSI) once the first fix reveals where you are.
+let freeHike = false, tileLayer = null, freeHikeSource = 'usgs';
+let recSegs = [], recDist = 0, recLast = null, recBreak = false;   // recorded path as line SEGMENTS ([lat,lon][][]); total metres; last vertex; "start a new segment on the next fix"
+let recLayer = null, recHalo = null, recLine = null, recStartMk = null;   // white halo + green multi-line layerGroup (mirrors the walked overlay) + a start dot
+const REC_MIN_MOVE_M = 5;          // ignore sub-5 m fixes so stationary GPS jitter doesn't inflate distance / zig-zag the line
+const REC_MAX_ACC_M  = 50;         // drop fixes worse than this (≈ tree-cover noise) rather than recording a wild jump
 let pendingResume = null;           // a saved session offered for resume on the current trail
 let resumeOnOpen = false;           // bootRoute (cold relaunch) or the list "resume hike" banner → auto-resume on open
 let gpsWasHidden = false;           // GPS was live when last backgrounded (→ refresh fix on return)
@@ -130,6 +143,8 @@ let openingDetail = false;          // openDetail is mid-await — onWake stands
 const SESSION_KEY = 'trackSession';
 const SESSION_MAX_AGE_MS = 18 * 3600 * 1000;   // discard a saved session older than this (stale)
 const RESUME_MIN_MS = 20000;                   // ignore trivially-short sessions (accidental starts) when offering/auto-resuming
+const HIKE_SLUG = '__hike__';                  // sentinel "slug" for a free-hike resume in the list banner (free hikes have no trail)
+const LAST_POS_KEY = 'lastPos';                // last GPS fix [lat,lon], so a free hike opens centered on where you were
 
 const $  = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
@@ -190,6 +205,13 @@ function setLang(next) {
     if(pendingResume) renderResumePrompt();
     syncGpsCursor();
     redrawScrubCursor();     // re-place a held readout (the rebuilt SVG wiped its cursor) in the new units
+  } else if (freeHike) {     // re-render the open free-hike view in the new language
+    $('#detail-title').textContent = t('freeHike');
+    renderFreeHikePeek();
+    renderFreeHikeBody();
+    setSheet(sheetState);
+    updateTrackUI(); updateHUD();
+    if(pendingResume) renderResumePrompt();
   }
 }
 
@@ -215,6 +237,7 @@ window.addEventListener('load', () => {
 window.addEventListener('hashchange', routeFromHash);
 
 function routeFromHash() {
+  if (location.hash.startsWith('#/hike')) { openFreeHike(); return; }
   const m = location.hash.match(/^#\/trail\/([\w-]+)/);
   if (m) {
     const trail = TRAILS.find(x => x.slug === m[1]);
@@ -235,7 +258,7 @@ function bootRoute() {
   const s = readSession();
   if (freshResumable(s)) {
     resumeOnOpen = true;
-    const want = '#/trail/' + s.slug;
+    const want = s.hike ? '#/hike' : '#/trail/' + s.slug;
     if (location.hash !== want) history.replaceState(null, '', want);
   }
   routeFromHash();
@@ -340,8 +363,11 @@ function bindGlobal() {
   });
   $('#list-resume').addEventListener('click', () => {
     const slug = $('#list-resume').dataset.slug; if(!slug) return;
-    resumeOnOpen = true; location.hash = '#/trail/' + slug;
+    resumeOnOpen = true; location.hash = (slug === HIKE_SLUG) ? '#/hike' : '#/trail/' + slug;
   });
+  const rec = $('#btn-record');
+  rec.querySelector('.rec-ic').innerHTML = icon('navigate');
+  rec.addEventListener('click', () => { location.hash = '#/hike'; });
 
   initSheetDrag();
   initProfileScrub();
@@ -353,7 +379,7 @@ function showList() {
   if (gpsWatch !== null) stopGPS();
   stopTracking(); hideResumePrompt();
   scrubbing = false; clearScrub();
-  curTrail = null; resumeOnOpen = false;
+  curTrail = null; freeHike = false; resumeOnOpen = false;
   updateListResume();
 }
 
@@ -366,7 +392,7 @@ async function openDetail(trail) {
   // or clear it out from under us. See the post-await curTrail guard.
   const resumeThis = resumeOnOpen; resumeOnOpen = false;
   openingDetail = true;             // onWake stands down until this open's own resume decision is made
-  curTrail = trail;
+  curTrail = trail; freeHike = false;
   stopTracking(); hideResumePrompt(); scrubbing = false; scrubHeld = false;   // fresh per-trail tracking/scrub state
   $('#list').hidden = true;
   $('#detail').hidden = false;
@@ -375,16 +401,16 @@ async function openDetail(trail) {
   renderPeek(trail);
   renderSheetBody(trail);     // render the body first so setSheet can size the peek to the chart
   setSheet('peek');
-  initMap();
+  initMap(trail.center, trail.tiles || 'usgs');
   try {
     await loadTrail(trail);
     if (curTrail !== trail) return;   // a newer navigation superseded this one mid-load — don't touch its map/session
     if(resumeThis){             // arrived via cold-relaunch auto-route (bootRoute), wake-resume, or the list banner → resume straight away
       const s=readSession();
-      if(freshResumable(s) && s.slug===trail.slug) resumeSession(s);
-      else maybeOfferResume(trail);
+      if(freshResumable(s) && !s.hike && s.slug===trail.slug) resumeSession(s);
+      else maybeOfferResume();
     } else {
-      maybeOfferResume(trail);  // a saved session for this trail (survived a reload) can be resumed
+      maybeOfferResume();  // a saved session for this trail (survived a reload) can be resumed
     }
   } finally {
     if (curTrail === trail) openingDetail = false;   // only release if still the active open (a newer one keeps it set)
@@ -529,17 +555,22 @@ function fmtPlanDate(iso) {
 }
 
 // ── Map ──
-function initMap() {
+// center: [lat,lon]; srcKey: a TILE_SOURCES key ('usgs'|'gsi'). A trail passes its own center +
+// source; a free hike passes the last-known location (or a default) and the region's source, then
+// swaps the basemap once its first fix lands (swapTileSource).
+function initMap(center, srcKey) {
   if (map) { map.remove(); map = null; }
   // map.remove() drops all layers; clear stale references so onPos/scrub recreate them fresh.
   trackLayer = walkedLayer = scrubMk = gpsMk = gpsAcc = null; endMarker._all = [];
-  const src = trailSource(curTrail);
-  map = L.map('map', { zoomControl:false, attributionControl:true, center:curTrail.center, zoom:13, tap:true });
+  recLayer = recHalo = recLine = recStartMk = null;
+  freeHikeSource = srcKey;
+  const src = TILE_SOURCES[srcKey] || TILE_SOURCES.usgs;
+  map = L.map('map', { zoomControl:false, attributionControl:true, center, zoom:13, tap:true });
   map.createPane('gpsPane'); map.getPane('gpsPane').style.zIndex = 650;   // GPS dot + accuracy ring sit ABOVE the green walked overlay (which is on overlayPane, z400)
   const zoom = L.control.zoom({ position:'topright' }).addTo(map);
   // minZoom = DL_MIN_Z: the map can't zoom out past the cached overview level, so there's no blank-
   // tile band offline (offline pre-cache starts at z10; allowing z8–9 showed gray tiles with no data).
-  L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:DL_MIN_Z, attribution:src.leaflet, crossOrigin:true }).addTo(map);
+  tileLayer = L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:DL_MIN_Z, attribution:src.leaflet, crossOrigin:true }).addTo(map);
   map.on('dragstart', () => { gpsFollow = false; $('#btn-gps').classList.remove('on'); });
   map.on('zoomend', applyMaxBounds);   // the cached box tightens with zoom (padFor) — re-clamp panning to it
   zoom.getContainer().style.marginTop = 'calc(54px + env(safe-area-inset-top,0px))';
@@ -922,6 +953,12 @@ function onPos(pos){
     gpsAcc=L.circle([lat,lon],{pane:'gpsPane',radius:accuracy,fillColor:C.blue,fillOpacity:0.08,color:C.blue,weight:1}).addTo(map);
   } else { gpsMk.setLatLng([lat,lon]); gpsAcc.setLatLng([lat,lon]); gpsAcc.setRadius(accuracy); }
   if(gpsFollow) map.setView([lat,lon], Math.max(map.getZoom(),15), {animate:true});
+  if(freeHike){
+    saveLastPos(lat,lon);
+    swapTileSource(regionSourceKey(lat,lon));   // basemap to match the region (no-op after the first fix)
+    if(tracking && !paused) recordFix(lat,lon,accuracy);
+    return;
+  }
   if(tracking && !paused) updateProgress(lat,lon,accuracy);
   if(trackPts.length && !scrubbing && !scrubHeld){
     // While tracking, reuse the windowed snap index (cheaper than a full-track scan, and it
@@ -977,6 +1014,7 @@ function refreshGpsAfterGap(){
   clearTimeout(gpsWakeGuard);
   gpsWakeGuard=setTimeout(()=>{ gpsWakePending=false; }, 32000);
   reacqMiss = REACQUIRE_AFTER;
+  recBreak = true;                  // free hike: continuity was lost, so the next fix starts a new line segment
   setLocating(true);
   restartWatch();
   const settle=()=>{ gpsWakePending=false; clearTimeout(gpsWakeGuard); };
@@ -1003,9 +1041,9 @@ function onWake(){
   // re-surface the resume offer (covers a resident wake where the offer was never shown). bootRoute
   // owns the initial-load resume (booting), and openDetail owns its own post-load resume
   // (openingDetail) — stand down while either is in charge, else the prompt can flash then be replaced.
-  if(!booting && !openingDetail && !tracking && curTrail && !pendingResume){
+  if(!booting && !openingDetail && !tracking && (curTrail || freeHike) && !pendingResume){
     const s=readSession();
-    if(freshResumable(s) && s.slug===curTrail.slug) maybeOfferResume(curTrail);
+    if(freshResumable(s) && sessionMatchesScreen(s)) maybeOfferResume();
   }
   if(tracking) updateHUD();             // repaint the clock now (the 1s interval was suspended while hidden)
   if(gpsWatch!==null){
@@ -1026,6 +1064,126 @@ function onWake(){
 document.addEventListener('visibilitychange',()=>{ if(document.hidden) onHide(); else onWake(); });
 window.addEventListener('pagehide', onHide);
 window.addEventListener('pageshow', onWake);
+
+// ════════════════════════════════════════════════════════════
+//  Free hike — record your own route (no preset trail)
+//  Reuses the detail screen's map + GPS + Wake Lock + tracking session machinery; the difference
+//  is the per-fix handler (recordFix appends to a drawn polyline instead of snapping to a GPX) and
+//  the HUD readout (recorded distance instead of trail %). curTrail stays null; `freeHike` is the flag.
+// ════════════════════════════════════════════════════════════
+
+// GSI 地理院タイル only covers Japan; everywhere else uses USGS topo. Rough Japan bbox (incl. the
+// southern islands). Picks the basemap for a free hike from the first GPS fix.
+function regionSourceKey(lat,lon){ return (lat>=24 && lat<=46 && lon>=122 && lon<=154) ? 'gsi' : 'usgs'; }
+
+// Last GPS fix, persisted so a free hike opens centered on where you were last (no blank world map
+// while the first fix lands). Rounded to ~1 m; tiny + synchronous, like the rest of our localStorage.
+function readLastPos(){ try{ const v=JSON.parse(localStorage.getItem(LAST_POS_KEY)||'null'); return (Array.isArray(v)&&v.length===2)?v:null; }catch(_){ return null; } }
+function saveLastPos(lat,lon){ try{ localStorage.setItem(LAST_POS_KEY, JSON.stringify([+lat.toFixed(5),+lon.toFixed(5)])); }catch(_){} }
+
+async function openFreeHike(){
+  // Same resume-handoff dance as openDetail: capture+consume resumeOnOpen, hold openingDetail so a
+  // racing wake doesn't double-offer. No GPX to await, so this resolves synchronously.
+  const resumeThis = resumeOnOpen; resumeOnOpen = false;
+  openingDetail = true;
+  curTrail = null; freeHike = true;
+  stopTracking(); hideResumePrompt(); scrubbing = false; scrubHeld = false;
+  $('#list').hidden = true;
+  $('#detail').hidden = false;
+  $('#detail-title').textContent = t('freeHike');
+  renderFreeHikePeek();
+  const saved = readLastPos();
+  const center = saved || (TRAILS[0] && TRAILS[0].center) || [47.6, -122.3];
+  initMap(center, saved ? regionSourceKey(saved[0], saved[1]) : 'usgs');   // sets freeHikeSource
+  renderFreeHikeBody();        // after initMap so the basemap credit matches the chosen source
+  setSheet('peek');
+  const s = readSession();
+  if (resumeThis && freshResumable(s) && s.hike) resumeSession(s);   // resumeSession (re)starts GPS itself
+  else { startGPS(); maybeOfferResume(); }                          // location-first: show the blue dot right away
+  openingDetail = false;
+}
+
+function renderFreeHikePeek(){
+  $('#pk-title').textContent = t('freeHike');
+  updateFreeHikePeek();
+}
+// Live peek meta: recorded distance + elapsed while recording, else a how-to hint. Called from
+// updateHUD so the numbers tick with the HUD.
+function updateFreeHikePeek(){
+  if(!freeHike) return;
+  const meta=$('#pk-meta'); if(!meta) return;
+  meta.innerHTML = tracking
+    ? `<span class="s">${icon('dist')}${fmtDistAlong(recDist)}</span>` +
+      `<span class="s">${icon('clock')}${fmtElapsed(elapsedMs())}</span>`
+    : `<span class="s">${t('fhHint')}</span>`;
+}
+function renderFreeHikeBody(){
+  const src = TILE_SOURCES[freeHikeSource] || TILE_SOURCES.usgs;
+  $('#sheet-body').innerHTML = `
+    <div class="section">
+      <h3>${t('fhAboutTitle')}</h3>
+      <p>${t('fhAbout')}</p>
+    </div>
+    <div class="section">
+      <h3>${t('fhTipsTitle')}</h3>
+      <ul class="tips">${(t('fhTips')||[]).map(x=>`<li>${x}</li>`).join('')}</ul>
+    </div>
+    <div class="section">
+      <p class="attrib">${t(src.creditKey)}</p>
+    </div>`;
+}
+
+// Swap the basemap once a free hike's first fix reveals the region (USGS↔GSI). No-op unless the
+// source actually changes, so it fires at most once per hike (in practice on the first fix).
+function swapTileSource(srcKey){
+  if(srcKey===freeHikeSource || !map) return;
+  freeHikeSource=srcKey;
+  const src=TILE_SOURCES[srcKey];
+  if(tileLayer) tileLayer.remove();
+  tileLayer=L.tileLayer(src.url, { maxZoom:src.maxZoom, minZoom:DL_MIN_Z, attribution:src.leaflet, crossOrigin:true }).addTo(map);
+  if(freeHike) renderFreeHikeBody();   // refresh the basemap credit line
+}
+
+// Append one accepted fix to the recorded path. Drops fixes worse than REC_MAX_ACC_M (a wild jump
+// would zig-zag the line + inflate distance) and ignores sub-REC_MIN_MOVE_M steps (stationary GPS
+// jitter). A `recBreak` (set on pause-resume or a screen-off GPS gap) starts a NEW line segment so
+// the path isn't drawn — or counted — as a straight line across ground we didn't actually record.
+// Mirrors progress to localStorage only when a point is added, so a stationary phone doesn't churn writes.
+function recordFix(lat,lon,acc){
+  if(acc>REC_MAX_ACC_M){ if(!trackSearching){ trackSearching=true; updateHUD(); } return; }
+  if(recBreak){                                       // continuity was lost → close the old segment, start fresh
+    recBreak=false; recLast=null;
+    if(!recSegs.length || recSegs[recSegs.length-1].length) recSegs.push([]);
+  }
+  if(!recSegs.length) recSegs.push([]);
+  if(recLast){
+    const step=hav(recLast.lat,recLast.lon,lat,lon);
+    if(step<REC_MIN_MOVE_M){ if(trackSearching){ trackSearching=false; updateHUD(); } return; }
+    recDist+=step;
+  }
+  recLast={lat,lon};
+  recSegs[recSegs.length-1].push([+lat.toFixed(5), +lon.toFixed(5)]);
+  trackSearching=false;
+  drawRecLine();
+  updateHUD();
+  persistSession();
+}
+
+// Draw the recorded path: a start dot at the very first point, then a white-haloed green line.
+// Segments are passed to Leaflet as an array-of-arrays (a multi-polyline), so a paused/screen-off
+// gap shows as a break rather than a bogus straight line.
+function drawRecLine(){
+  if(!map || !recSegs.length) return;
+  const first = recSegs[0][0];
+  if(first && !recStartMk) recStartMk=L.marker(first, { icon:dotIcon(C.green,15) }).addTo(map);
+  const lines = recSegs.filter(s => s.length>=2);     // a lone point can't draw a line yet
+  if(!lines.length) return;
+  if(!recLayer){
+    recHalo=L.polyline(lines,{ color:'#fff', weight:7.5, opacity:0.85, lineJoin:'round' });
+    recLine=L.polyline(lines,{ color:C.green, weight:4, opacity:0.97, lineJoin:'round' });
+    recLayer=L.layerGroup([recHalo, recLine]).addTo(map);
+  } else { recHalo.setLatLngs(lines); recLine.setLatLngs(lines); }
+}
 
 // ════════════════════════════════════════════════════════════
 //  Live trail progress
@@ -1050,6 +1208,7 @@ function togglePause(){
   if(paused) trackElapsedMs+=Math.max(0,Date.now()-trackStartTs);   // bank elapsed (clamped vs a backward clock), freeze
   else {                                                            // resume from now; ensure live, FRESH fixes
     trackStartTs=Date.now();
+    recBreak=true;                         // free hike: don't draw/count a straight line across the paused gap
     if(gpsWatch===null) startGPS();        // watch was off → (re)start it
     else refreshGpsAfterGap();             // watch survived a long pocket-pause → revive it + re-acquire (it may be dead, progIdx is stale)
   }
@@ -1069,7 +1228,10 @@ function startTracking(){
   tracking=true; paused=false;
   trackStartTs=Date.now(); trackElapsedMs=0;
   walkedDist=0; progIdx=-1; reacqMiss=0; turnedAround=false; trackSearching=false;
+  recSegs=[]; recDist=0; recLast=null; recBreak=false;
   if(walkedLayer){ walkedLayer.remove(); walkedLayer=walkedHalo=walkedLine=null; }
+  if(recLayer){ recLayer.remove(); recLayer=recHalo=recLine=null; }
+  if(recStartMk){ recStartMk.remove(); recStartMk=null; }
   $('#track-hud').hidden=false;
   if(gpsWatch===null) startGPS();          // tracking needs live fixes
   startHudTimer();
@@ -1081,10 +1243,14 @@ function startTracking(){
 function stopTracking(){
   tracking=false; paused=false; reacqMiss=0; trackSearching=false;
   clearInterval(hudTimer); hudTimer=null;
-  const hud=$('#track-hud'); if(hud) hud.hidden=true;
+  const hud=$('#track-hud'); if(hud){ hud.hidden=true; hud.classList.remove('freehike'); }
   if(walkedLayer){ walkedLayer.remove(); walkedLayer=walkedHalo=walkedLine=null; }
   walkedDist=0; progIdx=-1; trackElapsedMs=0; turnedAround=false;
+  if(recLayer){ recLayer.remove(); recLayer=recHalo=recLine=null; }
+  if(recStartMk){ recStartMk.remove(); recStartMk=null; }
+  recSegs=[]; recDist=0; recLast=null; recBreak=false;
   updateTrackUI();
+  updateFreeHikePeek();   // free hike: revert the peek from live stats back to the start hint (no-op for trails)
 }
 // Explicit end (HUD ✕): forget the saved session, then stop.
 function endTracking(){ clearSession(); stopTracking(); }
@@ -1095,7 +1261,7 @@ function updateTrackUI(){
   if(fab){
     fab.hidden = tracking || !!pendingResume;
     fab.innerHTML = ICON_PLAY;
-    fab.setAttribute('aria-label', t('trackStartAria'));
+    fab.setAttribute('aria-label', t(freeHike ? 'fhStartAria' : 'trackStartAria'));
   }
   const pb=$('#th-pause');
   if(pb){
@@ -1196,6 +1362,17 @@ function fmtElapsed(ms){
 }
 function updateHUD(){
   const hud=$('#track-hud'); if(!hud || hud.hidden) return;
+  hud.classList.toggle('freehike', freeHike);
+  if(freeHike){
+    // No preset trail to measure against: show recorded distance (in the % slot) + elapsed.
+    $('.th-pct').textContent = fmtDistAlong(recDist);
+    $('.th-num').textContent = fmtElapsed(elapsedMs());
+    const m = paused ? t('trackPaused') : trackSearching ? t('trackWeakSignal') : '';
+    const msg=$('.th-msg'); msg.textContent=m; msg.hidden=!m;
+    hud.classList.toggle('paused', paused);
+    updateFreeHikePeek();
+    return;
+  }
   // Out-and-back % is measured to the far end (turnDist) so reaching it reads 100%; loop and
   // point-to-point measure against the full length.
   const total = isOutAndBack ? turnDist : totalDist;
@@ -1218,8 +1395,15 @@ function updateHUD(){
 // whenever the page is hidden; reopening the trail offers to restore it. The start timestamp is
 // absolute, so the elapsed clock keeps counting across the gap when resumed.
 function persistSession(){
-  if(!tracking || !curTrail) return;
+  if(!tracking) return;
   try{
+    if(freeHike){
+      localStorage.setItem(SESSION_KEY, JSON.stringify({
+        hike:true, recSegs, recDist, trackStartTs, trackElapsedMs, paused, savedAt:Date.now(),
+      }));
+      return;
+    }
+    if(!curTrail) return;
     localStorage.setItem(SESSION_KEY, JSON.stringify({
       slug:curTrail.slug, walkedDist, progIdx,
       trackStartTs, trackElapsedMs, paused, savedAt:Date.now(),
@@ -1240,15 +1424,23 @@ function savedElapsedMs(s){ return (s.trackElapsedMs||0) + (s.paused ? 0 : Math.
 // staleness window. A RUNNING session must also clear the short-session floor (filters accidental
 // starts); a PAUSED session is exempt — pausing is deliberate, so honor it however short.
 function freshResumable(s){
-  return !!s && TRAILS.some(x => x.slug === s.slug)
+  return !!s && (s.hike || TRAILS.some(x => x.slug === s.slug))
     && (Date.now() - (s.savedAt || 0) <= SESSION_MAX_AGE_MS)
     && (s.paused || savedElapsedMs(s) >= RESUME_MIN_MS);
 }
 
-// On opening a trail, offer to resume a saved session for it (unless it's gone stale/trivial).
-function maybeOfferResume(trail){
+// Does the saved session belong to the screen we're on now? A free hike resumes any saved hike; a
+// trail resumes only its own (non-hike) session. The single gate for every resume path.
+function sessionMatchesScreen(s){
+  if(!s) return false;
+  return freeHike ? !!s.hike : (!!curTrail && !s.hike && s.slug===curTrail.slug);
+}
+
+// On opening a trail or a free hike, offer to resume a saved session for it (unless it's gone
+// stale/trivial).
+function maybeOfferResume(){
   const s=readSession();
-  if(!s || s.slug!==trail.slug) return;                              // none, or it's another trail's
+  if(!sessionMatchesScreen(s)) return;                               // none, or it's another screen's
   if(Date.now()-(s.savedAt||0) > SESSION_MAX_AGE_MS){ clearSession(); return; }   // too old
   if(!s.paused && savedElapsedMs(s) < RESUME_MIN_MS) return;         // running & trivially short — skip (paused is always offered)
   pendingResume=s;
@@ -1259,9 +1451,13 @@ function maybeOfferResume(trail){
 }
 function renderResumePrompt(){
   const s=pendingResume; if(!s) return;
-  const total = isOutAndBack ? turnDist : totalDist;
-  const pct = total>0 ? Math.min(100, Math.round(s.walkedDist/total*100)) : 0;
-  $('#tr-msg').textContent = `${t('trackResumeMsg')} · ${pct}% · ${fmtElapsed(savedElapsedMs(s))}`;
+  let detail;
+  if(s.hike) detail = fmtDistAlong(s.recDist||0);
+  else {
+    const total = isOutAndBack ? turnDist : totalDist;
+    detail = (total>0 ? Math.min(100, Math.round(s.walkedDist/total*100)) : 0) + '%';
+  }
+  $('#tr-msg').textContent = `${t('trackResumeMsg')} · ${detail} · ${fmtElapsed(savedElapsedMs(s))}`;
   $('#tr-resume').textContent = t('trackResume');
   $('#tr-dismiss').textContent = t('trackDismiss');
 }
@@ -1274,6 +1470,25 @@ function resumeSession(s){
   hideResumePrompt();
   tracking=true; paused=!!s.paused;
   trackStartTs=s.trackStartTs; trackElapsedMs=s.trackElapsedMs||0;
+  if(s.hike){
+    // Free hike: restore the recorded path + distance, redraw it, then go live. The elapsed clock
+    // already accounts for the gap via the absolute start timestamp. recBreak makes the first new
+    // fix start a fresh segment, so the post-gap reacquire isn't drawn as a line back to the old end.
+    freeHike=true;
+    recSegs=Array.isArray(s.recSegs)?s.recSegs:[];
+    recDist=s.recDist||0;
+    const lastSeg=recSegs.length?recSegs[recSegs.length-1]:null;
+    const lastPt=lastSeg&&lastSeg.length?lastSeg[lastSeg.length-1]:null;
+    recLast=lastPt?{lat:lastPt[0],lon:lastPt[1]}:null;
+    recBreak=true; reacqMiss=0; trackSearching=false;
+    $('#track-hud').hidden=false;
+    drawRecLine();
+    if(!paused){ if(gpsWatch===null) startGPS(); else refreshGpsAfterGap(); }
+    startHudTimer();
+    updateTrackUI(); updateHUD();
+    persistSession();
+    return;
+  }
   walkedDist=s.walkedDist||0; progIdx=(s.progIdx>=0)?s.progIdx:-1;
   // Re-derive the out-and-back turnaround latch from the restored progress, so a relaunch on the
   // descent keeps re-acquiring onto the return leg (not the overlapping outbound leg).
@@ -1298,13 +1513,15 @@ function resumeSession(s){
 function updateListResume(){
   const el=$('#list-resume'); if(!el) return;
   const s=readSession();
-  const trail = freshResumable(s) ? TRAILS.find(x=>x.slug===s.slug) : null;
-  if(!trail){ el.hidden=true; delete el.dataset.slug; return; }
+  if(!freshResumable(s)){ el.hidden=true; delete el.dataset.slug; return; }
+  const isHike = !!s.hike;
+  const trail = isHike ? null : TRAILS.find(x=>x.slug===s.slug);
+  if(!isHike && !trail){ el.hidden=true; delete el.dataset.slug; return; }
   el.querySelector('.lr-ic').innerHTML = ICON_PLAY;
   el.querySelector('.lr-label').textContent = t('resumeHike');
-  el.querySelector('.lr-trail').textContent = loc(trail).name;
+  el.querySelector('.lr-trail').textContent = isHike ? t('freeHike') : loc(trail).name;
   el.querySelector('.lr-time').textContent = fmtElapsed(savedElapsedMs(s));
-  el.dataset.slug = trail.slug;
+  el.dataset.slug = isHike ? HIKE_SLUG : trail.slug;
   el.hidden=false;
 }
 
@@ -1607,8 +1824,10 @@ function hav(la1,lo1,la2,lo2){
 // re-measures and re-clamps the bounds, leaving the user's zoom/pan intact.
 let rzT;
 window.addEventListener('resize',()=>{ clearTimeout(rzT); rzT=setTimeout(()=>{
-  if(curTrail && map){
-    map.invalidateSize(); setSheet(sheetState); drawProfile(); syncGpsCursor(); redrawScrubCursor();
+  if((curTrail||freeHike) && map){
+    map.invalidateSize(); setSheet(sheetState);
+    if(freeHike) return;                                 // no track/profile to redraw or re-fit
+    drawProfile(); syncGpsCursor(); redrawScrubCursor();
     const o = window.innerWidth > window.innerHeight ? 'l' : 'p';
     if(o !== mapOrient){ mapOrient = o; fitTrack(); }   // orientation flipped → re-fit
     else applyMaxBounds();                               // same orientation → just re-clamp to the (now-resized) viewport
